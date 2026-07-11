@@ -1,0 +1,36 @@
+# --- .NET ---
+bin/
+obj/
+out/
+*.user
+*.suo
+.vs/
+[Tt]est[Rr]esults/
+*.binlog
+artifacts/
+publish/
+
+# --- Node / web client ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Azure Functions local settings ---
+local.settings.json
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Editors / OS ---
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
