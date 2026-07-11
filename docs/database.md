@@ -217,7 +217,7 @@ One row per send attempt-group. This is the audit trail and the idempotency mech
 - Postgres RLS (app-layer scoping now; RLS is the multi-trainer upgrade)
 - Offline sync (online-only logging in v1)
 
-## Open questions
+## Resolved questions
 
-1. Exercise deletion: soft-delete (`is_active`) vs hard-delete-with-restrict? Leaning soft-delete since logged_sets reference exercises. Decide before migration 001.
-2. Does the trainer log their own workouts as a client of themselves? If yes: trainer user also gets programs via a self-referencing trainer_id. Cheap to allow; decide intentionally.
+1. **Exercise deletion: soft-delete (`is_active`).** logged_sets reference exercises; hard delete would orphan ground truth. (Also stated in PRODUCT.md and api.md.)
+2. **Trainer logs their own workouts as a client of themselves — yes.** The trainer user gets programs via self-referencing `trainer_id`. Zero schema change; migration 001 must not add a constraint preventing `trainer_id = id`.
