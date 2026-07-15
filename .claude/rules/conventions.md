@@ -7,3 +7,5 @@
 - **Migrations:** `NNN_PascalDescription` (e.g. `001_InitialSchema`).
 - **Branches:** `feat/{issue}-slug` (e.g. `feat/12-magic-link-auth`).
 - **Isolation tests:** for every client-facing route, an integration test that authenticates as client A and requests client B's resource, asserting 404, is mandatory — per api.md §5. A client route without its isolation test is not done.
+- - Agent never commits, pushes, or opens PRs. Implement on the working tree,
+  report changes, stop. The human owns all git operations.
