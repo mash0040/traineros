@@ -1,0 +1,32 @@
+# Local dev services only (issue #13). Deployment stays Docker-free per
+# architecture.md non-goals; this file never ships anywhere.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: traineros
+      POSTGRES_USER: traineros
+      POSTGRES_PASSWORD: traineros
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traineros -d traineros"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    # Default well-known ports; UseDevelopmentStorage=true expects them on 127.0.0.1.
+    ports:
+      - "10000:10000" # blob
+      - "10001:10001" # queue
+      - "10002:10002" # table
+    volumes:
+      - azurite:/data
+
+volumes:
+  pgdata:
+  azurite:
