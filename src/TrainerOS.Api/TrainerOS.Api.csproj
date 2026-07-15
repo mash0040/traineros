@@ -4,6 +4,10 @@
     <ProjectReference Include="..\TrainerOS.Domain\TrainerOS.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Npgsql.DependencyInjection" Version="8.0.6" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
