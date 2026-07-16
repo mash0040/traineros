@@ -90,3 +90,4 @@ Revokes current session row.
 - /v1 versioning, HATEOAS, OpenAPI generation (a hand-kept route table is enough at 25 routes)
 - Websockets / realtime (no messaging in v1)
 - Offset pagination, search, filtering beyond history params
+- Generation via @hey-api/openapi-ts — openapi-typescript peer-conflicts with TS 6.
