@@ -101,7 +101,7 @@ The pending-sweep in the last row is also the recovery path if a message is ever
 
 ## Email content
 
-v1 template: plain, one per reminder. "Today: {program_day.title} — {n} exercises. Open TrainerOS →". Rendered at send time from current program data (thin messages mean content is never stale). Provider: Resend free tier; adapter interface `NotificationSender.send(delivery)` so WhatsApp/push later are new adapters + a `channel` value, not a redesign.
+v1 template: plain, one per reminder. "Today: {program_day.title} — {n} exercises. Open TrainerOS →". Rendered at send time from current program data (thin messages mean content is never stale). Provider: Resend free tier; adapter interface `NotificationSender.send(delivery)` so WhatsApp/push later are new adapters + a `channel` value, not a redesign. (Revised in #16: INotificationSender takes a rendered EmailMessage, not a delivery row — the sender's contract serves auth; rendering from deliveries is the worker's job, #38.)
 
 ## Non-goals (v1)
 
