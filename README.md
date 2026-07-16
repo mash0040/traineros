@@ -68,3 +68,5 @@ npm run dev
 ```
 
 Vite serves the client on http://localhost:5173 and proxies `/api` to the API on port 5216.
+
+After any endpoint or DTO change, run `npm run generate:types` (from `src/web`) — it builds the API, exports `openapi.json`, and regenerates `src/web/src/api/types.gen.ts`.
