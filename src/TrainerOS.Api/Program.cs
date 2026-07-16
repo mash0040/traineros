@@ -1,17 +1,31 @@
 using Microsoft.OpenApi.Models;
 using Npgsql;
 using TrainerOS.Api;
+using TrainerOS.Domain.Notifications;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddNpgsqlDataSource(builder.Configuration.GetConnectionString("Postgres")!);
 builder.Services.AddApiConventions();
 
+// Production binds the Resend sender under epic #6; until then only dev can send.
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddSingleton<INotificationSender, ConsoleNotificationSender>();
+}
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
     o.SwaggerDoc("v1", new OpenApiInfo { Title = "TrainerOS API", Version = "v1" }));
 
 var app = builder.Build();
+
+if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSender>() is null)
+{
+    throw new InvalidOperationException(
+        "No INotificationSender registered. Non-Development environments require the production "
+        + "sender binding (Resend, issue #34) — refusing to start with email silently unwired.");
+}
 
 app.UseApiErrorHandling();
 
