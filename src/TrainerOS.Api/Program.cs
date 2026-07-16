@@ -1,15 +1,19 @@
 using Microsoft.OpenApi.Models;
 using Npgsql;
+using TrainerOS.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddNpgsqlDataSource(builder.Configuration.GetConnectionString("Postgres")!);
+builder.Services.AddApiConventions();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
     o.SwaggerDoc("v1", new OpenApiInfo { Title = "TrainerOS API", Version = "v1" }));
 
 var app = builder.Build();
+
+app.UseApiErrorHandling();
 
 // OpenAPI description exists for TS type generation only (issue #14);
 // public OpenAPI docs remain a non-goal per api.md — never exposed outside Development.
@@ -18,9 +22,9 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
 }
 
-app.MapGet("/", () => "Hello World!");
+var api = app.MapGroup("/api");
 
-app.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
+api.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
 {
     try
     {
@@ -35,3 +39,5 @@ app.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
 });
 
 app.Run();
+
+public partial class Program;

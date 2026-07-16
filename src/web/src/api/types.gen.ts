@@ -4,30 +4,14 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
-export type GetData = {
+export type GetApiHealthData = {
     body?: never;
     path?: never;
     query?: never;
-    url: '/';
+    url: '/api/health';
 };
 
-export type GetResponses = {
-    /**
-     * OK
-     */
-    200: string;
-};
-
-export type GetResponse = GetResponses[keyof GetResponses];
-
-export type GetHealthData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/health';
-};
-
-export type GetHealthResponses = {
+export type GetApiHealthResponses = {
     /**
      * OK
      */

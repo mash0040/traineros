@@ -34,7 +34,7 @@ Local Postgres credentials are `traineros`/`traineros`, database `traineros` —
 dotnet watch --project src/TrainerOS.Api
 ```
 
-Verify the Postgres connection: `GET http://localhost:5216/health` returns `200 {"database":"connected"}` (503 if Postgres is down).
+Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `200 {"database":"connected"}` (503 if Postgres is down).
 
 ### 3. Run the Functions host
 
