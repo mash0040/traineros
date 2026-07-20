@@ -88,6 +88,7 @@ Trainer's exercise library, shared across all clients.
 | video_url  | text NULL | YouTube link (unlisted or public). No self-hosted video in v1. |
 | cues       | text NULL | coaching notes shown to client              |
 | created_at | timestamptz |                                          |
+| is_active  | boolean | soft-delete per resolved question 1 |
 
 **Decision:** `video_url` is a text column pointing at YouTube. (Rejected: upload + object storage + player — an entire subsystem for identical client value. Non-goal until there's a concrete reason.)
 
@@ -163,6 +164,8 @@ Ground truth of what happened.
 
 **Decision:** dual reference. `exercise_id` always (history queries stay one join: "all my squat sets, ever"), `program_day_exercise_id` when applicable (enables target-vs-actual display without breaking on improvised work). (Rejected: prescription-only reference — breaks the moment a client substitutes because the rack is taken. Rejected: exercise-only — loses target-vs-actual for free.)
 
+Delete behavior: workout_sessions.program_day_id and logged_sets.program_day_exercise_id are ON DELETE SET NULL — logged history survives program editing (principle 4). All other non-specced FKs are explicit RESTRICT so EF conventions can't introduce cascades.
+
 **Note:** history/"what did I do last time" and future progress charts are all reads over this table. No separate analytics tables in v1.
 
 ### notification_schedules
@@ -221,3 +224,7 @@ One row per send attempt-group. This is the audit trail and the idempotency mech
 
 1. **Exercise deletion: soft-delete (`is_active`).** logged_sets reference exercises; hard delete would orphan ground truth. (Also stated in PRODUCT.md and api.md.)
 2. **Trainer logs their own workouts as a client of themselves — yes.** The trainer user gets programs via self-referencing `trainer_id`. Zero schema change; migration 001 must not add a constraint preventing `trainer_id = id`.
+
+## Naming
+
+Naming: tables and columns are snake_case as written in this doc, enforced by explicit EF Core configuration (not conventions)
