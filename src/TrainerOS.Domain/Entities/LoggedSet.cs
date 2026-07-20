@@ -4,6 +4,7 @@ public class LoggedSet
 {
     public Guid Id { get; set; }
     public Guid SessionId { get; set; }
+    public WorkoutSession Session { get; set; } = null!;
     public Guid ExerciseId { get; set; }
     public Guid? ProgramDayExerciseId { get; set; }
     public int SetNumber { get; set; }

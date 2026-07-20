@@ -6,17 +6,23 @@ namespace TrainerOS.Domain.Data;
 
 public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : DbContext(options)
 {
-    public DbSet<User> Users => Set<User>();
+    // Auth tables are the only public sets: they are queried by credential (session id,
+    // token hash), which is unguessable and carries no cross-tenant surface.
     public DbSet<MagicLinkToken> MagicLinkTokens => Set<MagicLinkToken>();
     public DbSet<Session> Sessions => Set<Session>();
-    public DbSet<Exercise> Exercises => Set<Exercise>();
-    public DbSet<Program> Programs => Set<Program>();
-    public DbSet<ProgramDay> ProgramDays => Set<ProgramDay>();
-    public DbSet<ProgramDayExercise> ProgramDayExercises => Set<ProgramDayExercise>();
-    public DbSet<WorkoutSession> WorkoutSessions => Set<WorkoutSession>();
-    public DbSet<LoggedSet> LoggedSets => Set<LoggedSet>();
-    public DbSet<NotificationSchedule> NotificationSchedules => Set<NotificationSchedule>();
-    public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
+
+    // Owned (tenant-bearing) sets are internal on purpose: from outside Domain the only
+    // compiling route to this data is the scoped-query extensions, making the safe path
+    // the only path (api.md §Authorization model pt 1). Pinned by a reflection test.
+    internal DbSet<User> Users => Set<User>();
+    internal DbSet<Exercise> Exercises => Set<Exercise>();
+    internal DbSet<Program> Programs => Set<Program>();
+    internal DbSet<ProgramDay> ProgramDays => Set<ProgramDay>();
+    internal DbSet<ProgramDayExercise> ProgramDayExercises => Set<ProgramDayExercise>();
+    internal DbSet<WorkoutSession> WorkoutSessions => Set<WorkoutSession>();
+    internal DbSet<LoggedSet> LoggedSets => Set<LoggedSet>();
+    internal DbSet<NotificationSchedule> NotificationSchedules => Set<NotificationSchedule>();
+    internal DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -112,7 +118,7 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
             b.Property(d => d.Title).HasColumnName("title");
             b.Property(d => d.Position).HasColumnName("position");
 
-            b.HasOne<Program>().WithMany(p => p.Days).HasForeignKey(d => d.ProgramId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(d => d.Program).WithMany(p => p.Days).HasForeignKey(d => d.ProgramId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ProgramDayExercise>(b =>
@@ -128,7 +134,7 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
             b.Property(e => e.RestSeconds).HasColumnName("rest_seconds");
             b.Property(e => e.Note).HasColumnName("note");
 
-            b.HasOne<ProgramDay>().WithMany(d => d.Exercises).HasForeignKey(e => e.ProgramDayId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(e => e.ProgramDay).WithMany(d => d.Exercises).HasForeignKey(e => e.ProgramDayId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<Exercise>().WithMany().HasForeignKey(e => e.ExerciseId).OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -166,7 +172,7 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
 
             b.HasIndex(s => new { s.ExerciseId, s.LoggedAt });
 
-            b.HasOne<WorkoutSession>().WithMany(w => w.Sets).HasForeignKey(s => s.SessionId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(s => s.Session).WithMany(w => w.Sets).HasForeignKey(s => s.SessionId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<Exercise>().WithMany().HasForeignKey(s => s.ExerciseId).OnDelete(DeleteBehavior.Restrict);
             // SET NULL: the set survives prescription deletion via its always-set exercise_id.
             b.HasOne<ProgramDayExercise>().WithMany().HasForeignKey(s => s.ProgramDayExerciseId).OnDelete(DeleteBehavior.SetNull);
@@ -205,7 +211,7 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
             b.HasIndex(d => d.IdempotencyKey).IsUnique();
             b.HasIndex(d => new { d.Status, d.ScheduledFor });
 
-            b.HasOne<NotificationSchedule>().WithMany().HasForeignKey(d => d.ScheduleId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne(d => d.Schedule).WithMany().HasForeignKey(d => d.ScheduleId).OnDelete(DeleteBehavior.Restrict);
             b.HasOne<User>().WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Restrict);
         });
     }

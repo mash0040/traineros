@@ -4,6 +4,7 @@ public class ProgramDayExercise
 {
     public Guid Id { get; set; }
     public Guid ProgramDayId { get; set; }
+    public ProgramDay ProgramDay { get; set; } = null!;
     public Guid ExerciseId { get; set; }
     public int Position { get; set; }
     public int TargetSets { get; set; }

@@ -4,6 +4,7 @@ public class NotificationDelivery
 {
     public Guid Id { get; set; }
     public Guid ScheduleId { get; set; }
+    public NotificationSchedule Schedule { get; set; } = null!;
     public Guid UserId { get; set; }
     public required string Channel { get; set; }
     public DateTimeOffset ScheduledFor { get; set; }
