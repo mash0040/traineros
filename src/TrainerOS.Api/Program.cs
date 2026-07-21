@@ -1,12 +1,19 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using Npgsql;
 using TrainerOS.Api;
+using TrainerOS.Api.Auth;
+using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Notifications;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddNpgsqlDataSource(builder.Configuration.GetConnectionString("Postgres")!);
+builder.Services.AddDbContext<TrainerOsDbContext>((provider, options) =>
+    options.UseNpgsql(provider.GetRequiredService<NpgsqlDataSource>()));
 builder.Services.AddApiConventions();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<SessionService>();
 
 // Production binds the Resend sender under epic #6; until then only dev can send.
 if (builder.Environment.IsDevelopment())
@@ -28,6 +35,7 @@ if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSen
 }
 
 app.UseApiErrorHandling();
+app.UseMiddleware<SessionAuthMiddleware>();
 
 // OpenAPI description exists for TS type generation only (issue #14);
 // public OpenAPI docs remain a non-goal per api.md — never exposed outside Development.
