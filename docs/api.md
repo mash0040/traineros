@@ -24,6 +24,8 @@ Lesson applied from Plant Plotter IDOR: object-level authorization is not a midd
 4. **Role gates are route-level; ownership is query-level.** `requireTrainer` / `requireClient` middleware rejects the wrong role early with 404 (same non-leak rule), but ownership is still enforced in every query — middleware is a convenience, not the security boundary.
 5. **Testable invariant:** for every client-facing GET/POST, an integration test authenticates as client A and requests client B's resource, asserting 404. This test suite is the executable form of "clients are isolated."
 
+6. Resolved in #19: absent/expired/revoked session → 401; authenticated wrong-role → 404. Spec was silent; 401 for anonymous requests leaks no route information and lets the SPA distinguish login-required from not-found.
+
 ## Auth endpoints
 
 ### POST /api/auth/magic-link
