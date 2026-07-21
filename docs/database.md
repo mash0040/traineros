@@ -11,7 +11,8 @@ This document records not just the schema but the decisions behind it and the al
 ## Design principles
 
 1. **Tenant-aware, not multi-tenant.** Every domain table carries `trainer_id` even though v1 has exactly one trainer. No trainer onboarding, no org model — but the schema never needs a migration to support a second trainer. (Rejected: full multi-tenant features in v1 — pure speculation at 3 clients. Rejected: omitting `trainer_id` — turns a future feature into a rewrite.)
-2. **Client isolation is the security invariant.** A client must never read another client's data. Enforced in the application layer: every query for client-facing endpoints is scoped by the authenticated `user_id`. (Rejected for v1: Postgres Row-Level Security — correct at scale, but adds operational complexity before there's a second trainer. Documented as the v2 upgrade path.)
+2. **Client isolation is the security invariant.** A client must never read another client's data. Enforced in the application layer: every query for client-facing endpoints is scoped by the authenticated `user_id`. (Rejected for v1: Postgres Row-Level Security — correct at scale, but adds operational complexity before there's a second trainer. Documented as the v2 upgrade path.). 
+(Enforced structurally in #18: owned-entity DbSets are internal; the scoped-query extensions on TrainerOsDbContext are the only compiling access path from Api/Functions, with a reflection tripwire test pinning the surface.)
 3. **Personalization is data, not UI.** One dashboard component; per-client rows. No per-client layouts or config tables.
 4. **Logs are ground truth.** What the client actually did is never overwritten by program edits. Logged sets stand alone and remain valid even if the program that prescribed them is edited or deleted.
 

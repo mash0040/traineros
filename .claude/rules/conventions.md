@@ -2,7 +2,12 @@
 
 - **C# style:** the root `.editorconfig` is authoritative. Don't argue with it in review; change it or follow it.
 - **API endpoints:** one endpoint file per resource under `src/TrainerOS.Api/Endpoints/` (e.g. `ClientEndpoints.cs`, `ProgramEndpoints.cs`).
-- **Data access:** only through the Domain scoped-query extensions — `.ForTrainer(id)` / `.ForClient(id)` — per api.md's authorization model. No handler or Function loads a row by bare id and then checks ownership; a scoped query that finds nothing returns 404.
+- **Data access:** ONLY via the scoped-query extensions on TrainerOsDbContext
+  ({Entity}ForTrainer(id) / {Entity}ForClient(id)); auth identity resolution via
+  AuthQueryExtensions (UserById/UserByEmail). Owned-entity DbSets are internal —
+  do not widen the context's public surface (tripwire test enforces).
+  db.Set<T>() bypasses the boundary: any occurrence of "Set<" in Api or
+  Functions fails review.
 - **Azure Functions naming:** `{Noun}{Role}` — e.g. `ReminderScheduler`, `ReminderWorker`.
 - **Migrations:** `NNN_PascalDescription` (e.g. `001_InitialSchema`).
 - **Branches:** `feat/{issue}-slug` (e.g. `feat/12-magic-link-auth`).
