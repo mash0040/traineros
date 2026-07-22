@@ -3,6 +3,7 @@ using Microsoft.OpenApi.Models;
 using Npgsql;
 using TrainerOS.Api;
 using TrainerOS.Api.Auth;
+using TrainerOS.Api.Endpoints;
 using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Notifications;
 
@@ -45,6 +46,8 @@ if (app.Environment.IsDevelopment())
 }
 
 var api = app.MapGroup("/api");
+
+api.MapAuthEndpoints();
 
 api.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
 {
