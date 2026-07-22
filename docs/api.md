@@ -88,6 +88,7 @@ Revokes current session row.
 ## Cross-cutting
 
 - **Rate limiting:** only auth + pause endpoints in v1. Authenticated traffic from 4 users does not need throttling; adding it everywhere is ceremony.
+(Implemented in #23: built-in ASP.NET rate limiting, in-memory — per-instance counters, reset on restart, limits multiply on scale-out; acceptable single-instance per architecture.md. Per-email limiting is in-handler (middleware can't read the body), keys on the submitted string regardless of account existence, and is deliberately magic-link-only — a login lockout would be an account-DoS vector, and Argon2 cost bounds password guessing. The 10/IP/hour policy covers magic-link and login. Pause endpoints inherit coverage at #40.)
 - **Validation:** schema-validated bodies at the edge (zod or equivalent); unknown fields rejected, not ignored — silent-ignore hides client bugs.
 - **CORS:** same-origin deployment planned (client served by/with the API); if split-origin later, allowlist exactly one origin, credentials mode. No wildcard, ever, with cookie auth.
 - **Idempotency:** POST /sessions/:id/sets is not idempotent and doesn't need to be in v1 (double-tap creates a duplicate set the client can delete same-day). Noted as the honest gap; client-side disable-on-submit mitigates. (Contrast: notification sends, where duplication is systemic — that's why idempotency lives there.)
