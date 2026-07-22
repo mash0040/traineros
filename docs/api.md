@@ -41,6 +41,7 @@ Rate limits (v1-sized, in-memory or single Redis-free table): 3 requests / email
 
 ### POST /api/auth/verify
 Body: `{ token }`. Consumes the token (single-use, 15 min expiry, hash-compared), creates a session row, sets httpOnly Secure SameSite=Lax cookie. 90-day expiry for clients, 30 for trainer.
+#21: all POST rejections (invalid/expired/used/deactivated) are an indistinguishable 401 invalid_token — no validity oracle. Successful POST returns {ok:true} only; the SPA bootstraps identity via GET /api/me (#30).
 
 ### POST /api/auth/login
 Trainer only. `{ email, password }` → session cookie. Argon2id hash comparison. Same 404-shaped rejection for unknown email vs wrong password ("invalid credentials", no distinction).
