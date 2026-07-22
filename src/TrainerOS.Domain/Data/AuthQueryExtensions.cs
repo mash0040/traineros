@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 using TrainerOS.Domain.Entities;
 
 namespace TrainerOS.Domain.Data;
@@ -12,6 +14,10 @@ public static class AuthQueryExtensions
 
     public static IQueryable<User> UserByEmail(this TrainerOsDbContext db, string email)
         => db.Users.Where(u => u.Email == email);
+
+    /// <summary>Bootstrap check for the startup seed (#24): is there any trainer account at all?</summary>
+    public static Task<bool> TrainerAccountExistsAsync(this TrainerOsDbContext db, CancellationToken cancellationToken = default)
+        => db.Users.AnyAsync(u => u.Role == Roles.Trainer, cancellationToken);
 
     /// <summary>
     /// Resolves the user behind a session in one query, excluding soft-deactivated users
