@@ -6,12 +6,17 @@ public static class SessionCookie
     public const string Name = "traineros_session";
 
     public static void Append(HttpResponse response, Guid sessionId, DateTimeOffset expiresAt)
-        => response.Cookies.Append(Name, sessionId.ToString(), new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Lax,
-            Path = "/",
-            Expires = expiresAt,
-        });
+        => response.Cookies.Append(Name, sessionId.ToString(), Options(expiresAt));
+
+    public static void Delete(HttpResponse response)
+        => response.Cookies.Delete(Name, Options(expiresAt: null));
+
+    private static CookieOptions Options(DateTimeOffset? expiresAt) => new()
+    {
+        HttpOnly = true,
+        Secure = true,
+        SameSite = SameSiteMode.Lax,
+        Path = "/",
+        Expires = expiresAt,
+    };
 }

@@ -11,6 +11,11 @@ public static class AuthEndpoints
 {
     public sealed record MagicLinkRequest(string? Email);
     public sealed record VerifyRequest(string? Token);
+    public sealed record LoginRequest(string? Email, string? Password);
+
+    // Verified against when the email doesn't resolve to a trainer, so unknown-email and
+    // wrong-password rejections cost the same Argon2 work — no timing enumeration.
+    private static readonly string DummyPasswordHash = Passwords.Hash(Guid.NewGuid().ToString());
 
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
@@ -18,7 +23,48 @@ public static class AuthEndpoints
         auth.MapPost("/magic-link", RequestMagicLink);
         auth.MapGet("/verify", ValidateToken);
         auth.MapPost("/verify", ConsumeToken);
+        auth.MapPost("/login", Login);
+        auth.MapPost("/logout", Logout);
         return api;
+    }
+
+    // api.md §POST /api/auth/login: trainer only; Argon2id comparison; one
+    // indistinguishable "invalid credentials" rejection for unknown email, wrong
+    // password, client email (clients have no password), or deactivated account.
+    private static async Task<IResult> Login(
+        LoginRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        SessionService sessions,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(body.Email) || string.IsNullOrWhiteSpace(body.Password))
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "email and password are required."));
+        }
+
+        var user = await db.UserByEmail(body.Email.Trim())
+            .Where(u => u.IsActive && u.Role == Roles.Trainer)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var passwordMatches = Passwords.Verify(body.Password, user?.PasswordHash ?? DummyPasswordHash);
+        if (user is null || user.PasswordHash is null || !passwordMatches)
+        {
+            return Results.Json(
+                ApiError.Create("invalid_credentials", "Invalid credentials."),
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        await sessions.SignInAsync(http, user, cancellationToken);
+        return Results.Ok(new { ok = true });
+    }
+
+    private static async Task<IResult> Logout(
+        HttpContext http, SessionService sessions, CancellationToken cancellationToken)
+    {
+        await sessions.SignOutAsync(http, cancellationToken);
+        return Results.Ok(new { ok = true });
     }
 
     // api.md §GET /api/auth/verify: renders/validates ONLY — mail scanners GET links
