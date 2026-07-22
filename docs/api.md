@@ -30,6 +30,7 @@ Lesson applied from Plant Plotter IDOR: object-level authorization is not a midd
 
 ### POST /api/auth/magic-link
 Body: `{ email }`. Always returns `202 { ok: true }` whether or not the email exists — no user enumeration via response differences or timing-obvious branches.
+Revised in #20: all active users (including the trainer) receive magic links — the flow doubles as v1 password recovery, since no reset flow exists. Deactivated users are silently excluded (202, nothing sent).
 Rate limits (v1-sized, in-memory or single Redis-free table): 3 requests / email / 15 min, 10 / IP / hour. Prevents email-bombing a client and provider-quota burn.
 
 ### GET /api/auth/verify?token=...
