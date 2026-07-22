@@ -65,6 +65,11 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
     public const string TrainerEmail = "trainer@example.com";
     public const string TrainerPassword = "correct horse battery staple";
 
+    // TestServer connections have no RemoteIpAddress, so every request without this header
+    // shares the rate limiter's "unknown" IP partition (budget: 10/hour per fixture).
+    // Tests that exercise the limits set it to keep their IP partitions independent.
+    public const string TestClientIpHeader = "X-Test-Client-IP";
+
     public async Task InitializeAsync()
     {
         _keepAlive = new SqliteConnection(_connectionString);
@@ -78,9 +83,20 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
         builder.Services.AddSingleton<TimeProvider>(Clock);
         builder.Services.AddSingleton<INotificationSender>(Sender);
         builder.Services.AddScoped<SessionService>();
+        builder.Services.AddAuthRateLimiting();
 
         _app = builder.Build();
         _app.UseApiErrorHandling();
+        _app.Use((context, next) =>
+        {
+            if (context.Request.Headers.TryGetValue(TestClientIpHeader, out var ip))
+            {
+                context.Connection.RemoteIpAddress = IPAddress.Parse(ip.ToString());
+            }
+
+            return next(context);
+        });
+        _app.UseRateLimiter();
         _app.MapGroup("/api").MapAuthEndpoints();
 
         await _app.StartAsync();

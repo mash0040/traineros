@@ -20,10 +20,12 @@ public static class AuthEndpoints
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
         var auth = api.MapGroup("/auth");
-        auth.MapPost("/magic-link", RequestMagicLink);
+        auth.MapPost("/magic-link", RequestMagicLink)
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
         auth.MapGet("/verify", ValidateToken);
         auth.MapPost("/verify", ConsumeToken);
-        auth.MapPost("/login", Login);
+        auth.MapPost("/login", Login)
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
         auth.MapPost("/logout", Logout);
         return api;
     }
@@ -150,6 +152,7 @@ public static class AuthEndpoints
     // write, email send) can't show up in the request latency of existing emails.
     private static IResult RequestMagicLink(
         MagicLinkRequest body,
+        MagicLinkEmailLimiter emailLimiter,
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
         ILoggerFactory loggerFactory)
@@ -157,6 +160,13 @@ public static class AuthEndpoints
         if (string.IsNullOrWhiteSpace(body.Email))
         {
             return Results.BadRequest(ApiError.Create("bad_request", "email is required."));
+        }
+
+        if (!emailLimiter.TryAcquire(body.Email.Trim()))
+        {
+            return Results.Json(
+                AuthRateLimiting.RateLimitedError,
+                statusCode: StatusCodes.Status429TooManyRequests);
         }
 
         var baseUrl = configuration["App:BaseUrl"]

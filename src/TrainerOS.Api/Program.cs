@@ -15,6 +15,7 @@ builder.Services.AddDbContext<TrainerOsDbContext>((provider, options) =>
 builder.Services.AddApiConventions();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<SessionService>();
+builder.Services.AddAuthRateLimiting();
 
 // Production binds the Resend sender under epic #6; until then only dev can send.
 if (builder.Environment.IsDevelopment())
@@ -38,6 +39,8 @@ if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSen
 await TrainerSeeder.SeedAsync(app.Services, app.Configuration);
 
 app.UseApiErrorHandling();
+// Before session auth: rate-limited requests shouldn't cost a session lookup.
+app.UseRateLimiter();
 app.UseMiddleware<SessionAuthMiddleware>();
 
 // OpenAPI description exists for TS type generation only (issue #14);
