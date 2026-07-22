@@ -10,12 +10,92 @@ namespace TrainerOS.Api.Endpoints;
 public static class AuthEndpoints
 {
     public sealed record MagicLinkRequest(string? Email);
+    public sealed record VerifyRequest(string? Token);
 
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
         var auth = api.MapGroup("/auth");
         auth.MapPost("/magic-link", RequestMagicLink);
+        auth.MapGet("/verify", ValidateToken);
+        auth.MapPost("/verify", ConsumeToken);
         return api;
+    }
+
+    // api.md §GET /api/auth/verify: renders/validates ONLY — mail scanners GET links
+    // before the user does, so consumption is POST-only. This handler performs no writes
+    // (the doc-wide no-state-change-on-GET invariant is anchored here).
+    private static async Task<IResult> ValidateToken(
+        string? token, TrainerOsDbContext db, TimeProvider clock, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return Results.Ok(new { valid = false });
+        }
+
+        var found = await FindLiveTokenAsync(db, token, clock.GetUtcNow(), cancellationToken);
+        return Results.Ok(new { valid = found is not null });
+    }
+
+    private static async Task<IResult> ConsumeToken(
+        VerifyRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        SessionService sessions,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(body.Token))
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "token is required."));
+        }
+
+        var now = clock.GetUtcNow();
+        var found = await FindLiveTokenAsync(db, body.Token, now, cancellationToken);
+        if (found is null)
+        {
+            return InvalidToken();
+        }
+
+        // Single-use, enforced atomically: the conditional update wins for exactly one
+        // caller — a concurrent double-POST of the same link gets zero rows here.
+        var consumed = await db.MagicLinkTokens
+            .Where(t => t.Id == found.Value.Token.Id && t.UsedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.UsedAt, now), cancellationToken);
+
+        if (consumed == 0)
+        {
+            return InvalidToken();
+        }
+
+        await sessions.SignInAsync(http, found.Value.User, cancellationToken);
+        return Results.Ok(new { ok = true });
+
+        static IResult InvalidToken() => Results.Json(
+            ApiError.Create("invalid_token", "This login link is invalid, expired, or already used."),
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    // Hash-compared lookup (raw tokens are never stored), then expiry/used/active checks.
+    // Trainer tokens are as valid as client tokens: the magic link doubles as the
+    // trainer's v1 password recovery (#20); SessionService applies the 30-day lifetime.
+    private static async Task<(MagicLinkToken Token, User User)?> FindLiveTokenAsync(
+        TrainerOsDbContext db, string rawToken, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var hash = MagicLinkTokens.Hash(rawToken);
+        var token = await db.MagicLinkTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, cancellationToken);
+
+        if (token is null || token.UsedAt is not null || token.ExpiresAt <= now)
+        {
+            return null;
+        }
+
+        var user = await db.UserById(token.UserId)
+            .Where(u => u.IsActive)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return user is null ? null : (token, user);
     }
 
     // api.md: always 202 { ok: true } whether or not the email exists. The response is

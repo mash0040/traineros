@@ -46,7 +46,10 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
 {
     // Shared-cache named in-memory DB: token issuance runs post-response on its own scope
     // (and thread), so each DbContext needs its own connection to the same database.
-    private const string ConnectionString = "Data Source=magiclink-tests;Mode=Memory;Cache=Shared";
+    // The name is per-instance because xunit runs test classes (each with its own
+    // fixture) in parallel — a shared name would cross-contaminate.
+    private readonly string _connectionString =
+        $"Data Source=auth-tests-{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
 
     private WebApplication _app = null!;
     private SqliteConnection _keepAlive = null!;
@@ -63,16 +66,17 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _keepAlive = new SqliteConnection(ConnectionString);
+        _keepAlive = new SqliteConnection(_connectionString);
         _keepAlive.Open();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Configuration["App:BaseUrl"] = "http://localhost:5173/";
         builder.Services.AddApiConventions();
-        builder.Services.AddDbContext<TrainerOsDbContext>(o => o.UseSqlite(ConnectionString));
+        builder.Services.AddDbContext<TrainerOsDbContext>(o => o.UseSqlite(_connectionString));
         builder.Services.AddSingleton<TimeProvider>(Clock);
         builder.Services.AddSingleton<INotificationSender>(Sender);
+        builder.Services.AddScoped<SessionService>();
 
         _app = builder.Build();
         _app.UseApiErrorHandling();
