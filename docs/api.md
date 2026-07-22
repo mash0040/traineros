@@ -26,6 +26,8 @@ Lesson applied from Plant Plotter IDOR: object-level authorization is not a midd
 
 6. Resolved in #19: absent/expired/revoked session → 401; authenticated wrong-role → 404. Spec was silent; 401 for anonymous requests leaks no route information and lets the SPA distinguish login-required from not-found.
 
+7. #24: trainer is seeded from env vars (Seed__TrainerEmail/Password), Argon2id-hashed, idempotent on any-trainer-exists, never overwritten — password rotation is deliberately absent; magic-link (#20) is the recovery path." Plus one env-var note onto issue #57's checklist: the two seed vars join the deploy configuration.
+
 ## Auth endpoints
 
 ### POST /api/auth/magic-link
