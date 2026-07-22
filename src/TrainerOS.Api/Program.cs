@@ -35,6 +35,8 @@ if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSen
         + "sender binding (Resend, issue #34) — refusing to start with email silently unwired.");
 }
 
+await TrainerSeeder.SeedAsync(app.Services, app.Configuration);
+
 app.UseApiErrorHandling();
 app.UseMiddleware<SessionAuthMiddleware>();
 
