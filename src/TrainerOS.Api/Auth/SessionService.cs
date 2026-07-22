@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Entities;
 
@@ -27,5 +29,21 @@ public sealed class SessionService(TrainerOsDbContext db, TimeProvider clock)
 
         SessionCookie.Append(context.Response, session.Id, session.ExpiresAt);
         return session;
+    }
+
+    // Idempotent: revokes the request's session row if there is one, always clears the
+    // cookie. Logging out twice (or with a dead cookie) is a success, not an error.
+    public async Task SignOutAsync(HttpContext context, CancellationToken cancellationToken = default)
+    {
+        if (context.Request.Cookies.TryGetValue(SessionCookie.Name, out var raw)
+            && Guid.TryParse(raw, out var sessionId))
+        {
+            await db.Sessions
+                .Where(s => s.Id == sessionId && s.RevokedAt == null)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(x => x.RevokedAt, clock.GetUtcNow()), cancellationToken);
+        }
+
+        SessionCookie.Delete(context.Response);
     }
 }

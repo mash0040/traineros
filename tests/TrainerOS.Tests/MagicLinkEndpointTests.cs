@@ -63,6 +63,7 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
     public const string ClientEmail = "client@example.com";
     public const string InactiveEmail = "inactive@example.com";
     public const string TrainerEmail = "trainer@example.com";
+    public const string TrainerPassword = "correct horse battery staple";
 
     public async Task InitializeAsync()
     {
@@ -92,6 +93,7 @@ public sealed class MagicLinkTestApp : IAsyncLifetime
             {
                 Id = trainerId, Role = Roles.Trainer, Email = TrainerEmail,
                 DisplayName = "T", Timezone = "America/Toronto", IsActive = true, CreatedAt = Clock.Now,
+                PasswordHash = Passwords.Hash(TrainerPassword),
             });
             db.Add(new User
             {
