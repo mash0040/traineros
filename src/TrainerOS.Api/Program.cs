@@ -53,6 +53,7 @@ if (app.Environment.IsDevelopment())
 var api = app.MapGroup("/api");
 
 api.MapAuthEndpoints();
+api.MapClientEndpoints();
 
 api.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
 {
