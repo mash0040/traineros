@@ -20,6 +20,7 @@ Lesson applied from Plant Plotter IDOR: object-level authorization is not a midd
 1. **Scoped queries, not load-then-check.** Every data query includes the owner in the WHERE clause: trainer endpoints filter `trainer_id = session.user_id`; client endpoints filter `client_id = session.user_id`. There is no code path that loads a row by bare id and then decides. A scoped query that finds nothing returns 404.
    (Rejected: fetch-by-id + ownership assertion — it works until one new endpoint forgets the assertion. Scoping makes the safe path the only path.)
 2. **404, not 403, for other people's objects.** A client requesting another client's session id gets the same 404 as a nonexistent id. 403 confirms the resource exists — an enumeration gift. (Rejected: 403 — leaks existence.)
+(Clarified in #27: identity leaks via **body fields** (e.g. clientId on POST /programs) return 400 unknown_client — cross-tenant and truly-unknown collapse to the same response. Identity leaks via **route parameters** continue to return 404. Both preserve the no-existence-oracle invariant; the shape difference reflects HTTP semantics — 400 says "your input is invalid," 404 says "this URL points nowhere.")
 3. **Nested ownership chains verified by join.** `logged_sets` belong to a session which belongs to a client: writes to `/sessions/:id/sets` join through to `client_id = session.user_id` in one query. Never trust the parent id in the URL alone.
 4. **Role gates are route-level; ownership is query-level.** `requireTrainer` / `requireClient` middleware rejects the wrong role early with 404 (same non-leak rule), but ownership is still enforced in every query — middleware is a convenience, not the security boundary.
 5. **Testable invariant:** for every client-facing GET/POST, an integration test authenticates as client A and requests client B's resource, asserting 404. This test suite is the executable form of "clients are isolated."
@@ -59,6 +60,7 @@ Revokes current session row.
 | GET /api/clients/:id/sessions | client's workout history | trainer view of logs |
 | GET/POST /api/exercises, PATCH /api/exercises/:id | exercise library | delete = PATCH is_active=false (soft-delete per database.md) |
 | GET/POST /api/programs | list/create (client_id in body on create) | create enforces one-active-per-client via partial unique index; 409 on conflict |
+(Recorded in #27: program status transitions are unrestricted — any of {draft, active, archived} → any other. Deliberate for v1 given single-trainer scale; the 409 active-conflict constraint is the only structural gate. Restrictive transitions become worthwhile if program history needs to be auditable — v2 concern.)
 | GET/PATCH /api/programs/:id | read/edit incl. status transitions | |
 | POST /api/programs/:id/days, PATCH/DELETE /api/days/:id | manage days | |
 | POST /api/days/:id/exercises, PATCH/DELETE /api/day-exercises/:id | manage prescriptions | position handling: client sends full ordered id list on reorder (PATCH /api/days/:id/order), server rewrites positions in one transaction. (Rejected: fractional/gap positions — clever, unnecessary at this scale.) |
