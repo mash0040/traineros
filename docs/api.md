@@ -65,6 +65,7 @@ Revokes current session row.
 | POST /api/programs/:id/days, PATCH/DELETE /api/days/:id | manage days | |
 | POST /api/days/:id/exercises, PATCH/DELETE /api/day-exercises/:id | manage prescriptions | position handling: client sends full ordered id list on reorder (PATCH /api/days/:id/order), server rewrites positions in one transaction. (Rejected: fractional/gap positions — clever, unnecessary at this scale.) |
 | GET/POST /api/clients/:id/schedule, PATCH /api/schedules/:id | reminder schedule | one schedule per client in v1 |
+(Recorded in #29: schedules can be created and edited for deactivated clients. Sending is guarded at worker time per notifications.md, so schedule state and client activation state are independent concerns; deactivation still flips enabled=false in-transaction per #25. The soft/cycling model of client activation justifies keeping them separable. TimeOnly on the wire serializes as HH:mm:ss per framework default — see issue #79 for the HH:mm converter follow-up. One schedule per client is app-enforced (no partial unique index); race window is effectively zero at v1 scale, tracked as post-v1 hardening.)
 
 ## Client endpoints (role: client; all queries scoped by session user)
 
