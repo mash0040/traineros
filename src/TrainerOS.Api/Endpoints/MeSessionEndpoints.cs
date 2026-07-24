@@ -1,0 +1,204 @@
+using Microsoft.EntityFrameworkCore;
+
+using TrainerOS.Api.Auth;
+using TrainerOS.Domain.Data;
+using TrainerOS.Domain.Entities;
+
+namespace TrainerOS.Api.Endpoints;
+
+// api.md §Client endpoints — the client's own logging surface. Ownership of the
+// route-param :id in /sessions/:id/sets is verified by join to client_id = session
+// user (api.md §Authorization pt 3): the parent id from the URL is a filter, never
+// a lookup. A cross-client session id collapses to the same 404 as a fabricated id.
+//
+// Not idempotent by design (api.md §Cross-cutting): duplicate POSTs create duplicate
+// sets, which the client can delete same-day; client-side disable-on-submit mitigates.
+public static class MeSessionEndpoints
+{
+    public sealed record CreateSessionRequest(
+        DateOnly? PerformedOn,
+        Guid? ProgramDayId,
+        string? Comment);
+
+    public sealed record SessionResponse(
+        Guid Id,
+        DateOnly PerformedOn,
+        Guid? ProgramDayId,
+        string? Comment,
+        DateTimeOffset CreatedAt);
+
+    public sealed record LogSetRequest(
+        Guid? ExerciseId,
+        Guid? ProgramDayExerciseId,
+        int? SetNumber,
+        decimal? WeightKg,
+        int? Reps);
+
+    public sealed record LoggedSetResponse(
+        Guid Id,
+        Guid SessionId,
+        Guid ExerciseId,
+        Guid? ProgramDayExerciseId,
+        int SetNumber,
+        decimal? WeightKg,
+        int Reps,
+        DateTimeOffset LoggedAt);
+
+    public static RouteGroupBuilder MapMeSessionEndpoints(this RouteGroupBuilder api)
+    {
+        var meSessions = api.MapGroup("/me/sessions").RequireClient();
+        meSessions.MapPost("", CreateSession);
+        meSessions.MapPost("/{id:guid}/sets", LogSet);
+        return api;
+    }
+
+    private static async Task<IResult> CreateSession(
+        CreateSessionRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var client = http.GetCurrentUser()!;
+
+        if (client.TrainerId is not { } trainerId)
+        {
+            // A client with no trainer_id is a schema violation — refuse rather than
+            // seed an orphaned session.
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        if (body.PerformedOn is not { } performedOn)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "performed_on is required."));
+        }
+
+        // program_day_id nullable = freestyle session. When set, it's a body-field
+        // identity → 400 unknown_program_day for cross-client and truly-unknown alike
+        // (api.md #27 clarification).
+        if (body.ProgramDayId is { } programDayId)
+        {
+            var owned = await db.ProgramDaysForClient(client.Id)
+                .AnyAsync(d => d.Id == programDayId, cancellationToken);
+            if (!owned)
+            {
+                return Results.BadRequest(ApiError.Create("unknown_program_day", "Unknown program_day_id."));
+            }
+        }
+
+        var session = new WorkoutSession
+        {
+            Id = Guid.NewGuid(),
+            TrainerId = trainerId,
+            ClientId = client.Id,
+            ProgramDayId = body.ProgramDayId,
+            PerformedOn = performedOn,
+            Comment = NullIfBlank(body.Comment),
+            CreatedAt = clock.GetUtcNow(),
+        };
+        db.Add(session);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return Results.Created($"/api/me/sessions/{session.Id}",
+            new SessionResponse(session.Id, session.PerformedOn, session.ProgramDayId,
+                session.Comment, session.CreatedAt));
+    }
+
+    private static async Task<IResult> LogSet(
+        Guid id,
+        LogSetRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var client = http.GetCurrentUser()!;
+
+        if (client.TrainerId is not { } trainerId)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        if (body.ExerciseId is not { } exerciseId)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "exercise_id is required."));
+        }
+
+        if (body.SetNumber is not { } setNumber || setNumber <= 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "set_number must be a positive integer."));
+        }
+
+        if (body.Reps is not { } reps || reps <= 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "reps must be a positive integer."));
+        }
+
+        if (body.WeightKg is { } w && w < 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "weight_kg cannot be negative."));
+        }
+
+        // Ownership of the route-param :id verified by join through WorkoutSessionsForClient —
+        // a session id belonging to another client is indistinguishable from a made-up
+        // id (the AC's isolation test).
+        var sessionExists = await db.WorkoutSessionsForClient(client.Id)
+            .AnyAsync(s => s.Id == id, cancellationToken);
+        if (!sessionExists)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Body-field: exercise must be in the client's trainer's library. Soft-deleted
+        // (is_active=false) exercises are still valid for LOGGING — the trainer may
+        // retire a library entry mid-cycle, and the client must still be able to log
+        // today's session against it. Contrast prescription creation, which rejects
+        // inactive exercises (fresh authoring shouldn't resurrect retired).
+        var exerciseKnown = await db.ExercisesForTrainer(trainerId)
+            .AnyAsync(e => e.Id == exerciseId, cancellationToken);
+        if (!exerciseKnown)
+        {
+            return Results.BadRequest(ApiError.Create("unknown_exercise", "Unknown exercise_id."));
+        }
+
+        // Body-field: prescription (optional). If given, must belong to the client's
+        // own programs. The dual-reference design allows exercise_id + null
+        // program_day_exercise_id (freestyle/substitution) — that's not an error.
+        if (body.ProgramDayExerciseId is { } pdxId)
+        {
+            var pdxOwned = await db.ProgramDayExercisesForClient(client.Id)
+                .AnyAsync(e => e.Id == pdxId, cancellationToken);
+            if (!pdxOwned)
+            {
+                return Results.BadRequest(
+                    ApiError.Create("unknown_program_day_exercise", "Unknown program_day_exercise_id."));
+            }
+        }
+
+        var loggedSet = new LoggedSet
+        {
+            Id = Guid.NewGuid(),
+            SessionId = id,
+            ExerciseId = exerciseId,
+            ProgramDayExerciseId = body.ProgramDayExerciseId,
+            SetNumber = setNumber,
+            WeightKg = body.WeightKg,
+            Reps = reps,
+            LoggedAt = clock.GetUtcNow(),
+        };
+        db.Add(loggedSet);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return Results.Created($"/api/me/sets/{loggedSet.Id}",
+            new LoggedSetResponse(loggedSet.Id, loggedSet.SessionId, loggedSet.ExerciseId,
+                loggedSet.ProgramDayExerciseId, loggedSet.SetNumber, loggedSet.WeightKg,
+                loggedSet.Reps, loggedSet.LoggedAt));
+    }
+
+    private static string? NullIfBlank(string? value)
+    {
+        if (value is null) return null;
+        var trimmed = value.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+}
