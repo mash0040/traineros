@@ -44,11 +44,16 @@ public static class MeSessionEndpoints
         int Reps,
         DateTimeOffset LoggedAt);
 
+    public sealed record UpdateSetRequest(int? SetNumber, decimal? WeightKg, int? Reps);
+
     public static RouteGroupBuilder MapMeSessionEndpoints(this RouteGroupBuilder api)
     {
         var meSessions = api.MapGroup("/me/sessions").RequireClient();
         meSessions.MapPost("", CreateSession);
         meSessions.MapPost("/{id:guid}/sets", LogSet);
+
+        var meSets = api.MapGroup("/me/sets").RequireClient();
+        meSets.MapPatch("/{id:guid}", UpdateSet);
         return api;
     }
 
@@ -193,6 +198,80 @@ public static class MeSessionEndpoints
             new LoggedSetResponse(loggedSet.Id, loggedSet.SessionId, loggedSet.ExerciseId,
                 loggedSet.ProgramDayExerciseId, loggedSet.SetNumber, loggedSet.WeightKg,
                 loggedSet.Reps, loggedSet.LoggedAt));
+    }
+
+    // api.md: "PATCH /api/me/sets/:id — fix a typo'd set. same-day only … 403-shaped
+    // 404 after that." Nested ownership: LoggedSetsForClient joins through
+    // workout_sessions.client_id — a cross-client set id is a 404, indistinguishable
+    // from a fabricated id. The same-day window is computed in the client's timezone
+    // (users.timezone), so a set logged at 23:30 America/Toronto stays editable for
+    // 30 minutes, not 4½ hours as a UTC-day rule would give.
+    private static async Task<IResult> UpdateSet(
+        Guid id,
+        UpdateSetRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var client = http.GetCurrentUser()!;
+
+        if (body.SetNumber is { } sn && sn <= 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "set_number must be a positive integer."));
+        }
+
+        if (body.Reps is { } r && r <= 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "reps must be a positive integer."));
+        }
+
+        if (body.WeightKg is { } w && w < 0)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "weight_kg cannot be negative."));
+        }
+
+        var set = await db.LoggedSetsForClient(client.Id)
+            .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
+        if (set is null)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Same-day window in the client's local time. Missing the window is a 404
+        // (not 403, not 400) — the api.md convention treats "not currently yours to
+        // touch" the same shape as "doesn't exist" so timing behavior can't be probed.
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(client.Timezone);
+        var loggedLocal = TimeZoneInfo.ConvertTime(set.LoggedAt, tz);
+        var todayLocal = TimeZoneInfo.ConvertTime(clock.GetUtcNow(), tz);
+        if (DateOnly.FromDateTime(loggedLocal.DateTime) != DateOnly.FromDateTime(todayLocal.DateTime))
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        if (body.SetNumber is not null)
+        {
+            set.SetNumber = body.SetNumber.Value;
+        }
+
+        // WeightKg: null on the wire = don't touch. Clearing a value back to bodyweight
+        // via PATCH isn't supported in v1 — the trainer/client workflow is delete +
+        // re-add for that rare case, which sidesteps the "null means not sent" gap.
+        if (body.WeightKg is not null)
+        {
+            set.WeightKg = body.WeightKg;
+        }
+
+        if (body.Reps is not null)
+        {
+            set.Reps = body.Reps.Value;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(new LoggedSetResponse(
+            set.Id, set.SessionId, set.ExerciseId, set.ProgramDayExerciseId,
+            set.SetNumber, set.WeightKg, set.Reps, set.LoggedAt));
     }
 
     private static string? NullIfBlank(string? value)
