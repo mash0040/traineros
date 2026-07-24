@@ -77,6 +77,7 @@ Revokes current session row.
 | POST /api/me/sessions | start/record a workout session | body: performed_on, program_day_id (nullable), comment |
 | POST /api/me/sessions/:id/sets | log a set | body: exercise_id, program_day_exercise_id?, set_number, weight_kg?, reps. Ownership of :id verified by join |
 | PATCH /api/me/sets/:id | fix a typo'd set | same-day only (editing history weeks later is a data-integrity smell; 403-shaped 404 after that) |
+(Recorded in #32: same-day edit window is measured against `logged_sets.logged_at` converted to the client's timezone from `users.timezone`, not against `session.performed_on`. Rationale: the "typo fix" AC targets the entry event, so a workout logged retroactively remains editable through the day of entry. Consequence: two sets from the same workout can have different edit windows if entry crossed local midnight — accepted at v1 scale. Rejection past the window returns 404 shape identical to non-existent set, preserving the no-existence-oracle rule for temporal conditions.)
 | GET /api/me/history?exercise_id=&before=&limit= | past sessions / per-exercise history | powers "what did I do last time." Cursor pagination (before = logged_at), not offset |
 | GET /api/me/last?exercise_id= | most recent sets for an exercise | the gym-floor query; kept separate and fast |
 
