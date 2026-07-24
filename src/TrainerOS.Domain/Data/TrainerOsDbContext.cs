@@ -1,4 +1,7 @@
+using System.Globalization;
+
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 using TrainerOS.Domain.Entities;
 
@@ -214,5 +217,19 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
             b.HasOne(d => d.Schedule).WithMany().HasForeignKey(d => d.ScheduleId).OnDelete(DeleteBehavior.Restrict);
             b.HasOne<User>().WithMany().HasForeignKey(d => d.UserId).OnDelete(DeleteBehavior.Restrict);
         });
+
+        // SQLite refuses ORDER BY on DateTimeOffset; production Postgres handles it
+        // natively via timestamptz. LoggedSet.LoggedAt is the pagination cursor for
+        // /api/me/history (#33), so under SQLite we store it as ISO 8601 UTC text
+        // where lexical order matches temporal order. Postgres path unchanged.
+        // ProviderName string comparison avoids taking a build-time dep on the
+        // SQLite package from the Domain project (only the test host references it).
+        if (Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+        {
+            var loggedAtToUtcString = new ValueConverter<DateTimeOffset, string>(
+                v => v.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture),
+                v => DateTimeOffset.Parse(v, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+            modelBuilder.Entity<LoggedSet>().Property(s => s.LoggedAt).HasConversion(loggedAtToUtcString);
+        }
     }
 }
