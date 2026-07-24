@@ -60,6 +60,7 @@ api.MapProgramDayEndpoints();
 api.MapProgramDayExerciseEndpoints();
 api.MapNotificationScheduleEndpoints();
 api.MapMeEndpoints();
+api.MapMeSessionEndpoints();
 
 api.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
 {
