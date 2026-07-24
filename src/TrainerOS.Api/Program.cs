@@ -4,6 +4,7 @@ using Npgsql;
 using TrainerOS.Api;
 using TrainerOS.Api.Auth;
 using TrainerOS.Api.Endpoints;
+using TrainerOS.Api.Notifications;
 using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Notifications;
 
@@ -17,10 +18,16 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<SessionService>();
 builder.Services.AddAuthRateLimiting();
 
-// Production binds the Resend sender under epic #6; until then only dev can send.
+// Dev uses the console sender (logs to stdout so magic-link URLs are followable
+// from the console). Non-Development uses Resend (#34), config-driven; startup
+// fails fast if Resend:ApiKey / Resend:From are missing.
 if (builder.Environment.IsDevelopment())
 {
     builder.Services.AddSingleton<INotificationSender, ConsoleNotificationSender>();
+}
+else
+{
+    builder.Services.AddResendNotificationSender(builder.Configuration);
 }
 
 builder.Services.AddEndpointsApiExplorer();
