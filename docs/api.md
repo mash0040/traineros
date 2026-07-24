@@ -73,6 +73,7 @@ Revokes current session row.
 |---|---|---|
 | GET /api/me | identity, timezone, active program summary | the dashboard bootstrap call |
 | GET /api/me/program | full active program: days → prescriptions → exercise (name, video_url, cues) | one response, no N+1 waterfall from the client |
+(Recorded in #30: both /api/me and /api/me/program express "no active program" as an explicit null in the response shape (activeProgram: null on /api/me, program: null on /api/me/program) — 200 with null, not 404. 404 is reserved for genuine not-found; empty-state is not an error. Consistency reduces per-endpoint SPA branching.)
 | POST /api/me/sessions | start/record a workout session | body: performed_on, program_day_id (nullable), comment |
 | POST /api/me/sessions/:id/sets | log a set | body: exercise_id, program_day_exercise_id?, set_number, weight_kg?, reps. Ownership of :id verified by join |
 | PATCH /api/me/sets/:id | fix a typo'd set | same-day only (editing history weeks later is a data-integrity smell; 403-shaped 404 after that) |
