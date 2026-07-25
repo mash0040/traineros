@@ -194,7 +194,7 @@ One row per send attempt-group. This is the audit trail and the idempotency mech
 | user_id         | uuid FK | recipient                                    |
 | channel         | text    | v1: 'email'. Column exists so WhatsApp/push are adapters later, not migrations. |
 | scheduled_for   | timestamptz | the UTC instant this occurrence targets  |
-| idempotency_key | text UNIQUE | `{schedule_id}:{scheduled_for date}` — the scheduler can run twice without double-sending |
+| idempotency_key | text UNIQUE | `{schedule_id}:{local occurrence date}` — local, not UTC (see notifications.md #36); the scheduler can run twice without double-sending |
 | status          | text    | 'pending' \| 'sent' \| 'failed' \| 'dead'    |
 | attempts        | int     | retry counter                                |
 | last_error      | text NULL |                                            |

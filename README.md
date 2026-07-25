@@ -46,18 +46,24 @@ Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `
     "Values": {
         "AzureWebJobsStorage": "UseDevelopmentStorage=true",
         "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated"
+    },
+    "ConnectionStrings": {
+        "Postgres": "Host=localhost;Port=5432;Database=traineros;Username=traineros;Password=traineros"
     }
 }
 ```
 
-`UseDevelopmentStorage=true` points the host at Azurite's well-known local endpoints. Then:
+`UseDevelopmentStorage=true` points the host at Azurite's well-known local endpoints; the
+scheduler reads schedules from the same Postgres the API uses. Both are required — the host
+refuses to start without them rather than failing silently every 15 minutes. Then:
 
 ```sh
 cd src/TrainerOS.Functions
 func start
 ```
 
-The host starts against Azurite. (No functions are defined yet — the scheduler and worker arrive with the notifications issues.)
+`ReminderScheduler` runs on a 15-minute timer and creates the `reminders` queue in Azurite on
+its first enqueue.
 
 ### 4. Run the web client
 

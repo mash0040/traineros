@@ -54,6 +54,8 @@ Runs every 15 minutes. For each enabled schedule:
 (Resolved in #36: (1) The idempotency_key's date component is the occurrence's **local** date, not the UTC date of the resulting instant — a Friday 23:30 Toronto reminder keys on Friday, though it fires Saturday UTC. 
 (2) Fall-back ambiguity (a wall clock occurring twice, e.g. 01:30 on 2026-11-01 in Toronto) resolves to the **earlier** instant so the reminder isn't an hour late; one delivery row exists per occurrence date regardless. The spec covered spring-forward but was silent on fall-back. (3) "Next valid instant" for spring-forward gaps is read literally as the first instant that exists (02:30 → 03:00 local), not wall-clock-plus-gap-duration.)
 
+(Resolved in #37: (1) An unresolvable users.timezone is skipped and logged at warning with a counter in the run summary — a batch over independent clients must not let one corrupt row starve everyone; the catch is narrow (TimeZoneNotFoundException only), DB failures still fail the run. (2) Enqueue failures are caught per-row, logged, counted, and stepped over: a missed insert is lost forever, a missed enqueue is recovered by the pending-sweep, so only the insert is worth aborting for. (3) Occurrences are converted with ToUniversalTime() before insert — Npgsql rejects non-zero offsets for timestamptz. (4) Queue messages are base64-encoded to match the Functions host's default queue-trigger decoding.)
+
 ## Queue
 
 Azure Queue Storage, single queue `reminders`. Message body: `{ "delivery_id": "<uuid>" }` — nothing else.
