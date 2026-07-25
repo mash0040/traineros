@@ -4,7 +4,6 @@ using Npgsql;
 using TrainerOS.Api;
 using TrainerOS.Api.Auth;
 using TrainerOS.Api.Endpoints;
-using TrainerOS.Api.Notifications;
 using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Notifications;
 
