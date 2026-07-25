@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\TrainerOS.Api\TrainerOS.Api.csproj" />
     <ProjectReference Include="..\..\src\TrainerOS.Domain\TrainerOS.Domain.csproj" />
+    <ProjectReference Include="..\..\src\TrainerOS.Functions\TrainerOS.Functions.csproj" />
   </ItemGroup>
 
 </Project>
