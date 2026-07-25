@@ -86,6 +86,8 @@ Queue-triggered function. Per message:
 
 **Decision:** no custom retry framework. The platform's dequeue-count + visibility-timeout mechanics are the assignment; wrapping Polly around them would duplicate machinery. (Rejected: in-process retry loops — they hold the message invisible and turn a provider outage into a function timeout.)
 
+(Resolved in #39: (1) Scheduled delivery is enforced at enqueue via visibility timeout (scheduled_for − now, floored at zero, capped at the queue's 7-day max), not by a worker-side arrival check. The sweep passes TimeSpan.Zero explicitly rather than through the helper — its rows are already past due, and routing them through the helper would start delaying them if the sweep cutoff ever moved. (2) Backoff (1/5/15/60 min by DequeueCount) is applied via UpdateMessageAsync before the worker rethrows. The final dequeue deliberately skips backoff: UpdateMessageAsync rewrites the pop receipt, and the host needs the receipt it holds to move the message to reminders-poison. (3) The poison handler won't overwrite a terminal status — a redelivery can succeed while an earlier copy is en route to the poison queue — and only fills last_error when null, preserving the provider's own message. (4) maxDequeueCount is pinned to 5 in host.json rather than inherited from the host default.)
+
 ## Failure modes (enumerated)
 
 | Failure | Behavior | Covered by |
