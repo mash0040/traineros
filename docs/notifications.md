@@ -51,6 +51,9 @@ Runs every 15 minutes. For each enabled schedule:
 - **DST rule:** `send_time` is local wall-clock time. "07:00" means 07:00 whatever UTC offset that is on that date. On the spring-forward day, a send_time inside the nonexistent hour (e.g. 02:30) resolves to the next valid instant. Wall-clock semantics match human expectation; UTC-fixed schedules drift an hour twice a year. (Rejected: storing UTC send times.)
 - **Skip rule:** if `users.is_active = false` or the schedule was disabled after insertion, the worker (not the scheduler) makes the final call at send time — see guard below.
 
+(Resolved in #36: (1) The idempotency_key's date component is the occurrence's **local** date, not the UTC date of the resulting instant — a Friday 23:30 Toronto reminder keys on Friday, though it fires Saturday UTC. 
+(2) Fall-back ambiguity (a wall clock occurring twice, e.g. 01:30 on 2026-11-01 in Toronto) resolves to the **earlier** instant so the reminder isn't an hour late; one delivery row exists per occurrence date regardless. The spec covered spring-forward but was silent on fall-back. (3) "Next valid instant" for spring-forward gaps is read literally as the first instant that exists (02:30 → 03:00 local), not wall-clock-plus-gap-duration.)
+
 ## Queue
 
 Azure Queue Storage, single queue `reminders`. Message body: `{ "delivery_id": "<uuid>" }` — nothing else.
