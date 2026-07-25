@@ -1,3 +1,5 @@
+using Azure.Storage.Queues.Models;
+
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -36,6 +38,7 @@ public enum ReminderOutcome
 public sealed class ReminderWorker(
     TrainerOsDbContext db,
     INotificationSender sender,
+    IReminderQueue queue,
     AppBaseUrl appBaseUrl,
     TimeProvider clock,
     ILogger<ReminderWorker> logger)
@@ -44,15 +47,99 @@ public sealed class ReminderWorker(
     // "time to work out" at 2 a.m. because the queue was backed up since morning.
     public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(6);
 
+    // notifications.md §Retry: approximate exponential, because provider outages run
+    // minutes-to-hours. One entry per retryable failure — four backoffs before the fifth
+    // dequeue hands the message to the poison queue.
+    public static readonly TimeSpan[] RetryBackoff =
+    [
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromMinutes(15),
+        TimeSpan.FromMinutes(60),
+    ];
+
+    // Mirrors host.json's queues.maxDequeueCount. Kept in sync by hand because the worker
+    // cannot read the host's binding configuration, and the ReminderWorkerTests assert the
+    // final-attempt behaviour against this number.
+    public const int MaxDequeueCount = 5;
+
     private const string DisabledReason = "skipped: disabled";
     private const string ExpiredReason = "expired";
     private const string NoProgramReason = "skipped: no active program";
 
     [Function(nameof(ReminderWorker))]
     public async Task Run(
-        [QueueTrigger(StorageReminderQueue.QueueName)] ReminderMessage message,
+        [QueueTrigger(StorageReminderQueue.QueueName)] QueueMessage message,
         CancellationToken cancellationToken)
-        => await ProcessAsync(message.DeliveryId, cancellationToken);
+    {
+        var deliveryId = DeliveryIdFrom(message);
+
+        try
+        {
+            await ProcessAsync(deliveryId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Backoff is applied here rather than inside ProcessAsync so the send logic stays
+            // free of transport concerns — and so it runs on the way out, after the row is
+            // already marked 'failed' and before the throw hands control back to the host.
+            await ApplyRetryBackoffAsync(message, deliveryId, cancellationToken);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Pushes this message's next visibility out per notifications.md's 1/5/15/60 schedule.
+    /// </summary>
+    // Deliberately skipped on the final dequeue: updating a message rewrites its pop receipt,
+    // and the host needs the receipt it holds to move the message to reminders-poison. There
+    // is nothing to back off before anyway — the next stop is the poison queue, not a retry.
+    public async Task ApplyRetryBackoffAsync(
+        QueueMessage message, Guid deliveryId, CancellationToken cancellationToken)
+    {
+        if (message.DequeueCount >= MaxDequeueCount)
+        {
+            logger.LogWarning(
+                "Reminder delivery {DeliveryId} failed on its final attempt ({DequeueCount}); "
+                + "leaving the message for the poison queue",
+                deliveryId, message.DequeueCount);
+            return;
+        }
+
+        var backoff = BackoffFor(message.DequeueCount);
+
+        try
+        {
+            await queue.DelayRetryAsync(message.MessageId, message.PopReceipt, backoff, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The retry itself does not depend on this call: failing to extend the invisibility
+            // window only means the message comes back sooner than the schedule wanted. Never
+            // let it mask the provider failure that is about to be rethrown.
+            logger.LogWarning(
+                exception,
+                "Could not set retry backoff for delivery {DeliveryId}; the platform's own timeout applies",
+                deliveryId);
+        }
+    }
+
+    /// <summary>Backoff for a message on its <paramref name="dequeueCount"/>-th delivery (1-based).</summary>
+    public static TimeSpan BackoffFor(long dequeueCount)
+        => RetryBackoff[(int)Math.Clamp(dequeueCount - 1, 0, RetryBackoff.Length - 1)];
+
+    // The body is JSON written by StorageReminderQueue; TryParse also accepts the base64 form
+    // in case the host's decoding and the sender's encoding ever disagree. A body that is
+    // neither throws, which is the right outcome: it retries, then poisons, and the poison
+    // handler logs it — nothing silently disappears.
+    private static Guid DeliveryIdFrom(QueueMessage message)
+    {
+        var parsed = ReminderMessage.TryParse(message.Body.ToString())
+            ?? throw new InvalidOperationException(
+                $"Queue message {message.MessageId} is not a reminder pointer; body was not readable JSON.");
+
+        return parsed.DeliveryId;
+    }
 
     public async Task<ReminderOutcome> ProcessAsync(Guid deliveryId, CancellationToken cancellationToken = default)
     {

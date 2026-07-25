@@ -43,6 +43,11 @@ public sealed class ReminderScheduler(
     // be picked up by an in-flight message.
     public static readonly TimeSpan PendingSweepAge = TimeSpan.FromMinutes(20);
 
+    // Azure Queue Storage's ceiling on how long a message may stay invisible. The lookahead
+    // is 30 minutes, so nothing real comes close — this exists so a corrupt scheduled_for
+    // far in the future is rejected by us with a clamp rather than by the service with a 400.
+    public static readonly TimeSpan MaxVisibilityTimeout = TimeSpan.FromDays(7);
+
     // database.md §notification_deliveries: v1 has one channel. The column exists so
     // WhatsApp/push are adapters later rather than a migration.
     private const string EmailChannel = "email";
@@ -60,6 +65,10 @@ public sealed class ReminderScheduler(
         var enqueued = 0;
         var timezoneFailures = 0;
         var enqueueFailures = 0;
+
+        // One clock read for the whole run: every message's delay is measured from the same
+        // instant, so a slow run can't stagger occurrences that belong together.
+        var now = clock.GetUtcNow();
 
         var schedules = await db.EnabledSchedulesWithRecipient()
             .AsNoTracking()
@@ -129,7 +138,12 @@ public sealed class ReminderScheduler(
 
                 inserted++;
 
-                if (await TryEnqueueAsync(delivery.Id, schedule.Id, cancellationToken))
+                // Held invisible until the occurrence is actually due. Without this the
+                // worker sees the message the moment the scheduler inserts it and mails a
+                // 07:00 reminder at 06:55 — measured at 4m23s early before the fix.
+                var delay = VisibilityDelayFor(delivery.ScheduledFor, now);
+
+                if (await TryEnqueueAsync(delivery.Id, schedule.Id, delay, cancellationToken))
                 {
                     enqueued++;
                 }
@@ -171,7 +185,11 @@ public sealed class ReminderScheduler(
         var swept = 0;
         foreach (var delivery in pending.Where(d => d.ScheduledFor < cutoff))
         {
-            if (await TryEnqueueAsync(delivery.Id, delivery.ScheduleId, cancellationToken))
+            // Zero on purpose, not as a clamped accident: a swept row is at least 20 minutes
+            // past its moment by definition, so "deliver now" is the intent. Running these
+            // through VisibilityDelayFor would reach the same number by way of a negative,
+            // and would quietly start delaying them if the sweep's cutoff ever moved.
+            if (await TryEnqueueAsync(delivery.Id, delivery.ScheduleId, TimeSpan.Zero, cancellationToken))
             {
                 swept++;
             }
@@ -180,16 +198,34 @@ public sealed class ReminderScheduler(
         return swept;
     }
 
+    /// <summary>
+    /// How long a message should stay invisible so it surfaces at its moment: the gap to
+    /// <paramref name="scheduledFor"/>, floored at zero (already due → deliver now) and
+    /// capped at the queue's ceiling.
+    /// </summary>
+    public static TimeSpan VisibilityDelayFor(DateTimeOffset scheduledFor, DateTimeOffset now)
+    {
+        var delay = scheduledFor - now;
+
+        if (delay < TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return delay > MaxVisibilityTimeout ? MaxVisibilityTimeout : delay;
+    }
+
     // An enqueue failure is a recoverable state by design — the row is committed 'pending'
     // and the sweep will come back for it — so it is logged and stepped over rather than
     // allowed to abort a run that still has other clients' occurrences to insert. Broad
     // catch on purpose: every transport failure has the same recovery, and the alternative
     // is enumerating one SDK's exception types here. Cancellation is not a queue failure.
-    private async Task<bool> TryEnqueueAsync(Guid deliveryId, Guid scheduleId, CancellationToken cancellationToken)
+    private async Task<bool> TryEnqueueAsync(
+        Guid deliveryId, Guid scheduleId, TimeSpan visibilityTimeout, CancellationToken cancellationToken)
     {
         try
         {
-            await queue.EnqueueAsync(deliveryId, cancellationToken);
+            await queue.EnqueueAsync(deliveryId, visibilityTimeout, cancellationToken);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

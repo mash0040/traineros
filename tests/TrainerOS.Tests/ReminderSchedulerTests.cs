@@ -265,22 +265,72 @@ public sealed class ReminderSchedulerTests : IDisposable
         Assert.Equal(1, summary.Swept);
     }
 
+    [Fact]
+    public async Task Message_is_held_invisible_until_the_occurrence_is_due()
+    {
+        // The early-delivery fix: the scheduler sees a 07:00 occurrence at 06:50 local and
+        // enqueues it straight away, so without a visibility timeout the worker would mail it
+        // ten minutes early. The queue holds it instead.
+        SeedSchedule(SeedClient("toronto", "America/Toronto"));
+
+        await Scheduler().RunAsync();
+
+        var message = Assert.Single(_queue.Messages);
+        Assert.Equal(SevenLocal - TenToSeven, message.VisibilityTimeout);
+    }
+
+    [Fact]
+    public async Task Swept_message_is_delivered_immediately()
+    {
+        // A swept row is past due by construction, so its message must not be held at all.
+        SeedSchedule(SeedClient("toronto", "America/Toronto"));
+        _queue.Fails = true;
+        await Scheduler().RunAsync();
+
+        _queue.Fails = false;
+        _clock.Now = SevenLocal.Add(ReminderScheduler.PendingSweepAge).AddMinutes(5);
+        await Scheduler().RunAsync();
+
+        Assert.Equal(TimeSpan.Zero, Assert.Single(_queue.Messages).VisibilityTimeout);
+    }
+
+    [Fact]
+    public void VisibilityDelayFor_floors_at_zero_and_caps_at_the_queue_maximum()
+    {
+        var now = TenToSeven;
+
+        Assert.Equal(TimeSpan.FromMinutes(10), ReminderScheduler.VisibilityDelayFor(now.AddMinutes(10), now));
+        Assert.Equal(TimeSpan.Zero, ReminderScheduler.VisibilityDelayFor(now, now));
+        // Already past due — a negative delay is not a thing the queue accepts.
+        Assert.Equal(TimeSpan.Zero, ReminderScheduler.VisibilityDelayFor(now.AddHours(-3), now));
+        // Beyond Queue Storage's 7-day ceiling, which only a corrupt scheduled_for reaches.
+        Assert.Equal(
+            ReminderScheduler.MaxVisibilityTimeout,
+            ReminderScheduler.VisibilityDelayFor(now.AddDays(30), now));
+    }
+
     private sealed class RecordingQueue : IReminderQueue
     {
-        public List<Guid> Enqueued { get; } = [];
+        public List<(Guid DeliveryId, TimeSpan VisibilityTimeout)> Messages { get; } = [];
+
+        public List<Guid> Enqueued => Messages.Select(m => m.DeliveryId).ToList();
 
         public bool Fails { get; set; }
 
-        public Task EnqueueAsync(Guid deliveryId, CancellationToken cancellationToken = default)
+        public Task EnqueueAsync(Guid deliveryId, TimeSpan visibilityTimeout, CancellationToken cancellationToken = default)
         {
             if (Fails)
             {
                 throw new InvalidOperationException("queue unavailable");
             }
 
-            Enqueued.Add(deliveryId);
+            Messages.Add((deliveryId, visibilityTimeout));
             return Task.CompletedTask;
         }
+
+        public Task DelayRetryAsync(
+            string messageId, string popReceipt, TimeSpan visibilityTimeout, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("The scheduler never retries an in-flight message.");
     }
 
     private sealed class CapturingLogger<T> : ILogger<T>
