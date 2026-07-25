@@ -94,6 +94,8 @@ Revokes current session row.
 
 #22: login rejections (unknown/wrong-password/client-email/deactivated) are byte-identical 401s with dummy-hash timing parity. Logout is unauthenticated-tolerant — always 200 + cookie clear — to avoid trapping users with dead cookies; revocation is server-side via revoked_at.
 
+(Resolved in #40: the pause token is a stateless HMAC (schedule_id + expiry + untransmitted purpose label, all inside the MAC), 30-day lifetime, no server-side row. "Consumes" in the original wording is therefore inaccurate — POST is idempotent, and a replay within the lifetime re-pauses. The narrow consequence: if the trainer re-enables and an old link is replayed, reminders pause again. True single-use would require a consumed-token table and migration, which costs more than the bug. Statelessness is also what makes the scanner-safe GET free. Rate limiting reuses the policy still named MagicLinkIpPolicy, which now covers magic-link, login, and pause.)
+
 ## Cross-cutting
 
 - **Rate limiting:** only auth + pause endpoints in v1. Authenticated traffic from 4 users does not need throttling; adding it everywhere is ceremony.

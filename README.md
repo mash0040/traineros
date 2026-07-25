@@ -47,7 +47,8 @@ Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `
         "AzureWebJobsStorage": "UseDevelopmentStorage=true",
         "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
         "AZURE_FUNCTIONS_ENVIRONMENT": "Development",
-        "App:BaseUrl": "http://localhost:5173"
+        "App:BaseUrl": "http://localhost:5173",
+        "Notifications:PauseTokenKey": "dev-only-pause-token-signing-key-not-for-production"
     },
     "ConnectionStrings": {
         "Postgres": "Host=localhost;Port=5432;Database=traineros;Username=traineros;Password=traineros"
@@ -57,8 +58,11 @@ Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `
 
 `UseDevelopmentStorage=true` points the host at Azurite's well-known local endpoints; the
 scheduler reads schedules from the same Postgres the API uses, and `App:BaseUrl` is the SPA
-origin reminder emails link back to. All three are required — the host refuses to start
-without them rather than failing silently at the first send. Then:
+origin reminder emails link back to. `Notifications:PauseTokenKey` signs the pause link in
+every reminder footer and **must match the API's** (`appsettings.Development.json`) — the API
+validates what this host signs, so a mismatch makes every pause link look forged. All four
+are required; the host refuses to start without them rather than failing silently at the
+first send. Then:
 
 ```sh
 cd src/TrainerOS.Functions

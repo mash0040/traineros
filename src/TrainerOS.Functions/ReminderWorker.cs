@@ -40,6 +40,7 @@ public sealed class ReminderWorker(
     INotificationSender sender,
     IReminderQueue queue,
     AppBaseUrl appBaseUrl,
+    PauseTokenSigner pauseTokens,
     TimeProvider clock,
     ILogger<ReminderWorker> logger)
 {
@@ -179,7 +180,7 @@ public sealed class ReminderWorker(
             return await MarkDeadAsync(delivery, ExpiredReason, ReminderOutcome.Expired, cancellationToken);
         }
 
-        var email = await RenderAsync(delivery.UserId, target.RecipientEmail, cancellationToken);
+        var email = await RenderAsync(delivery, target.RecipientEmail, cancellationToken);
         if (email is null)
         {
             // A schedule with no program behind it has nothing to remind anyone about. Dead
@@ -235,9 +236,10 @@ public sealed class ReminderWorker(
     // Resolved for #38: the line names the active program, not a program day. program_days
     // carry only a position, nothing maps one to a calendar date, and inventing a rotation
     // rule here would have pre-empted the Today screen's own answer.
-    private async Task<EmailMessage?> RenderAsync(Guid clientId, string recipient, CancellationToken cancellationToken)
+    private async Task<EmailMessage?> RenderAsync(
+        NotificationDelivery delivery, string recipient, CancellationToken cancellationToken)
     {
-        var program = await db.ProgramsForClient(clientId)
+        var program = await db.ProgramsForClient(delivery.UserId)
             .Where(p => p.Status == ProgramStatuses.Active)
             .Select(p => new { p.Title, ExerciseCount = p.Days.SelectMany(d => d.Exercises).Count() })
             .AsNoTracking()
@@ -249,12 +251,20 @@ public sealed class ReminderWorker(
         }
 
         var exercises = program.ExerciseCount == 1 ? "exercise" : "exercises";
+        var home = appBaseUrl.Value.TrimEnd('/');
+
+        // notifications.md resolved question 2: every reminder carries its own pause link.
+        // Minted fresh per send, so the newest email in the inbox always has a live token,
+        // and it points at the SPA's confirmation page — the mutation happens on the POST
+        // that page makes when the client presses the button, never on this URL's GET.
+        var pauseToken = pauseTokens.Issue(delivery.ScheduleId, clock.GetUtcNow());
 
         return new EmailMessage(
             recipient,
             $"Today: {program.Title}",
             $"Today: {program.Title} — {program.ExerciseCount} {exercises}."
-            + $"\nOpen TrainerOS → {appBaseUrl.Value.TrimEnd('/')}");
+            + $"\nOpen TrainerOS → {home}"
+            + $"\n\nPause these reminders: {home}/pause?token={pauseToken}");
     }
 
     private async Task<ReminderOutcome> MarkDeadAsync(

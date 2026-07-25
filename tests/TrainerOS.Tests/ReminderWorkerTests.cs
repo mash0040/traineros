@@ -61,8 +61,10 @@ public sealed class ReminderWorkerTests : IDisposable
         .UseSqlite(_connection)
         .Options);
 
+    private static readonly PauseTokenSigner PauseTokens = new("worker-tests-pause-signing-key-32-chars-min");
+
     private ReminderWorker Worker() => new(
-        _db, _sender, _queue, new AppBaseUrl(BaseUrl), _clock, NullLogger<ReminderWorker>.Instance);
+        _db, _sender, _queue, new AppBaseUrl(BaseUrl), PauseTokens, _clock, NullLogger<ReminderWorker>.Instance);
 
     private void SeedClient(Guid id, string tag, bool isActive) => _db.Add(new User
     {
@@ -345,6 +347,23 @@ public sealed class ReminderWorkerTests : IDisposable
 
         Assert.Empty(_sender.Sent);
         Assert.Equal(ReminderOutcome.NotFound, outcome);
+    }
+
+    [Fact]
+    public async Task Every_reminder_carries_a_pause_link_signed_for_its_own_schedule()
+    {
+        // notifications.md resolved question 2. The token must name *this* schedule — a
+        // footer that pauses someone else's reminders would be the same cross-tenant bug as
+        // any leaked id, just delivered by email.
+        var deliveryId = SeedDelivery();
+
+        await Worker().ProcessAsync(deliveryId);
+
+        var body = Assert.Single(_sender.Sent).Body;
+        var token = body.Split("/pause?token=")[1].Trim();
+        Assert.Equal(_scheduleId, PauseTokens.Validate(token, Now));
+        // The URL points at the SPA's confirmation page, not at an API route that mutates.
+        Assert.Contains($"{BaseUrl}/pause?token=", body);
     }
 
     [Theory]

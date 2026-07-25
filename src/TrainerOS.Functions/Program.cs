@@ -27,12 +27,17 @@ var storage = builder.Configuration["AzureWebJobsStorage"]
 var appBaseUrl = builder.Configuration["App:BaseUrl"]
     ?? throw new InvalidOperationException(
         "App:BaseUrl is not configured — reminder emails cannot be built without the SPA origin.");
+var pauseTokenKey = builder.Configuration["Notifications:PauseTokenKey"]
+    ?? throw new InvalidOperationException(
+        "Notifications:PauseTokenKey is not configured — reminders must carry a signed pause link. "
+        + "It must be the same key the API validates with.");
 
 builder.Services.AddDbContext<TrainerOsDbContext>(options => options.UseNpgsql(postgres));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ReminderOccurrenceCalculator>();
 builder.Services.AddSingleton<IReminderQueue>(_ => new StorageReminderQueue(storage));
 builder.Services.AddSingleton(new AppBaseUrl(appBaseUrl));
+builder.Services.AddSingleton(new PauseTokenSigner(pauseTokenKey));
 
 // Same branch as the API's Program.cs: console in dev so mail is followable from stdout,
 // Resend everywhere else, config-validated at startup.
