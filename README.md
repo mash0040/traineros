@@ -45,7 +45,9 @@ Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `
     "IsEncrypted": false,
     "Values": {
         "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-        "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated"
+        "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+        "AZURE_FUNCTIONS_ENVIRONMENT": "Development",
+        "App:BaseUrl": "http://localhost:5173"
     },
     "ConnectionStrings": {
         "Postgres": "Host=localhost;Port=5432;Database=traineros;Username=traineros;Password=traineros"
@@ -54,8 +56,9 @@ Verify the Postgres connection: `GET http://localhost:5216/api/health` returns `
 ```
 
 `UseDevelopmentStorage=true` points the host at Azurite's well-known local endpoints; the
-scheduler reads schedules from the same Postgres the API uses. Both are required — the host
-refuses to start without them rather than failing silently every 15 minutes. Then:
+scheduler reads schedules from the same Postgres the API uses, and `App:BaseUrl` is the SPA
+origin reminder emails link back to. All three are required — the host refuses to start
+without them rather than failing silently at the first send. Then:
 
 ```sh
 cd src/TrainerOS.Functions
@@ -63,7 +66,9 @@ func start
 ```
 
 `ReminderScheduler` runs on a 15-minute timer and creates the `reminders` queue in Azurite on
-its first enqueue.
+its first enqueue; `ReminderWorker` picks up from the same queue. In Development the worker
+logs email to stdout via the console sender — outside Development it binds Resend and refuses
+to start without `Resend:ApiKey` / `Resend:From`.
 
 ### 4. Run the web client
 

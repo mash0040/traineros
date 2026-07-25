@@ -6,7 +6,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-using TrainerOS.Api.Notifications;
 using TrainerOS.Domain.Notifications;
 
 namespace TrainerOS.Tests;

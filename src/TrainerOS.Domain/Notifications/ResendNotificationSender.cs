@@ -1,12 +1,16 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-using TrainerOS.Domain.Notifications;
+namespace TrainerOS.Domain.Notifications;
 
-namespace TrainerOS.Api.Notifications;
-
+// Lives in Domain, not in either host: both the API (magic links) and the Functions worker
+// (reminders) send through it, and architecture.md makes Domain the shared seam precisely so
+// background code reuses the same transport rather than growing a parallel one.
+//
 // Production INotificationSender. Posts to Resend's transactional email API
 // (https://resend.com/docs/api-reference/emails/send-email). The adapter is one
 // HTTP call per message — retries and idempotency live in the worker

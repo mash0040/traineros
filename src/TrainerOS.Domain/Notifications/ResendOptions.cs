@@ -1,4 +1,4 @@
-namespace TrainerOS.Api.Notifications;
+namespace TrainerOS.Domain.Notifications;
 
 // Bound from the "Resend" config section. Both fields are validated at startup
 // via .Validate() in AddResendNotificationSender — a Production start without
