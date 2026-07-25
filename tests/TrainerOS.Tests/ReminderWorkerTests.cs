@@ -1,3 +1,5 @@
+using Azure.Storage.Queues.Models;
+
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -23,6 +25,7 @@ public sealed class ReminderWorkerTests : IDisposable
     private readonly TrainerOsDbContext _db;
     private readonly FakeClock _clock = new() { Now = Now };
     private readonly RecordingSender _sender = new();
+    private readonly RecordingQueue _queue = new();
 
     private readonly Guid _trainerId = Guid.NewGuid();
     private readonly Guid _clientId = Guid.NewGuid();
@@ -59,7 +62,7 @@ public sealed class ReminderWorkerTests : IDisposable
         .Options);
 
     private ReminderWorker Worker() => new(
-        _db, _sender, new AppBaseUrl(BaseUrl), _clock, NullLogger<ReminderWorker>.Instance);
+        _db, _sender, _queue, new AppBaseUrl(BaseUrl), _clock, NullLogger<ReminderWorker>.Instance);
 
     private void SeedClient(Guid id, string tag, bool isActive) => _db.Add(new User
     {
@@ -342,6 +345,82 @@ public sealed class ReminderWorkerTests : IDisposable
 
         Assert.Empty(_sender.Sent);
         Assert.Equal(ReminderOutcome.NotFound, outcome);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 5)]
+    [InlineData(3, 15)]
+    [InlineData(4, 60)]
+    public void Backoff_follows_the_one_five_fifteen_sixty_schedule(long dequeueCount, int expectedMinutes)
+        => Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), ReminderWorker.BackoffFor(dequeueCount));
+
+    [Fact]
+    public async Task Failed_attempt_pushes_the_message_out_by_its_backoff()
+    {
+        var deliveryId = SeedDelivery();
+        var message = QueueMessageFor(deliveryId, dequeueCount: 2);
+
+        await Worker().ApplyRetryBackoffAsync(message, deliveryId, CancellationToken.None);
+
+        var delayed = Assert.Single(_queue.Delayed);
+        Assert.Equal(message.MessageId, delayed.MessageId);
+        Assert.Equal(message.PopReceipt, delayed.PopReceipt);
+        Assert.Equal(TimeSpan.FromMinutes(5), delayed.VisibilityTimeout);
+    }
+
+    [Fact]
+    public async Task Final_attempt_leaves_the_message_alone_for_the_poison_queue()
+    {
+        // Updating a message rewrites its pop receipt, and the host needs the one it holds to
+        // move the message to reminders-poison.
+        var deliveryId = SeedDelivery();
+        var message = QueueMessageFor(deliveryId, dequeueCount: ReminderWorker.MaxDequeueCount);
+
+        await Worker().ApplyRetryBackoffAsync(message, deliveryId, CancellationToken.None);
+
+        Assert.Empty(_queue.Delayed);
+    }
+
+    [Fact]
+    public async Task Backoff_failure_never_masks_the_provider_failure()
+    {
+        // The retry does not depend on this call — a queue that refuses the update only means
+        // the message returns sooner than the schedule wanted.
+        var deliveryId = SeedDelivery();
+        _queue.Fails = true;
+
+        await Worker().ApplyRetryBackoffAsync(
+            QueueMessageFor(deliveryId, dequeueCount: 1), deliveryId, CancellationToken.None);
+    }
+
+    private static QueueMessage QueueMessageFor(Guid deliveryId, long dequeueCount)
+        => QueuesModelFactory.QueueMessage(
+            messageId: $"message-{deliveryId}",
+            popReceipt: "receipt-1",
+            body: new BinaryData($"{{\"delivery_id\":\"{deliveryId}\"}}"),
+            dequeueCount: dequeueCount);
+
+    private sealed class RecordingQueue : IReminderQueue
+    {
+        public List<(string MessageId, string PopReceipt, TimeSpan VisibilityTimeout)> Delayed { get; } = [];
+
+        public bool Fails { get; set; }
+
+        public Task EnqueueAsync(Guid deliveryId, TimeSpan visibilityTimeout, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("The worker never enqueues.");
+
+        public Task DelayRetryAsync(
+            string messageId, string popReceipt, TimeSpan visibilityTimeout, CancellationToken cancellationToken = default)
+        {
+            if (Fails)
+            {
+                throw new InvalidOperationException("queue unavailable");
+            }
+
+            Delayed.Add((messageId, popReceipt, visibilityTimeout));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingSender : INotificationSender
