@@ -15,7 +15,7 @@ This doc is deliberately short. The real decisions live in database.md, notifica
 | Queue | Azure Queue Storage | See notifications.md — Service Bus rejected there. |
 | DB | PostgreSQL | Azure Database for PostgreSQL Flexible Server (burstable B1ms) in prod. Frugal alternative if cost bites: Neon free tier — weakens the all-Azure story, keeps the app identical. Decide at deploy time, not now. |
 | Web client | React + TypeScript + Vite | Existing strength; no reason to change. Types generated from OpenAPI (see api.md reversal) — DTOs are never hand-duplicated. |
-| Email | Resend | See notifications.md. Adapter interface `INotificationSender`. |
+| Email | Resend | See notifications.md. INotificationSender and the Resend adapter both live in TrainerOS.Domain/Notifications (moved from Api in #38) so Api and Functions bind the same implementation; each host branches Console/Resend by environment and carries the #16 fail-fast startup guard. |
 | Auth | Hand-rolled sessions + magic links per api.md | Rejected: ASP.NET Identity — its user/password/role machinery fights the magic-link model and buries the auth logic this project exists to demonstrate. Sessions table + middleware is ~200 lines and fully understood. |
 
 ## Deployment shape
