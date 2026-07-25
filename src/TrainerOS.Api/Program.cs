@@ -17,6 +17,13 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<SessionService>();
 builder.Services.AddAuthRateLimiting();
 
+// Shared with the Functions host, which mints the tokens this one validates. Startup-time
+// so a missing or weak key is a boot failure rather than a 500 on someone's pause link.
+builder.Services.AddSingleton(new PauseTokenSigner(
+    builder.Configuration["Notifications:PauseTokenKey"]
+    ?? throw new InvalidOperationException(
+        "Notifications:PauseTokenKey is not configured — pause links cannot be validated without it.")));
+
 // Dev uses the console sender (logs to stdout so magic-link URLs are followable
 // from the console). Non-Development uses Resend (#34), config-driven; startup
 // fails fast if Resend:ApiKey / Resend:From are missing.
@@ -65,6 +72,7 @@ api.MapProgramEndpoints();
 api.MapProgramDayEndpoints();
 api.MapProgramDayExerciseEndpoints();
 api.MapNotificationScheduleEndpoints();
+api.MapPauseEndpoints();
 api.MapMeEndpoints();
 api.MapMeSessionEndpoints();
 api.MapMeHistoryEndpoints();
