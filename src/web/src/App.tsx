@@ -1,22 +1,31 @@
 import { useEffect, useState } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { loadSession, type Session } from './lib/api'
+import { useClientSession } from './lib/session'
 import { LoginScreen } from './screens/LoginScreen'
+import { TodayScreen } from './screens/TodayScreen'
 import { VerifyScreen } from './screens/VerifyScreen'
 
 // The route table. BrowserRouter lives in main.tsx so this component can be mounted under a
 // MemoryRouter in tests.
 //
-// Two of these three routes are reached from an email, which is why they are real URLs with
-// real query strings rather than app state: /verify?token= is opened cold, in whatever
-// browser the mail app hands it to, often after a scanner has already touched it.
+// Two of these routes are reached from an email, which is why they are real URLs with real
+// query strings rather than app state: /verify?token= is opened cold, in whatever browser the
+// mail app hands it to, often after a scanner has already touched it.
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginScreen />} />
       <Route path="/verify" element={<VerifyScreen />} />
-      <Route path="/" element={<RequireClientSession />} />
+
+      {/* Everything a signed-in client can reach sits under one gate, so the session is
+          resolved once per navigation and every later screen (#44 onward) inherits it. */}
+      <Route element={<RequireClientSession />}>
+        <Route path="/" element={<TodayRoute />} />
+        <Route path="/workout" element={<WorkoutPlaceholder />} />
+      </Route>
+
       {/* Unknown paths go home, and home decides whether that means the app or the login
           screen. Keeps the "where do I send this person" logic in exactly one place. */}
       <Route path="*" element={<Navigate replace to="/" />} />
@@ -24,9 +33,9 @@ export default function App() {
   )
 }
 
-// The session gate every authenticated screen will sit behind. It asks the server on every
-// mount because that is the only way to know: the cookie is httpOnly and unreadable here,
-// and a revoked session must stop working immediately rather than when a cached flag expires.
+// The session gate. It asks the server on every mount because that is the only way to know:
+// the cookie is httpOnly and unreadable here, and a revoked session must stop working
+// immediately rather than when a cached flag expires.
 function RequireClientSession() {
   const [session, setSession] = useState<Session | null>(null)
 
@@ -51,9 +60,8 @@ function RequireClientSession() {
   }, [])
 
   if (session === null) {
-    // Nothing rendered during the check. A skeleton here would flash on every load of a
-    // screen that is usually one local request away from real content (ui-ux.md reserves
-    // skeletons for Today and History, where the payload is bigger).
+    // Nothing rendered during the check. The screen behind this gate draws its own skeleton
+    // once it knows who is asking; a second one here would flash on every navigation.
     return null
   }
 
@@ -61,30 +69,44 @@ function RequireClientSession() {
     return <Navigate replace to="/login" />
   }
 
-  return <SignedIn session={session} />
+  if (session.kind === 'notAClient') {
+    return <TrainerPlaceholder />
+  }
+
+  return <Outlet context={{ me: session.me }} />
 }
 
-// Placeholder for the Today screen (#43), which owns this route. It exists now because a
-// login flow with nowhere to land cannot be verified end-to-end: reaching this text means the
-// httpOnly cookie survived the redirect and the server recognised it.
-function SignedIn({ session }: { session: Session }) {
-  // No narrowing needed: MeResponse is a generated type now that the endpoint declares
-  // .Produces<MeResponse>(). It was `unknown` until the OpenAPI document described it.
-  const displayName = session.kind === 'client' ? (session.me.displayName ?? null) : null
+function TodayRoute() {
+  // `me` arrives as a prop rather than from context inside TodayScreen, so the screen renders
+  // in a test without a router around it.
+  const { me } = useClientSession()
+  return <TodayScreen me={me} />
+}
 
+// /api/me is client-only, so a trainer holds a valid session and still gets 404 from it. Their
+// screens are epic #8; until then this says so instead of bouncing them to login as though
+// their session had failed.
+function TrainerPlaceholder() {
   return (
     <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
       <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
+      <div className="mx-auto grid w-full max-w-lg content-center gap-2">
+        <h1 className="text-xl font-semibold text-ink-bold">Signed in</h1>
+        <p className="text-base text-muted">The trainer dashboard arrives with the trainer screens.</p>
+      </div>
+    </main>
+  )
+}
 
-      <div className="mx-auto grid w-full max-w-[26rem] content-center gap-2">
-        <h1 className="text-xl font-semibold text-ink-bold">
-          {displayName === null ? 'Signed in' : `Signed in as ${displayName}`}
-        </h1>
-        <p className="text-base text-muted">
-          {session.kind === 'notAClient'
-            ? 'The trainer dashboard arrives with the trainer screens.'
-            : 'Today lands here next.'}
-        </p>
+// Placeholder for the logging screen (#44/#45), which owns this route. It exists so "Start
+// workout" leads somewhere inspectable instead of bouncing off the catch-all back to Today.
+function WorkoutPlaceholder() {
+  return (
+    <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
+      <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
+      <div className="mx-auto grid w-full max-w-lg content-center gap-2">
+        <h1 className="text-xl font-semibold text-ink-bold">Logging lands here next</h1>
+        <p className="text-base text-muted">Set logging arrives with the log workout screen.</p>
       </div>
     </main>
   )

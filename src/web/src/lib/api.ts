@@ -1,4 +1,5 @@
 import type {
+  MeProgramWrapper,
   MeResponse,
   PostApiAuthMagicLinkData,
   PostApiAuthVerifyData,
@@ -132,6 +133,16 @@ export type Session =
  * answer. Nothing is mirrored into localStorage: a copy would be a second source of truth
  * that goes stale the moment a session is revoked server-side, and it would outlive logout.
  */
+/**
+ * GET /api/me/program. The active program with its days and prescriptions, or
+ * `{ program: null }` when there isn't one.
+ */
+// api.md #30: "no active program" is a 200 with an explicit null, never a 404. So no error
+// handling here for the empty case, because it isn't one; the caller renders it.
+export function fetchMyProgram(): Promise<MeProgramWrapper> {
+  return request<MeProgramWrapper>('/api/me/program')
+}
+
 export async function loadSession(): Promise<Session> {
   try {
     return { kind: 'client', me: await request<MeResponse>('/api/me') }
