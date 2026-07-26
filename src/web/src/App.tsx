@@ -4,6 +4,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
 import { LoginScreen } from './screens/LoginScreen'
+import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
 import { TodayScreen } from './screens/TodayScreen'
 import { VerifyScreen } from './screens/VerifyScreen'
 
@@ -23,7 +24,7 @@ export default function App() {
           resolved once per navigation and every later screen (#44 onward) inherits it. */}
       <Route element={<RequireClientSession />}>
         <Route path="/" element={<TodayRoute />} />
-        <Route path="/workout" element={<WorkoutPlaceholder />} />
+        <Route path="/workout" element={<LogWorkoutRoute />} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login
@@ -98,16 +99,9 @@ function TrainerPlaceholder() {
   )
 }
 
-// Placeholder for the logging screen (#44/#45), which owns this route. It exists so "Start
-// workout" leads somewhere inspectable instead of bouncing off the catch-all back to Today.
-function WorkoutPlaceholder() {
-  return (
-    <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
-      <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
-      <div className="mx-auto grid w-full max-w-lg content-center gap-2">
-        <h1 className="text-xl font-semibold text-ink-bold">Logging lands here next</h1>
-        <p className="text-base text-muted">Set logging arrives with the log workout screen.</p>
-      </div>
-    </main>
-  )
+function LogWorkoutRoute() {
+  // Same shape as TodayRoute: context is read here, `me` goes in as a prop, so the screen
+  // renders in a test with only a router around it.
+  const { me } = useClientSession()
+  return <LogWorkoutScreen me={me} />
 }

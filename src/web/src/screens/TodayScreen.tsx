@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import type { DayView, MeProgramDetails, MeResponse, PrescriptionView } from '../api/types.gen'
 import { fetchMyProgram } from '../lib/api'
+import { targetLine } from '../lib/prescription'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -197,26 +198,6 @@ function Exercise({ prescription }: { prescription: PrescriptionView }) {
       )}
     </li>
   )
-}
-
-// "3 × 8-10 · 70 kg · rest 90s". Parts are dropped rather than padded with placeholders: a
-// prescription with no load reads as one fewer fact, not as an empty field.
-function targetLine(prescription: PrescriptionView): string {
-  const parts: string[] = []
-
-  if (prescription.targetSets !== undefined && prescription.targetReps !== null) {
-    parts.push(`${prescription.targetSets} × ${prescription.targetReps}`)
-  }
-
-  if (prescription.targetLoad !== null && prescription.targetLoad !== undefined && prescription.targetLoad !== '') {
-    parts.push(prescription.targetLoad)
-  }
-
-  if (prescription.restSeconds !== null && prescription.restSeconds !== undefined) {
-    parts.push(`rest ${prescription.restSeconds}s`)
-  }
-
-  return parts.join(' · ')
 }
 
 function Empty({ heading, body }: { heading: string; body: string }) {

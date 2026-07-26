@@ -17,5 +17,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // The suite runs in UTC regardless of the machine it runs on. Without this, a test that a
+    // date is resolved against users.timezone rather than the browser's zone passes for free on
+    // a developer sitting in that timezone — which is exactly what happened when this was
+    // mutation-checked from Toronto. Pinning it makes the machine stop being an input.
+    env: { TZ: 'UTC' },
   },
 })
