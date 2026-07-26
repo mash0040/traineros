@@ -3,6 +3,8 @@ import type {
   MeResponse,
   PostApiAuthMagicLinkData,
   PostApiAuthVerifyData,
+  PostApiMeSessionsData,
+  SessionResponse,
   TokenValidityResponse,
 } from '../api/types.gen'
 
@@ -141,6 +143,17 @@ export type Session =
 // handling here for the empty case, because it isn't one; the caller renders it.
 export function fetchMyProgram(): Promise<MeProgramWrapper> {
   return request<MeProgramWrapper>('/api/me/program')
+}
+
+/**
+ * POST /api/me/sessions. Creates the workout_sessions row.
+ *
+ * `comment` is accepted here and nowhere else — api.md has no PATCH for a session — which is
+ * why the log workout screen creates the row when the client finishes rather than when they
+ * start. See the note at the top of LogWorkoutScreen.
+ */
+export function createSession(body: PostApiMeSessionsData['body']): Promise<SessionResponse> {
+  return request<SessionResponse>('/api/me/sessions', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function loadSession(): Promise<Session> {
