@@ -43,11 +43,14 @@ public static class ProgramDayExerciseEndpoints
     public static RouteGroupBuilder MapProgramDayExerciseEndpoints(this RouteGroupBuilder api)
     {
         var days = api.MapGroup("/days").RequireTrainer();
-        days.MapPost("/{id:guid}/exercises", CreatePrescription);
+        days.MapPost("/{id:guid}/exercises", CreatePrescription)
+            .Produces<PrescriptionResponse>(StatusCodes.Status201Created);
 
         var dayExercises = api.MapGroup("/day-exercises").RequireTrainer();
-        dayExercises.MapPatch("/{id:guid}", UpdatePrescription);
-        dayExercises.MapDelete("/{id:guid}", DeletePrescription);
+        dayExercises.MapPatch("/{id:guid}", UpdatePrescription)
+            .Produces<PrescriptionResponse>();
+        dayExercises.MapDelete("/{id:guid}", DeletePrescription)
+            .Produces(StatusCodes.Status204NoContent);
         return api;
     }
 

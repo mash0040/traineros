@@ -1,1 +1,67 @@
 @import "tailwindcss";
+
+/* DESIGN.md §Tailwind v4 integration. Token names are semantic on purpose: adding dark
+   mode post-v1 is a values change under these same names, never a codebase-wide rename.
+   Do not "simplify" --color-ink to --color-gray-900. */
+@theme {
+  --color-surface:       oklch(99% 0.006 250);
+  --color-surface-sunk:  oklch(97% 0.006 250);
+  --color-edge:          oklch(90% 0.007 250);
+  --color-edge-strong:   oklch(78% 0.008 250);
+  --color-muted:         oklch(52% 0.010 250);
+  --color-ink:           oklch(22% 0.012 250);
+  --color-ink-bold:      oklch(14% 0.014 250);
+  --color-accent:        oklch(64% 0.17 65);
+  --color-accent-hover:  oklch(56% 0.18 65);
+  --color-accent-ink:    oklch(99% 0.010 80);
+  --color-danger:        oklch(58% 0.19 25);
+  --color-danger-ink:    oklch(99% 0.010 25);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* DESIGN.md §Typography, ratio 1.25. Declared here rather than inherited from Tailwind's
+     defaults because the two scales disagree: text-xl is 25px/32px in the design system and
+     20px/28px in stock Tailwind. A utility must mean what the doc says it means. */
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 20px;
+  --text-lg--line-height: 28px;
+  --text-xl: 25px;
+  --text-xl--line-height: 32px;
+  --text-2xl: 31px;
+  --text-2xl--line-height: 40px;
+}
+
+:root {
+  /* Consumed as min-height on every client-facing control. Gym floor: thumb, not cursor. */
+  --tap-min: 44px;
+  --shadow-sticky: 0 -2px 8px oklch(22% 0.012 250 / 0.08);
+}
+
+@layer base {
+  html {
+    /* Stops iOS Safari inflating text in landscape, which would break the 44px rhythm. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One focus treatment everywhere. --edge-strong is the doc's focus-ring token; 2px with
+     an offset clears the 1px input border it sits outside of. */
+  :focus-visible {
+    outline: 2px solid var(--color-edge-strong);
+    outline-offset: 2px;
+  }
+}

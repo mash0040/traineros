@@ -53,8 +53,10 @@ public static class MeEndpoints
     public static RouteGroupBuilder MapMeEndpoints(this RouteGroupBuilder api)
     {
         var me = api.MapGroup("/me").RequireClient();
-        me.MapGet("", GetMe);
-        me.MapGet("/program", GetMyProgram);
+        me.MapGet("", GetMe)
+            .Produces<MeResponse>();
+        me.MapGet("/program", GetMyProgram)
+            .Produces<MeProgramWrapper>();
         return api;
     }
 

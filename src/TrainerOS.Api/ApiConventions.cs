@@ -12,6 +12,16 @@ public sealed record ApiError(ApiErrorDetail Error)
 
 public sealed record ApiErrorDetail(string Code, string Message);
 
+// The three response shapes that used to be anonymous objects. Anonymous types cannot be
+// named in .Produces<T>(), so every endpoint returning one described itself as `unknown` in
+// the OpenAPI document and therefore in the generated TypeScript. Naming them is what turns
+// { ok } and { valid } into types the SPA can consume instead of narrowing by hand.
+public sealed record OkResponse(bool Ok);
+
+public sealed record TokenValidityResponse(bool Valid);
+
+public sealed record HealthResponse(string Database);
+
 // api.md §Conventions: all timestamps UTC ISO-8601 in transport.
 // Unspecified kinds are treated as UTC — never reinterpreted through server-local time.
 public sealed class UtcDateTimeConverter : JsonConverter<DateTime>

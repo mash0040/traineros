@@ -43,10 +43,15 @@ public static class ProgramEndpoints
     public static RouteGroupBuilder MapProgramEndpoints(this RouteGroupBuilder api)
     {
         var programs = api.MapGroup("/programs").RequireTrainer();
-        programs.MapGet("", ListPrograms);
-        programs.MapPost("", CreateProgram);
-        programs.MapGet("/{id:guid}", GetProgram);
-        programs.MapPatch("/{id:guid}", UpdateProgram);
+        programs.MapGet("", ListPrograms)
+            .Produces<List<ProgramResponse>>();
+        programs.MapPost("", CreateProgram)
+            .Produces<ProgramResponse>(StatusCodes.Status201Created)
+            .Produces<ApiError>(StatusCodes.Status409Conflict);
+        programs.MapGet("/{id:guid}", GetProgram)
+            .Produces<ProgramResponse>();
+        programs.MapPatch("/{id:guid}", UpdateProgram)
+            .Produces<ProgramResponse>();
         return api;
     }
 

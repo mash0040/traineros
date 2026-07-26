@@ -26,8 +26,13 @@ public static class PauseEndpoints
     {
         // api.md §Cross-cutting: pause inherits the auth endpoints' 10/IP/hour policy. An
         // unauthenticated endpoint that writes needs the same backstop the login path has.
-        api.MapGet("/pause", ValidateToken).RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
-        api.MapPost("/pause", ConsumeToken).RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
+        api.MapGet("/pause", ValidateToken)
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy)
+            .Produces<TokenValidityResponse>();
+        api.MapPost("/pause", ConsumeToken)
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy)
+            .Produces<OkResponse>()
+            .Produces<ApiError>(StatusCodes.Status401Unauthorized);
         return api;
     }
 
@@ -44,7 +49,7 @@ public static class PauseEndpoints
         var scheduleId = signer.Validate(token, clock.GetUtcNow());
         if (scheduleId is null)
         {
-            return Results.Ok(new { valid = false });
+            return Results.Ok(new TokenValidityResponse(false));
         }
 
         // A perfectly-signed token for a schedule that has since been deleted is not a
@@ -54,7 +59,7 @@ public static class PauseEndpoints
             .AsNoTracking()
             .AnyAsync(cancellationToken);
 
-        return Results.Ok(new { valid = exists });
+        return Results.Ok(new TokenValidityResponse(exists));
     }
 
     private static async Task<IResult> ConsumeToken(
@@ -76,7 +81,7 @@ public static class PauseEndpoints
         var paused = await db.ScheduleForPause(scheduleId.Value)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Enabled, false), cancellationToken);
 
-        return paused == 0 ? InvalidToken() : Results.Ok(new { ok = true });
+        return paused == 0 ? InvalidToken() : Results.Ok(new OkResponse(true));
     }
 
     // Same indistinguishable rejection as #21's POST /api/auth/verify: invalid signature,

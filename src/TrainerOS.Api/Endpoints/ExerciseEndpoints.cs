@@ -26,9 +26,12 @@ public static class ExerciseEndpoints
     public static RouteGroupBuilder MapExerciseEndpoints(this RouteGroupBuilder api)
     {
         var exercises = api.MapGroup("/exercises").RequireTrainer();
-        exercises.MapGet("", ListExercises);
-        exercises.MapPost("", CreateExercise);
-        exercises.MapPatch("/{id:guid}", UpdateExercise);
+        exercises.MapGet("", ListExercises)
+            .Produces<List<ExerciseResponse>>();
+        exercises.MapPost("", CreateExercise)
+            .Produces<ExerciseResponse>(StatusCodes.Status201Created);
+        exercises.MapPatch("/{id:guid}", UpdateExercise)
+            .Produces<ExerciseResponse>();
         return api;
     }
 

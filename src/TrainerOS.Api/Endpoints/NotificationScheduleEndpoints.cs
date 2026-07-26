@@ -32,11 +32,15 @@ public static class NotificationScheduleEndpoints
     public static RouteGroupBuilder MapNotificationScheduleEndpoints(this RouteGroupBuilder api)
     {
         var clients = api.MapGroup("/clients").RequireTrainer();
-        clients.MapGet("/{id:guid}/schedule", GetSchedule);
-        clients.MapPost("/{id:guid}/schedule", CreateSchedule);
+        clients.MapGet("/{id:guid}/schedule", GetSchedule)
+            .Produces<ScheduleResponse>();
+        clients.MapPost("/{id:guid}/schedule", CreateSchedule)
+            .Produces<ScheduleResponse>(StatusCodes.Status201Created)
+            .Produces<ApiError>(StatusCodes.Status409Conflict);
 
         var schedules = api.MapGroup("/schedules").RequireTrainer();
-        schedules.MapPatch("/{id:guid}", UpdateSchedule);
+        schedules.MapPatch("/{id:guid}", UpdateSchedule)
+            .Produces<ScheduleResponse>();
         return api;
     }
 

@@ -59,8 +59,10 @@ public static class MeHistoryEndpoints
     public static RouteGroupBuilder MapMeHistoryEndpoints(this RouteGroupBuilder api)
     {
         var me = api.MapGroup("/me").RequireClient();
-        me.MapGet("/history", GetHistory);
-        me.MapGet("/last", GetLast);
+        me.MapGet("/history", GetHistory)
+            .Produces<HistoryResponse>();
+        me.MapGet("/last", GetLast)
+            .Produces<LastResponse>();
         return api;
     }
 

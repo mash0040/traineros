@@ -49,11 +49,14 @@ public static class MeSessionEndpoints
     public static RouteGroupBuilder MapMeSessionEndpoints(this RouteGroupBuilder api)
     {
         var meSessions = api.MapGroup("/me/sessions").RequireClient();
-        meSessions.MapPost("", CreateSession);
-        meSessions.MapPost("/{id:guid}/sets", LogSet);
+        meSessions.MapPost("", CreateSession)
+            .Produces<SessionResponse>(StatusCodes.Status201Created);
+        meSessions.MapPost("/{id:guid}/sets", LogSet)
+            .Produces<LoggedSetResponse>(StatusCodes.Status201Created);
 
         var meSets = api.MapGroup("/me/sets").RequireClient();
-        meSets.MapPatch("/{id:guid}", UpdateSet);
+        meSets.MapPatch("/{id:guid}", UpdateSet)
+            .Produces<LoggedSetResponse>();
         return api;
     }
 
