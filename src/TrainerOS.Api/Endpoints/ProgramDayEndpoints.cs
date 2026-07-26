@@ -24,12 +24,16 @@ public static class ProgramDayEndpoints
         // Nested route under /programs/:id/days for create — the URL puts the day inside
         // its owning program, so the ownership chain is inspectable in the path.
         var programs = api.MapGroup("/programs").RequireTrainer();
-        programs.MapPost("/{id:guid}/days", CreateDay);
+        programs.MapPost("/{id:guid}/days", CreateDay)
+            .Produces<ProgramDayResponse>(StatusCodes.Status201Created);
 
         var days = api.MapGroup("/days").RequireTrainer();
-        days.MapPatch("/{id:guid}", UpdateDay);
-        days.MapDelete("/{id:guid}", DeleteDay);
-        days.MapPatch("/{id:guid}/order", ReorderDayExercises);
+        days.MapPatch("/{id:guid}", UpdateDay)
+            .Produces<ProgramDayResponse>();
+        days.MapDelete("/{id:guid}", DeleteDay)
+            .Produces(StatusCodes.Status204NoContent);
+        days.MapPatch("/{id:guid}/order", ReorderDayExercises)
+            .Produces(StatusCodes.Status204NoContent);
         return api;
     }
 

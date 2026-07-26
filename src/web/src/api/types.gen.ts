@@ -4,6 +4,977 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type ActiveProgramSummary = {
+    id?: string;
+    title?: string | null;
+    startsOn?: string | null;
+};
+
+export type ApiError = {
+    error?: ApiErrorDetail;
+};
+
+export type ApiErrorDetail = {
+    code?: string | null;
+    message?: string | null;
+};
+
+export type ClientResponse = {
+    id?: string;
+    email?: string | null;
+    displayName?: string | null;
+    timezone?: string | null;
+    isActive?: boolean;
+    createdAt?: string;
+};
+
+export type ClientSessionResponse = {
+    id?: string;
+    performedOn?: string;
+    programDayId?: string | null;
+    comment?: string | null;
+    createdAt?: string;
+};
+
+export type CreateClientRequest = {
+    email?: string | null;
+    displayName?: string | null;
+    timezone?: string | null;
+};
+
+export type CreateDayRequest = {
+    title?: string | null;
+};
+
+export type CreateExerciseRequest = {
+    name?: string | null;
+    videoUrl?: string | null;
+    cues?: string | null;
+};
+
+export type CreatePrescriptionRequest = {
+    exerciseId?: string | null;
+    targetSets?: number | null;
+    targetReps?: string | null;
+    targetLoad?: string | null;
+    restSeconds?: number | null;
+    note?: string | null;
+};
+
+export type CreateProgramRequest = {
+    clientId?: string | null;
+    title?: string | null;
+    status?: string | null;
+    startsOn?: string | null;
+    notes?: string | null;
+};
+
+export type CreateScheduleRequest = {
+    sendTime?: string | null;
+    daysOfWeek?: Array<number> | null;
+    enabled?: boolean | null;
+};
+
+export type CreateSessionRequest = {
+    performedOn?: string | null;
+    programDayId?: string | null;
+    comment?: string | null;
+};
+
+export type DayView = {
+    id?: string;
+    title?: string | null;
+    position?: number;
+    prescriptions?: Array<PrescriptionView> | null;
+};
+
+export type ExerciseResponse = {
+    id?: string;
+    name?: string | null;
+    videoUrl?: string | null;
+    cues?: string | null;
+    isActive?: boolean;
+    createdAt?: string;
+};
+
+export type ExerciseView = {
+    id?: string;
+    name?: string | null;
+    videoUrl?: string | null;
+    cues?: string | null;
+};
+
+export type HealthResponse = {
+    database?: string | null;
+};
+
+export type HistoryExerciseRef = {
+    id?: string;
+    name?: string | null;
+};
+
+export type HistoryItem = {
+    id?: string;
+    setNumber?: number;
+    weightKg?: number | null;
+    reps?: number;
+    loggedAt?: string;
+    session?: HistorySessionSummary;
+    exercise?: HistoryExerciseRef;
+};
+
+export type HistoryResponse = {
+    items?: Array<HistoryItem> | null;
+    nextCursor?: string | null;
+};
+
+export type HistorySessionSummary = {
+    id?: string;
+    performedOn?: string;
+    comment?: string | null;
+};
+
+export type LastMostRecent = {
+    sessionId?: string;
+    performedOn?: string;
+    exercise?: HistoryExerciseRef;
+    sets?: Array<LastSet> | null;
+};
+
+export type LastResponse = {
+    mostRecent?: LastMostRecent;
+};
+
+export type LastSet = {
+    id?: string;
+    setNumber?: number;
+    weightKg?: number | null;
+    reps?: number;
+    loggedAt?: string;
+};
+
+export type LogSetRequest = {
+    exerciseId?: string | null;
+    programDayExerciseId?: string | null;
+    setNumber?: number | null;
+    weightKg?: number | null;
+    reps?: number | null;
+};
+
+export type LoggedSetResponse = {
+    id?: string;
+    sessionId?: string;
+    exerciseId?: string;
+    programDayExerciseId?: string | null;
+    setNumber?: number;
+    weightKg?: number | null;
+    reps?: number;
+    loggedAt?: string;
+};
+
+export type LoginRequest = {
+    email?: string | null;
+    password?: string | null;
+};
+
+export type MagicLinkRequest = {
+    email?: string | null;
+};
+
+export type MeProgramDetails = {
+    id?: string;
+    title?: string | null;
+    status?: string | null;
+    startsOn?: string | null;
+    notes?: string | null;
+    days?: Array<DayView> | null;
+};
+
+export type MeProgramWrapper = {
+    program?: MeProgramDetails;
+};
+
+export type MeResponse = {
+    id?: string;
+    email?: string | null;
+    displayName?: string | null;
+    timezone?: string | null;
+    activeProgram?: ActiveProgramSummary;
+};
+
+export type OkResponse = {
+    ok?: boolean;
+};
+
+export type PauseRequest = {
+    token?: string | null;
+};
+
+export type PrescriptionResponse = {
+    id?: string;
+    programDayId?: string;
+    exerciseId?: string;
+    position?: number;
+    targetSets?: number;
+    targetReps?: string | null;
+    targetLoad?: string | null;
+    restSeconds?: number | null;
+    note?: string | null;
+};
+
+export type PrescriptionView = {
+    id?: string;
+    position?: number;
+    targetSets?: number;
+    targetReps?: string | null;
+    targetLoad?: string | null;
+    restSeconds?: number | null;
+    note?: string | null;
+    exercise?: ExerciseView;
+};
+
+export type ProgramDayResponse = {
+    id?: string;
+    programId?: string;
+    title?: string | null;
+    position?: number;
+};
+
+export type ProgramResponse = {
+    id?: string;
+    clientId?: string;
+    title?: string | null;
+    status?: string | null;
+    startsOn?: string | null;
+    notes?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type ReorderExercisesRequest = {
+    orderedIds?: Array<string> | null;
+};
+
+export type ScheduleResponse = {
+    id?: string;
+    clientId?: string;
+    kind?: string | null;
+    sendTime?: string;
+    daysOfWeek?: Array<number> | null;
+    enabled?: boolean;
+};
+
+export type SessionResponse = {
+    id?: string;
+    performedOn?: string;
+    programDayId?: string | null;
+    comment?: string | null;
+    createdAt?: string;
+};
+
+export type TokenValidityResponse = {
+    valid?: boolean;
+};
+
+export type UpdateClientRequest = {
+    displayName?: string | null;
+    timezone?: string | null;
+    isActive?: boolean | null;
+};
+
+export type UpdateDayRequest = {
+    title?: string | null;
+    position?: number | null;
+};
+
+export type UpdateExerciseRequest = {
+    name?: string | null;
+    videoUrl?: string | null;
+    cues?: string | null;
+    isActive?: boolean | null;
+};
+
+export type UpdatePrescriptionRequest = {
+    exerciseId?: string | null;
+    targetSets?: number | null;
+    targetReps?: string | null;
+    targetLoad?: string | null;
+    restSeconds?: number | null;
+    note?: string | null;
+};
+
+export type UpdateProgramRequest = {
+    title?: string | null;
+    status?: string | null;
+    startsOn?: string | null;
+    notes?: string | null;
+};
+
+export type UpdateScheduleRequest = {
+    sendTime?: string | null;
+    daysOfWeek?: Array<number> | null;
+    enabled?: boolean | null;
+};
+
+export type UpdateSetRequest = {
+    setNumber?: number | null;
+    weightKg?: number | null;
+    reps?: number | null;
+};
+
+export type VerifyRequest = {
+    token?: string | null;
+};
+
+export type PostApiAuthMagicLinkData = {
+    body: MagicLinkRequest;
+    path?: never;
+    query?: never;
+    url: '/api/auth/magic-link';
+};
+
+export type PostApiAuthMagicLinkResponses = {
+    /**
+     * Accepted
+     */
+    202: OkResponse;
+};
+
+export type PostApiAuthMagicLinkResponse = PostApiAuthMagicLinkResponses[keyof PostApiAuthMagicLinkResponses];
+
+export type GetApiAuthVerifyData = {
+    body?: never;
+    path?: never;
+    query?: {
+        token?: string;
+    };
+    url: '/api/auth/verify';
+};
+
+export type GetApiAuthVerifyResponses = {
+    /**
+     * OK
+     */
+    200: TokenValidityResponse;
+};
+
+export type GetApiAuthVerifyResponse = GetApiAuthVerifyResponses[keyof GetApiAuthVerifyResponses];
+
+export type PostApiAuthVerifyData = {
+    body: VerifyRequest;
+    path?: never;
+    query?: never;
+    url: '/api/auth/verify';
+};
+
+export type PostApiAuthVerifyErrors = {
+    /**
+     * Unauthorized
+     */
+    401: ApiError;
+};
+
+export type PostApiAuthVerifyError = PostApiAuthVerifyErrors[keyof PostApiAuthVerifyErrors];
+
+export type PostApiAuthVerifyResponses = {
+    /**
+     * OK
+     */
+    200: OkResponse;
+};
+
+export type PostApiAuthVerifyResponse = PostApiAuthVerifyResponses[keyof PostApiAuthVerifyResponses];
+
+export type PostApiAuthLoginData = {
+    body: LoginRequest;
+    path?: never;
+    query?: never;
+    url: '/api/auth/login';
+};
+
+export type PostApiAuthLoginErrors = {
+    /**
+     * Unauthorized
+     */
+    401: ApiError;
+};
+
+export type PostApiAuthLoginError = PostApiAuthLoginErrors[keyof PostApiAuthLoginErrors];
+
+export type PostApiAuthLoginResponses = {
+    /**
+     * OK
+     */
+    200: OkResponse;
+};
+
+export type PostApiAuthLoginResponse = PostApiAuthLoginResponses[keyof PostApiAuthLoginResponses];
+
+export type PostApiAuthLogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/auth/logout';
+};
+
+export type PostApiAuthLogoutResponses = {
+    /**
+     * OK
+     */
+    200: OkResponse;
+};
+
+export type PostApiAuthLogoutResponse = PostApiAuthLogoutResponses[keyof PostApiAuthLogoutResponses];
+
+export type GetApiClientsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/clients';
+};
+
+export type GetApiClientsResponses = {
+    /**
+     * OK
+     */
+    200: Array<ClientResponse>;
+};
+
+export type GetApiClientsResponse = GetApiClientsResponses[keyof GetApiClientsResponses];
+
+export type PostApiClientsData = {
+    body: CreateClientRequest;
+    path?: never;
+    query?: never;
+    url: '/api/clients';
+};
+
+export type PostApiClientsResponses = {
+    /**
+     * Created
+     */
+    201: ClientResponse;
+};
+
+export type PostApiClientsResponse = PostApiClientsResponses[keyof PostApiClientsResponses];
+
+export type PatchApiClientsByIdData = {
+    body: UpdateClientRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/clients/{id}';
+};
+
+export type PatchApiClientsByIdResponses = {
+    /**
+     * OK
+     */
+    200: ClientResponse;
+};
+
+export type PatchApiClientsByIdResponse = PatchApiClientsByIdResponses[keyof PatchApiClientsByIdResponses];
+
+export type GetApiClientsByIdSessionsData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/clients/{id}/sessions';
+};
+
+export type GetApiClientsByIdSessionsResponses = {
+    /**
+     * OK
+     */
+    200: Array<ClientSessionResponse>;
+};
+
+export type GetApiClientsByIdSessionsResponse = GetApiClientsByIdSessionsResponses[keyof GetApiClientsByIdSessionsResponses];
+
+export type GetApiExercisesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/exercises';
+};
+
+export type GetApiExercisesResponses = {
+    /**
+     * OK
+     */
+    200: Array<ExerciseResponse>;
+};
+
+export type GetApiExercisesResponse = GetApiExercisesResponses[keyof GetApiExercisesResponses];
+
+export type PostApiExercisesData = {
+    body: CreateExerciseRequest;
+    path?: never;
+    query?: never;
+    url: '/api/exercises';
+};
+
+export type PostApiExercisesResponses = {
+    /**
+     * Created
+     */
+    201: ExerciseResponse;
+};
+
+export type PostApiExercisesResponse = PostApiExercisesResponses[keyof PostApiExercisesResponses];
+
+export type PatchApiExercisesByIdData = {
+    body: UpdateExerciseRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/exercises/{id}';
+};
+
+export type PatchApiExercisesByIdResponses = {
+    /**
+     * OK
+     */
+    200: ExerciseResponse;
+};
+
+export type PatchApiExercisesByIdResponse = PatchApiExercisesByIdResponses[keyof PatchApiExercisesByIdResponses];
+
+export type GetApiMeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/me';
+};
+
+export type GetApiMeResponses = {
+    /**
+     * OK
+     */
+    200: MeResponse;
+};
+
+export type GetApiMeResponse = GetApiMeResponses[keyof GetApiMeResponses];
+
+export type GetApiMeProgramData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/me/program';
+};
+
+export type GetApiMeProgramResponses = {
+    /**
+     * OK
+     */
+    200: MeProgramWrapper;
+};
+
+export type GetApiMeProgramResponse = GetApiMeProgramResponses[keyof GetApiMeProgramResponses];
+
+export type GetApiMeHistoryData = {
+    body?: never;
+    path?: never;
+    query?: {
+        exercise_id?: string;
+        before?: string;
+        limit?: number;
+    };
+    url: '/api/me/history';
+};
+
+export type GetApiMeHistoryResponses = {
+    /**
+     * OK
+     */
+    200: HistoryResponse;
+};
+
+export type GetApiMeHistoryResponse = GetApiMeHistoryResponses[keyof GetApiMeHistoryResponses];
+
+export type GetApiMeLastData = {
+    body?: never;
+    path?: never;
+    query?: {
+        exercise_id?: string;
+    };
+    url: '/api/me/last';
+};
+
+export type GetApiMeLastResponses = {
+    /**
+     * OK
+     */
+    200: LastResponse;
+};
+
+export type GetApiMeLastResponse = GetApiMeLastResponses[keyof GetApiMeLastResponses];
+
+export type PostApiMeSessionsData = {
+    body: CreateSessionRequest;
+    path?: never;
+    query?: never;
+    url: '/api/me/sessions';
+};
+
+export type PostApiMeSessionsResponses = {
+    /**
+     * Created
+     */
+    201: SessionResponse;
+};
+
+export type PostApiMeSessionsResponse = PostApiMeSessionsResponses[keyof PostApiMeSessionsResponses];
+
+export type PostApiMeSessionsByIdSetsData = {
+    body: LogSetRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/me/sessions/{id}/sets';
+};
+
+export type PostApiMeSessionsByIdSetsResponses = {
+    /**
+     * Created
+     */
+    201: LoggedSetResponse;
+};
+
+export type PostApiMeSessionsByIdSetsResponse = PostApiMeSessionsByIdSetsResponses[keyof PostApiMeSessionsByIdSetsResponses];
+
+export type PatchApiMeSetsByIdData = {
+    body: UpdateSetRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/me/sets/{id}';
+};
+
+export type PatchApiMeSetsByIdResponses = {
+    /**
+     * OK
+     */
+    200: LoggedSetResponse;
+};
+
+export type PatchApiMeSetsByIdResponse = PatchApiMeSetsByIdResponses[keyof PatchApiMeSetsByIdResponses];
+
+export type GetApiClientsByIdScheduleData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/clients/{id}/schedule';
+};
+
+export type GetApiClientsByIdScheduleResponses = {
+    /**
+     * OK
+     */
+    200: ScheduleResponse;
+};
+
+export type GetApiClientsByIdScheduleResponse = GetApiClientsByIdScheduleResponses[keyof GetApiClientsByIdScheduleResponses];
+
+export type PostApiClientsByIdScheduleData = {
+    body: CreateScheduleRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/clients/{id}/schedule';
+};
+
+export type PostApiClientsByIdScheduleErrors = {
+    /**
+     * Conflict
+     */
+    409: ApiError;
+};
+
+export type PostApiClientsByIdScheduleError = PostApiClientsByIdScheduleErrors[keyof PostApiClientsByIdScheduleErrors];
+
+export type PostApiClientsByIdScheduleResponses = {
+    /**
+     * Created
+     */
+    201: ScheduleResponse;
+};
+
+export type PostApiClientsByIdScheduleResponse = PostApiClientsByIdScheduleResponses[keyof PostApiClientsByIdScheduleResponses];
+
+export type PatchApiSchedulesByIdData = {
+    body: UpdateScheduleRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/schedules/{id}';
+};
+
+export type PatchApiSchedulesByIdResponses = {
+    /**
+     * OK
+     */
+    200: ScheduleResponse;
+};
+
+export type PatchApiSchedulesByIdResponse = PatchApiSchedulesByIdResponses[keyof PatchApiSchedulesByIdResponses];
+
+export type GetApiPauseData = {
+    body?: never;
+    path?: never;
+    query?: {
+        token?: string;
+    };
+    url: '/api/pause';
+};
+
+export type GetApiPauseResponses = {
+    /**
+     * OK
+     */
+    200: TokenValidityResponse;
+};
+
+export type GetApiPauseResponse = GetApiPauseResponses[keyof GetApiPauseResponses];
+
+export type PostApiPauseData = {
+    body: PauseRequest;
+    path?: never;
+    query?: never;
+    url: '/api/pause';
+};
+
+export type PostApiPauseErrors = {
+    /**
+     * Unauthorized
+     */
+    401: ApiError;
+};
+
+export type PostApiPauseError = PostApiPauseErrors[keyof PostApiPauseErrors];
+
+export type PostApiPauseResponses = {
+    /**
+     * OK
+     */
+    200: OkResponse;
+};
+
+export type PostApiPauseResponse = PostApiPauseResponses[keyof PostApiPauseResponses];
+
+export type PostApiProgramsByIdDaysData = {
+    body: CreateDayRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/programs/{id}/days';
+};
+
+export type PostApiProgramsByIdDaysResponses = {
+    /**
+     * Created
+     */
+    201: ProgramDayResponse;
+};
+
+export type PostApiProgramsByIdDaysResponse = PostApiProgramsByIdDaysResponses[keyof PostApiProgramsByIdDaysResponses];
+
+export type DeleteApiDaysByIdData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/days/{id}';
+};
+
+export type DeleteApiDaysByIdResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type DeleteApiDaysByIdResponse = DeleteApiDaysByIdResponses[keyof DeleteApiDaysByIdResponses];
+
+export type PatchApiDaysByIdData = {
+    body: UpdateDayRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/days/{id}';
+};
+
+export type PatchApiDaysByIdResponses = {
+    /**
+     * OK
+     */
+    200: ProgramDayResponse;
+};
+
+export type PatchApiDaysByIdResponse = PatchApiDaysByIdResponses[keyof PatchApiDaysByIdResponses];
+
+export type PatchApiDaysByIdOrderData = {
+    body: ReorderExercisesRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/days/{id}/order';
+};
+
+export type PatchApiDaysByIdOrderResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type PatchApiDaysByIdOrderResponse = PatchApiDaysByIdOrderResponses[keyof PatchApiDaysByIdOrderResponses];
+
+export type PostApiDaysByIdExercisesData = {
+    body: CreatePrescriptionRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/days/{id}/exercises';
+};
+
+export type PostApiDaysByIdExercisesResponses = {
+    /**
+     * Created
+     */
+    201: PrescriptionResponse;
+};
+
+export type PostApiDaysByIdExercisesResponse = PostApiDaysByIdExercisesResponses[keyof PostApiDaysByIdExercisesResponses];
+
+export type DeleteApiDayExercisesByIdData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/day-exercises/{id}';
+};
+
+export type DeleteApiDayExercisesByIdResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type DeleteApiDayExercisesByIdResponse = DeleteApiDayExercisesByIdResponses[keyof DeleteApiDayExercisesByIdResponses];
+
+export type PatchApiDayExercisesByIdData = {
+    body: UpdatePrescriptionRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/day-exercises/{id}';
+};
+
+export type PatchApiDayExercisesByIdResponses = {
+    /**
+     * OK
+     */
+    200: PrescriptionResponse;
+};
+
+export type PatchApiDayExercisesByIdResponse = PatchApiDayExercisesByIdResponses[keyof PatchApiDayExercisesByIdResponses];
+
+export type GetApiProgramsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/programs';
+};
+
+export type GetApiProgramsResponses = {
+    /**
+     * OK
+     */
+    200: Array<ProgramResponse>;
+};
+
+export type GetApiProgramsResponse = GetApiProgramsResponses[keyof GetApiProgramsResponses];
+
+export type PostApiProgramsData = {
+    body: CreateProgramRequest;
+    path?: never;
+    query?: never;
+    url: '/api/programs';
+};
+
+export type PostApiProgramsErrors = {
+    /**
+     * Conflict
+     */
+    409: ApiError;
+};
+
+export type PostApiProgramsError = PostApiProgramsErrors[keyof PostApiProgramsErrors];
+
+export type PostApiProgramsResponses = {
+    /**
+     * Created
+     */
+    201: ProgramResponse;
+};
+
+export type PostApiProgramsResponse = PostApiProgramsResponses[keyof PostApiProgramsResponses];
+
+export type GetApiProgramsByIdData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/programs/{id}';
+};
+
+export type GetApiProgramsByIdResponses = {
+    /**
+     * OK
+     */
+    200: ProgramResponse;
+};
+
+export type GetApiProgramsByIdResponse = GetApiProgramsByIdResponses[keyof GetApiProgramsByIdResponses];
+
+export type PatchApiProgramsByIdData = {
+    body: UpdateProgramRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/programs/{id}';
+};
+
+export type PatchApiProgramsByIdResponses = {
+    /**
+     * OK
+     */
+    200: ProgramResponse;
+};
+
+export type PatchApiProgramsByIdResponse = PatchApiProgramsByIdResponses[keyof PatchApiProgramsByIdResponses];
+
 export type GetApiHealthData = {
     body?: never;
     path?: never;
@@ -11,9 +982,20 @@ export type GetApiHealthData = {
     url: '/api/health';
 };
 
+export type GetApiHealthErrors = {
+    /**
+     * Service Unavailable
+     */
+    503: HealthResponse;
+};
+
+export type GetApiHealthError = GetApiHealthErrors[keyof GetApiHealthErrors];
+
 export type GetApiHealthResponses = {
     /**
      * OK
      */
-    200: unknown;
+    200: HealthResponse;
 };
+
+export type GetApiHealthResponse = GetApiHealthResponses[keyof GetApiHealthResponses];

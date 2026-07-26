@@ -83,13 +83,15 @@ api.MapGet("/health", async (NpgsqlDataSource db, CancellationToken ct) =>
     {
         await using var cmd = db.CreateCommand("SELECT 1");
         await cmd.ExecuteScalarAsync(ct);
-        return Results.Ok(new { database = "connected" });
+        return Results.Ok(new HealthResponse("connected"));
     }
     catch (NpgsqlException)
     {
-        return Results.Json(new { database = "unreachable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return Results.Json(new HealthResponse("unreachable"), statusCode: StatusCodes.Status503ServiceUnavailable);
     }
-});
+})
+.Produces<HealthResponse>()
+.Produces<HealthResponse>(StatusCodes.Status503ServiceUnavailable);
 
 app.Run();
 

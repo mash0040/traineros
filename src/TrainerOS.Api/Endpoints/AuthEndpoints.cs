@@ -19,14 +19,25 @@ public static class AuthEndpoints
 
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
+        // .Produces<T>() is what the OpenAPI document is built from: minimal-API handlers
+        // return IResult, so without it every response schema is empty and the generated
+        // TypeScript types the body as `unknown`. Declared per route, success shapes plus the
+        // 401 the SPA actually branches on.
         var auth = api.MapGroup("/auth");
         auth.MapPost("/magic-link", RequestMagicLink)
-            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
-        auth.MapGet("/verify", ValidateToken);
-        auth.MapPost("/verify", ConsumeToken);
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy)
+            .Produces<OkResponse>(StatusCodes.Status202Accepted);
+        auth.MapGet("/verify", ValidateToken)
+            .Produces<TokenValidityResponse>();
+        auth.MapPost("/verify", ConsumeToken)
+            .Produces<OkResponse>()
+            .Produces<ApiError>(StatusCodes.Status401Unauthorized);
         auth.MapPost("/login", Login)
-            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy);
-        auth.MapPost("/logout", Logout);
+            .RequireRateLimiting(AuthRateLimiting.MagicLinkIpPolicy)
+            .Produces<OkResponse>()
+            .Produces<ApiError>(StatusCodes.Status401Unauthorized);
+        auth.MapPost("/logout", Logout)
+            .Produces<OkResponse>();
         return api;
     }
 
@@ -59,14 +70,14 @@ public static class AuthEndpoints
         }
 
         await sessions.SignInAsync(http, user, cancellationToken);
-        return Results.Ok(new { ok = true });
+        return Results.Ok(new OkResponse(true));
     }
 
     private static async Task<IResult> Logout(
         HttpContext http, SessionService sessions, CancellationToken cancellationToken)
     {
         await sessions.SignOutAsync(http, cancellationToken);
-        return Results.Ok(new { ok = true });
+        return Results.Ok(new OkResponse(true));
     }
 
     // api.md §GET /api/auth/verify: renders/validates ONLY — mail scanners GET links
@@ -77,11 +88,11 @@ public static class AuthEndpoints
     {
         if (string.IsNullOrWhiteSpace(token))
         {
-            return Results.Ok(new { valid = false });
+            return Results.Ok(new TokenValidityResponse(false));
         }
 
         var found = await FindLiveTokenAsync(db, token, clock.GetUtcNow(), cancellationToken);
-        return Results.Ok(new { valid = found is not null });
+        return Results.Ok(new TokenValidityResponse(found is not null));
     }
 
     private static async Task<IResult> ConsumeToken(
@@ -116,7 +127,7 @@ public static class AuthEndpoints
         }
 
         await sessions.SignInAsync(http, found.Value.User, cancellationToken);
-        return Results.Ok(new { ok = true });
+        return Results.Ok(new OkResponse(true));
 
         static IResult InvalidToken() => Results.Json(
             ApiError.Create("invalid_token", "This login link is invalid, expired, or already used."),
@@ -178,7 +189,7 @@ public static class AuthEndpoints
 
         _ = IssueTokenAsync(scopeFactory, email, baseUrl, logger);
 
-        return Results.Json(new { ok = true }, statusCode: StatusCodes.Status202Accepted);
+        return Results.Json(new OkResponse(true), statusCode: StatusCodes.Status202Accepted);
     }
 
     private static async Task IssueTokenAsync(

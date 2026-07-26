@@ -34,10 +34,14 @@ public static class ClientEndpoints
     public static RouteGroupBuilder MapClientEndpoints(this RouteGroupBuilder api)
     {
         var clients = api.MapGroup("/clients").RequireTrainer();
-        clients.MapGet("", ListClients);
-        clients.MapPost("", CreateClient);
-        clients.MapPatch("/{id:guid}", UpdateClient);
-        clients.MapGet("/{id:guid}/sessions", ListClientSessions);
+        clients.MapGet("", ListClients)
+            .Produces<List<ClientResponse>>();
+        clients.MapPost("", CreateClient)
+            .Produces<ClientResponse>(StatusCodes.Status201Created);
+        clients.MapPatch("/{id:guid}", UpdateClient)
+            .Produces<ClientResponse>();
+        clients.MapGet("/{id:guid}/sessions", ListClientSessions)
+            .Produces<List<ClientSessionResponse>>();
         return api;
     }
 
