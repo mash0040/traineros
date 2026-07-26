@@ -21,6 +21,16 @@ export type WorkoutDraft = {
   /** The program day being worked. Null is reserved for a freestyle session (database.md). */
   programDayId: string | null
   comment: string
+  /**
+   * The workout_sessions row this draft is writing into, once one exists.
+   *
+   * This is the whole duplicate-session guard. Since #45 the row is created by the first logged
+   * set rather than by finishing, so a client who logs a set, locks her phone, and comes back
+   * has a row on the server and no React state pointing at it. Without this field the screen
+   * would create a second one, and workout_sessions has no constraint that would stop it — the
+   * result is one workout split across two rows and a /me/last that returns half of it.
+   */
+  sessionId: string | null
 }
 
 /**
@@ -104,15 +114,21 @@ function read(): WorkoutDraft | null {
       return null
     }
 
-    const { performedOn, programDayId, comment } = parsed as Record<string, unknown>
+    const { performedOn, programDayId, comment, sessionId } = parsed as Record<string, unknown>
     if (typeof performedOn !== 'string' || typeof comment !== 'string') {
       return null
     }
     if (programDayId !== null && typeof programDayId !== 'string') {
       return null
     }
+    // Absent rather than null in a record written before #45, when no row existed until the
+    // client finished. Reading that as "no session yet" is not a compatibility shim — it is
+    // exactly what such a record meant.
+    if (sessionId !== undefined && sessionId !== null && typeof sessionId !== 'string') {
+      return null
+    }
 
-    return { performedOn, programDayId, comment }
+    return { performedOn, programDayId, comment, sessionId: sessionId ?? null }
   } catch {
     return null
   }
