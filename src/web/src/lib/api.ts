@@ -1,8 +1,12 @@
 import type {
+  HistoryResponse,
+  LoggedSetResponse,
   MeProgramWrapper,
   MeResponse,
+  PatchApiMeSessionsByIdData,
   PostApiAuthMagicLinkData,
   PostApiAuthVerifyData,
+  PostApiMeSessionsByIdSetsData,
   PostApiMeSessionsData,
   SessionResponse,
   TokenValidityResponse,
@@ -145,15 +149,48 @@ export function fetchMyProgram(): Promise<MeProgramWrapper> {
   return request<MeProgramWrapper>('/api/me/program')
 }
 
-/**
- * POST /api/me/sessions. Creates the workout_sessions row.
- *
- * `comment` is accepted here and nowhere else — api.md has no PATCH for a session — which is
- * why the log workout screen creates the row when the client finishes rather than when they
- * start. See the note at the top of LogWorkoutScreen.
- */
+/** POST /api/me/sessions. Creates the workout_sessions row. */
 export function createSession(body: PostApiMeSessionsData['body']): Promise<SessionResponse> {
   return request<SessionResponse>('/api/me/sessions', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/**
+ * POST /api/me/sessions/:id/sets. One logged set.
+ *
+ * Not idempotent (api.md §Cross-cutting): a duplicate POST is a duplicate set. The caller owns
+ * disable-on-submit, which is why this layer does no retrying of its own — a retry here would
+ * be indistinguishable from a double tap.
+ */
+export function logSet(
+  sessionId: string,
+  body: PostApiMeSessionsByIdSetsData['body'],
+): Promise<LoggedSetResponse> {
+  return request<LoggedSetResponse>(`/api/me/sessions/${encodeURIComponent(sessionId)}/sets`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** PATCH /api/me/sessions/:id (#96). Comment only; null clears it. Same-day window on created_at. */
+export function updateSessionComment(sessionId: string, comment: string | null): Promise<SessionResponse> {
+  const body: PatchApiMeSessionsByIdData['body'] = { comment }
+  return request<SessionResponse>(`/api/me/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/me/history. Used by the log screen to rebuild a session it is resuming.
+ *
+ * There is no GET for a single session, so "what have I already logged into this row" is
+ * answered by reading recent sets and filtering on session id. That matters more than it
+ * sounds: logged_sets has no unique constraint on (session_id, exercise_id, set_number), so a
+ * resume that forgot the saved sets would restart numbering at 1 and write duplicates the
+ * database would happily accept.
+ */
+export function fetchHistory(limit: number): Promise<HistoryResponse> {
+  return request<HistoryResponse>(`/api/me/history?limit=${limit}`)
 }
 
 export async function loadSession(): Promise<Session> {
