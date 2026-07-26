@@ -15,11 +15,16 @@
 - - Agent never commits, pushes, or opens PRs. Implement on the working tree,
   report changes, stop. The human owns all git operations.
 
-  - SPA verification: Vitest + React Testing Library is the default and should
+- **SPA verification:** Vitest + React Testing Library is the default and should
   cover component behaviour, error paths, and security-shaped invariants.
   Do not drive a browser to verify what a component test can assert.
   Playwright is for discovery only — a single end-to-end pass per screen where
-  real cookies, redirects, or network behaviour matter. Anything it finds must
-  be pinned as a Vitest test so it never needs a browser run again.
+  real cookies, redirects, or network behaviour matter.
+  A finding with a behavioural proxy must be pinned as a Vitest test so it never
+  needs a browser run again. Purely visual findings (spacing, text decoration,
+  alignment) have no such proxy: jsdom loads no stylesheet, so the only way to
+  assert them is to assert which element carries which class, which tests
+  implementation and breaks on any equivalent refactor. Those are the human's to
+  catch, which is why the human drives layout passes.
   Do not take screenshots for the human; the human drives the browser for
   layout, feel, and gym-floor usability.
