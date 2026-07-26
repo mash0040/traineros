@@ -316,6 +316,10 @@ export type UpdateScheduleRequest = {
     enabled?: boolean | null;
 };
 
+export type UpdateSessionRequest = {
+    comment?: string | null;
+};
+
 export type UpdateSetRequest = {
     setNumber?: number | null;
     weightKg?: number | null;
@@ -647,6 +651,24 @@ export type PostApiMeSessionsByIdSetsResponses = {
 };
 
 export type PostApiMeSessionsByIdSetsResponse = PostApiMeSessionsByIdSetsResponses[keyof PostApiMeSessionsByIdSetsResponses];
+
+export type PatchApiMeSessionsByIdData = {
+    body: UpdateSessionRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/me/sessions/{id}';
+};
+
+export type PatchApiMeSessionsByIdResponses = {
+    /**
+     * OK
+     */
+    200: SessionResponse;
+};
+
+export type PatchApiMeSessionsByIdResponse = PatchApiMeSessionsByIdResponses[keyof PatchApiMeSessionsByIdResponses];
 
 export type PatchApiMeSetsByIdData = {
     body: UpdateSetRequest;
