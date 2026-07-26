@@ -46,6 +46,8 @@ public static class MeSessionEndpoints
 
     public sealed record UpdateSetRequest(int? SetNumber, decimal? WeightKg, int? Reps);
 
+    public sealed record UpdateSessionRequest(string? Comment);
+
     public static RouteGroupBuilder MapMeSessionEndpoints(this RouteGroupBuilder api)
     {
         var meSessions = api.MapGroup("/me/sessions").RequireClient();
@@ -53,6 +55,8 @@ public static class MeSessionEndpoints
             .Produces<SessionResponse>(StatusCodes.Status201Created);
         meSessions.MapPost("/{id:guid}/sets", LogSet)
             .Produces<LoggedSetResponse>(StatusCodes.Status201Created);
+        meSessions.MapPatch("/{id:guid}", UpdateSession)
+            .Produces<SessionResponse>();
 
         var meSets = api.MapGroup("/me/sets").RequireClient();
         meSets.MapPatch("/{id:guid}", UpdateSet)
@@ -201,6 +205,62 @@ public static class MeSessionEndpoints
             new LoggedSetResponse(loggedSet.Id, loggedSet.SessionId, loggedSet.ExerciseId,
                 loggedSet.ProgramDayExerciseId, loggedSet.SetNumber, loggedSet.WeightKg,
                 loggedSet.Reps, loggedSet.LoggedAt));
+    }
+
+    // PATCH /api/me/sessions/:id — the client's note to their trainer, after the fact.
+    //
+    // Exists because the comment is authored during a workout while the row is created at its
+    // start (the first logged set), so POST is no longer the moment the note is finished. The
+    // log workout screen holds the draft on the device until there is somewhere to put it.
+    //
+    // Comment only. performed_on and program_day_id are what the session *is*; changing either
+    // would move a workout to another day or another prescription, which is not an edit — it
+    // is a different session, and history that reshapes itself is the thing database.md's
+    // principle 4 protects against.
+    //
+    // Same-day window per #32, measured against created_at rather than performed_on. That is
+    // the same choice #32 made for sets and for the same stated reason: the window governs the
+    // entry event, so a workout logged retroactively stays editable through the day it was
+    // entered. Editing a note days later is history revision, not a typo fix.
+    private static async Task<IResult> UpdateSession(
+        Guid id,
+        UpdateSessionRequest body,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var client = http.GetCurrentUser()!;
+
+        // Ownership by join, never by the route param alone: WorkoutSessionsForClient scopes
+        // to client_id = session user, so another client's session id is a 404 that reads
+        // exactly like a fabricated one.
+        var session = await db.WorkoutSessionsForClient(client.Id)
+            .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
+        if (session is null)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(client.Timezone);
+        var createdLocal = TimeZoneInfo.ConvertTime(session.CreatedAt, tz);
+        var todayLocal = TimeZoneInfo.ConvertTime(clock.GetUtcNow(), tz);
+        if (DateOnly.FromDateTime(createdLocal.DateTime) != DateOnly.FromDateTime(todayLocal.DateTime))
+        {
+            // 404, not 403 — the same no-existence-oracle convention the set patch uses for
+            // its window. A stale session and a session that was never theirs are one answer.
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Divergence from PATCH /me/sets/:id, where a null field means "don't touch": with one
+        // field in the body, "don't touch" would make the whole request a no-op and leave no
+        // way to take a note back. So the body is the new value, and null or blank clears it —
+        // matching what POST already does with the same input.
+        session.Comment = NullIfBlank(body.Comment);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(new SessionResponse(session.Id, session.PerformedOn, session.ProgramDayId,
+            session.Comment, session.CreatedAt));
     }
 
     // api.md: "PATCH /api/me/sets/:id — fix a typo'd set. same-day only … 403-shaped
