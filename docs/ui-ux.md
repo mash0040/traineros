@@ -17,6 +17,7 @@ This is deliberately the thinnest spec. The resume value of this project is back
 - `inputmode="decimal"` / `"numeric"` on weight/reps — never a full keyboard for numbers
 - **Last-time numbers visible while logging** — "what did I do last week" (GET /api/me/last) is displayed inline next to each exercise, not behind a tap. This is the feature that beats the paper notebook; if it's hidden, the notebook wins.
 - "Add set" pre-fills from the previous set (most sets repeat weight); editing is the exception path
+(Implemented in #45 as an always-present pending row rather than an explicit "Add set" control: saving a set turns it into a static row and the next pre-filled row appears in its place. Same pre-fill behaviour, one tap per set instead of two — which is the intent the original wording was serving. An unused pending row doesn't block Finish; the guard fires on typed values, not suggested ones.)
 - Submit buttons disable-on-tap (the api.md non-idempotent POST mitigation lives here)
 - Works on a 3-year-old Android over gym wifi: no heavy bundles, no blocking spinners on cached views
 
