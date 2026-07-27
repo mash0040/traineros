@@ -627,6 +627,10 @@ export type PostApiMeSessionsData = {
 
 export type PostApiMeSessionsResponses = {
     /**
+     * OK
+     */
+    200: SessionResponse;
+    /**
      * Created
      */
     201: SessionResponse;
