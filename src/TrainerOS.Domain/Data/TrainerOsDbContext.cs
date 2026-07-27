@@ -154,6 +154,19 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
 
             b.HasIndex(s => new { s.ClientId, s.PerformedOn }).IsDescending(false, true);
 
+            // One session per client per program day per calendar date (#98). The same program
+            // day twice in one day is not a real workout, it is a client who reopened the screen
+            // on a second device or after clearing storage; Day A in the morning and Day B in the
+            // evening is real and differs by program_day_id, so it is unaffected.
+            //
+            // Filtered to NOT NULL for two reasons that happen to agree: freestyle sessions
+            // (program_day_id NULL, database.md) are deliberately unconstrained, and Postgres
+            // treats NULLs as distinct anyway, so an unfiltered index would silently not
+            // constrain them while looking like it did.
+            b.HasIndex(s => new { s.ClientId, s.PerformedOn, s.ProgramDayId })
+                .IsUnique()
+                .HasFilter("program_day_id IS NOT NULL");
+
             b.HasOne<User>().WithMany().HasForeignKey(s => s.TrainerId).OnDelete(DeleteBehavior.Restrict);
             b.HasOne<User>().WithMany().HasForeignKey(s => s.ClientId).OnDelete(DeleteBehavior.Restrict);
             // SET NULL, not RESTRICT: logs are ground truth (database.md principle 4) —

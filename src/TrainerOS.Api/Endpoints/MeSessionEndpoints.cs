@@ -52,7 +52,12 @@ public static class MeSessionEndpoints
     {
         var meSessions = api.MapGroup("/me/sessions").RequireClient();
         meSessions.MapPost("", CreateSession)
-            .Produces<SessionResponse>(StatusCodes.Status201Created);
+            .Produces<SessionResponse>(StatusCodes.Status201Created)
+            // 200 when an existing session was resumed rather than created (#98). Declared so
+            // the generated client sees both, and so the two outcomes stay distinguishable to
+            // anything that cares — the SPA does not, but a lie in the status code would be
+            // the kind that costs an afternoon later.
+            .Produces<SessionResponse>();
         meSessions.MapPost("/{id:guid}/sets", LogSet)
             .Produces<LoggedSetResponse>(StatusCodes.Status201Created);
         meSessions.MapPatch("/{id:guid}", UpdateSession)
@@ -98,6 +103,34 @@ public static class MeSessionEndpoints
             }
         }
 
+        // #98: resume rather than duplicate. The unique index on (client_id, performed_on,
+        // program_day_id) is what actually guarantees this — removing it makes the concurrency
+        // test produce two rows, while removing the lookup below changes nothing a test can see.
+        // The lookup is here anyway because without it every ordinary resume reaches the database
+        // as a constraint violation: a wasted round trip, an error in the Postgres log, and
+        // exception-as-control-flow on the common path rather than only on the race.
+        //
+        // A client who logs Lower on Tuesday, closes the tab,
+        // and comes back is reopening one workout, not starting a second — and two rows would
+        // split her history and hand /api/me/last half a session. Freestyle sessions are exempt
+        // by design: with no program_day_id there is nothing to match on, which is also why the
+        // unique index behind this is filtered to NOT NULL.
+        //
+        // The comment on a resumed session is left alone. It belongs to the workout, not to this
+        // request, and PATCH /api/me/sessions/:id (#96) is how it gets edited — a create that
+        // silently overwrote it would erase a note the client already wrote.
+        if (body.ProgramDayId is { } dayId)
+        {
+            var resumed = await db.WorkoutSessionsForClient(client.Id)
+                .FirstOrDefaultAsync(
+                    s => s.PerformedOn == performedOn && s.ProgramDayId == dayId, cancellationToken);
+            if (resumed is not null)
+            {
+                return Results.Ok(new SessionResponse(resumed.Id, resumed.PerformedOn,
+                    resumed.ProgramDayId, resumed.Comment, resumed.CreatedAt));
+            }
+        }
+
         var session = new WorkoutSession
         {
             Id = Guid.NewGuid(),
@@ -109,7 +142,33 @@ public static class MeSessionEndpoints
             CreatedAt = clock.GetUtcNow(),
         };
         db.Add(session);
-        await db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost the race: another request inserted the same triple between the check above
+            // and this write. The index is what makes that a failed write rather than a second
+            // row, and this turns the failed write back into the answer the caller wanted.
+            // Without it the loser of a double-tap gets a 500 for a request that succeeded.
+            db.Entry(session).State = EntityState.Detached;
+
+            var winner = body.ProgramDayId is { } racedDayId
+                ? await db.WorkoutSessionsForClient(client.Id).FirstOrDefaultAsync(
+                    s => s.PerformedOn == performedOn && s.ProgramDayId == racedDayId, cancellationToken)
+                : null;
+
+            if (winner is null)
+            {
+                // Not the uniqueness constraint, then — a real failure, and not one to swallow.
+                throw;
+            }
+
+            return Results.Ok(new SessionResponse(winner.Id, winner.PerformedOn,
+                winner.ProgramDayId, winner.Comment, winner.CreatedAt));
+        }
 
         return Results.Created($"/api/me/sessions/{session.Id}",
             new SessionResponse(session.Id, session.PerformedOn, session.ProgramDayId,

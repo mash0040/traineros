@@ -297,10 +297,13 @@ public class MeSessionEndpointsTests : IClassFixture<MeSessionEndpointsTestApp>
     [Fact]
     public async Task Client_creates_prescribed_session_pointing_at_own_program_day()
     {
+        // Its own date. Since #98 a (client, date, program day) triple is one session, so two
+        // tests sharing one triple in this class-scoped fixture would make the second resume the
+        // first's row and depend on execution order to pass.
         var session = await _app.SignInAsync(_app.ClientAId);
         var response = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
         {
-            performedOn = new DateOnly(2026, 7, 22),
+            performedOn = new DateOnly(2026, 7, 23),
             programDayId = _app.DayAId,
             comment = (string?)null,
         });
@@ -308,6 +311,201 @@ public class MeSessionEndpointsTests : IClassFixture<MeSessionEndpointsTestApp>
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(_app.DayAId, body.GetProperty("programDayId").GetGuid());
+    }
+
+    // -- POST /api/me/sessions resume (#98) --
+
+    [Fact]
+    public async Task Posting_the_same_day_twice_resumes_the_existing_session()
+    {
+        // The gym-floor case: she logs Lower, closes the tab or picks up a second device, and
+        // the screen posts again. Two rows would split one workout across two, and /api/me/last
+        // would answer with half of it.
+        var performedOn = new DateOnly(2026, 8, 3);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var first = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn,
+            programDayId = _app.DayAId,
+            comment = "first pass",
+        });
+        var second = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn,
+            programDayId = _app.DayAId,
+            comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        // 200, not 201: nothing was created. The SPA does not read the status, but the two
+        // outcomes are different facts and the code says which happened.
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        var firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(firstBody.GetProperty("id").GetGuid(), secondBody.GetProperty("id").GetGuid());
+
+        var rows = _app.WithDb(db => db.WorkoutSessionsForClient(_app.ClientAId)
+            .AsNoTracking()
+            .Count(s => s.PerformedOn == performedOn && s.ProgramDayId == _app.DayAId));
+        Assert.Equal(1, rows);
+    }
+
+    [Fact]
+    public async Task Resuming_does_not_overwrite_the_comment_already_written()
+    {
+        // The note belongs to the workout, not to the request that happened to arrive second.
+        // PATCH /api/me/sessions/:id (#96) is how it gets edited; a create that clobbered it
+        // would erase something the client already wrote.
+        var performedOn = new DateOnly(2026, 8, 4);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn, programDayId = _app.DayAId, comment = "shoulder tweaked on OHP",
+        });
+        var resumed = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn, programDayId = _app.DayAId, comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        var body = await resumed.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("shoulder tweaked on OHP", body.GetProperty("comment").GetString());
+    }
+
+    [Fact]
+    public async Task Two_program_days_on_one_calendar_day_are_two_sessions()
+    {
+        // Day A in the morning, Day B in the evening. A real pattern, and the reason the triple
+        // includes program_day_id rather than being one-session-per-client-per-day.
+        var performedOn = new DateOnly(2026, 8, 5);
+        var clientB = await _app.SignInAsync(_app.ClientBId);
+
+        var morning = await SendAsync(HttpMethod.Post, "/api/me/sessions", clientB, new
+        {
+            performedOn, programDayId = _app.DayBId, comment = (string?)null,
+        });
+        var evening = await SendAsync(HttpMethod.Post, "/api/me/sessions", clientB, new
+        {
+            performedOn, programDayId = (Guid?)null, comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Created, morning.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, evening.StatusCode);
+        Assert.NotEqual(
+            (await morning.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid(),
+            (await evening.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid());
+    }
+
+    [Fact]
+    public async Task Freestyle_sessions_stay_unconstrained()
+    {
+        // program_day_id NULL is exempt: there is nothing to match on, and Postgres treats NULLs
+        // as distinct anyway, so the index is filtered to NOT NULL rather than pretending to
+        // cover them. Two freestyle sessions on one day are two workouts.
+        var performedOn = new DateOnly(2026, 8, 6);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var first = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn, programDayId = (Guid?)null, comment = (string?)null,
+        });
+        var second = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn, programDayId = (Guid?)null, comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        Assert.NotEqual(
+            (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid(),
+            (await second.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid());
+    }
+
+    [Fact]
+    public async Task The_same_day_on_two_calendar_dates_are_two_sessions()
+    {
+        // Lower on Monday and Lower on Thursday is the ordinary way a program is run. The
+        // constraint is per calendar date, not per program day.
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var monday = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn = new DateOnly(2026, 8, 10), programDayId = _app.DayAId, comment = (string?)null,
+        });
+        var thursday = await SendAsync(HttpMethod.Post, "/api/me/sessions", session, new
+        {
+            performedOn = new DateOnly(2026, 8, 13), programDayId = _app.DayAId, comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Created, monday.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, thursday.StatusCode);
+    }
+
+    [Fact]
+    public async Task Resume_does_not_reach_across_clients()
+    {
+        // Isolation still holds under the new lookup: the resume query is client-scoped, so
+        // client B posting their own day never finds client A's row. Nothing is shared but the
+        // date, and that is not an identity.
+        var performedOn = new DateOnly(2026, 8, 7);
+
+        var clientA = await _app.SignInAsync(_app.ClientAId);
+        var aFirst = await SendAsync(HttpMethod.Post, "/api/me/sessions", clientA, new
+        {
+            performedOn, programDayId = _app.DayAId, comment = (string?)null,
+        });
+
+        var clientB = await _app.SignInAsync(_app.ClientBId);
+        var bFirst = await SendAsync(HttpMethod.Post, "/api/me/sessions", clientB, new
+        {
+            performedOn, programDayId = _app.DayBId, comment = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Created, aFirst.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, bFirst.StatusCode);
+
+        var aId = (await aFirst.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var bId = (await bFirst.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.NotEqual(aId, bId);
+
+        // And each client's row stays in their own scope.
+        Assert.True(_app.WithDb(db => db.WorkoutSessionsForClient(_app.ClientAId).Any(s => s.Id == aId)));
+        Assert.False(_app.WithDb(db => db.WorkoutSessionsForClient(_app.ClientAId).Any(s => s.Id == bId)));
+    }
+
+    [Fact]
+    public async Task Concurrent_posts_for_one_day_still_yield_one_session()
+    {
+        // The race the unique index exists for: both requests find nothing, both insert, and
+        // the database refuses the second. Without the catch-and-reread the loser would get a
+        // 500 for a request that had, in every sense the caller cares about, succeeded.
+        var performedOn = new DateOnly(2026, 8, 11);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var bodies = Enumerable.Range(0, 4).Select(_ => new
+        {
+            performedOn, programDayId = _app.DayAId, comment = (string?)null,
+        });
+        var responses = await Task.WhenAll(bodies.Select(body =>
+            SendAsync(HttpMethod.Post, "/api/me/sessions", session, body)));
+
+        Assert.All(responses, response => Assert.True(response.IsSuccessStatusCode,
+            $"expected success, got {(int)response.StatusCode}"));
+
+        var ids = new HashSet<Guid>();
+        foreach (var response in responses)
+        {
+            ids.Add((await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid());
+        }
+
+        Assert.Single(ids);
+        var rows = _app.WithDb(db => db.WorkoutSessionsForClient(_app.ClientAId)
+            .AsNoTracking()
+            .Count(s => s.PerformedOn == performedOn && s.ProgramDayId == _app.DayAId));
+        Assert.Equal(1, rows);
     }
 
     [Fact]
