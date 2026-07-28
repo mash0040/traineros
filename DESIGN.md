@@ -96,9 +96,10 @@ An exercise row on the client Log workout screen carries three numeric groups, r
 
 - Size `--text-base` (16px), weight 600, color `--ink`, `tabular-nums`.
 - Format `72.5 × 8`. The `×` renders in `--muted` at the same size so the numbers dominate the glyph.
-- Prefix label `Last` in `--text-xs` (12px), weight 400, `--muted`, above the number.
-- Position: own column, left of the inputs. Successive sets stack into a stable vertical strip of last-time values.
-- Empty state (no prior data): `Last` label with a single `–` at `--muted`. Not "no data yet" copy.
+- Column header `Last` in `--text-xs` (12px), weight 400, `--muted`, once above the column — not repeated per row. A column needs naming once; four stacked labels is repetition, and it competes with the values it is supposed to introduce.
+- Position: own column, left of the inputs. Successive sets stack into a stable vertical strip of last-time values under the one header.
+- Empty state (no prior data, or a set number the client didn't reach last time): a single `–` at `--muted` in the cell. Not "no data yet" copy. Dashes hold the row's place so the strip stays aligned to set number.
+- The visible header is decorative to assistive tech: each cell carries its own visually-hidden label, because a column header is not programmatically associated with the cells beneath it and a row-by-row reading would otherwise announce a bare number.
 
 **Rank 3: prescribed target.** The trainer's prescription as free text (`8–10`, `RPE 8`, `3×5 @ 80%`). Read once per exercise, not per set.
 
@@ -108,12 +109,17 @@ An exercise row on the client Log workout screen carries three numeric groups, r
 
 **Row order, left-to-right (mobile):** `[set #] [last-time column] [weight input] [reps input]`.
 
+**Column headers.** One header row per exercise block, above the set rows, naming every column once at the same height: `Last`, `kg`, `Reps`, all `--text-xs` / 400 / `--muted`. `kg` and `Reps` are right-aligned over their right-aligned digits; `Last` is not. No labels appear inside the rows themselves. The header row is decorative to assistive tech — it has no programmatic association with the cells below it — so every cell carries its own label: values via visually-hidden text, inputs via `aria-label` naming the unit in full.
+
+Known tradeoff: only the last row holds inputs, so as sets are logged the inputs travel down the block away from their headers. At six sets they are roughly a screen-third apart. What holds the columns legible at that distance is the saved rows between them — same columns, same alignment, same `tabular-nums` — not the header. If that ever stops being true, the answer is a sticky header row inside the block, not labels back in every row.
+
 **Forbidden collapses:**
 
 - Prescribed target promoted next to each set row (Rank 3 → Rank 1 visually).
 - Last-time rendered as a subtitle, tooltip, or icon (Rank 2 hidden; notebook wins).
 - Last-time's weight and size matched to the input labels (Rank 2 collapsed to labelling).
-- Bolding the `×` glyph or the `Last` prefix to "balance" the row. The numbers balance it.
+- Bolding the `×` glyph or the `Last` header to "balance" the row. The numbers balance it.
+- Repeating the `Last` label per row. It names a column, and the column is named once.
 
 ## Elevation & borders
 

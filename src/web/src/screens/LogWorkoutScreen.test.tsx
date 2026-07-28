@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { HistoryResponse, MeProgramWrapper, MeResponse } from '../api/types.gen'
+import type { HistoryResponse, LastResponse, MeProgramWrapper, MeResponse } from '../api/types.gen'
 import { LogWorkoutScreen } from './LogWorkoutScreen'
 
 const me: MeResponse = {
@@ -76,9 +76,13 @@ describe('LogWorkoutScreen', () => {
     options: {
       history?: HistoryResponse
       holdCreate?: Promise<void>
+      holdLast?: Promise<void>
+      last?: Record<string, LastResponse>
       onCreateSession?: (attempt: number) => Reply
+      onLast?: (exerciseId: string) => Reply
       onLogSet?: (attempt: number) => Reply
       onPatch?: (attempt: number) => Reply
+      program?: MeProgramWrapper
     } = {},
   ) {
     let creates = 0
@@ -98,11 +102,22 @@ describe('LogWorkoutScreen', () => {
       }
 
       if (url === '/api/me/program') {
-        return send(ok(program))
+        return send(ok(options.program ?? program))
       }
 
       if (url.startsWith('/api/me/history')) {
         return send(ok(options.history ?? { items: [], nextCursor: null }))
+      }
+
+      if (url.startsWith('/api/me/last')) {
+        const exerciseId = new URL(url, 'http://test').searchParams.get('exercise_id') ?? ''
+        if (options.holdLast !== undefined) {
+          await options.holdLast
+        }
+        if (options.onLast !== undefined) {
+          return send(options.onLast(exerciseId))
+        }
+        return send(ok(options.last?.[exerciseId] ?? { mostRecent: null }))
       }
 
       if (url === '/api/me/sessions' && method === 'POST') {
@@ -199,9 +214,10 @@ describe('LogWorkoutScreen', () => {
     // per set row is the collapse the doc forbids.
     expect(screen.getAllByText('3 × 8-10 · 70 kg · rest 90s')).toHaveLength(1)
 
-    // Rank 2 is #46's and this ticket does not fill it: one `Last` per row, still a dash.
+    // Rank 2 with no history to show: the column is named once by its header and every cell
+    // holds a dash.
     const squat = await block('Back Squat')
-    expect(squat.getAllByText('Last')).toHaveLength(1)
+    expect(squat.getAllByText('Last', { exact: true })).toHaveLength(1)
     expect(squat.getByText('–')).toBeInTheDocument()
   })
 
@@ -214,6 +230,215 @@ describe('LogWorkoutScreen', () => {
 
     expect(squat.getByLabelText(/weight in kilograms/)).toHaveAttribute('inputmode', 'decimal')
     expect(squat.getByLabelText(/reps/)).toHaveAttribute('inputmode', 'numeric')
+  })
+
+  // -- Inline last-time (#46) --
+
+  const squatLast: LastResponse = {
+    mostRecent: {
+      sessionId: 'session-last-week',
+      performedOn: '2026-07-19',
+      exercise: { id: 'ex-1', name: 'Back Squat' },
+      sets: [
+        { id: 'a', setNumber: 1, weightKg: 72.5, reps: 8, loggedAt: '2026-07-19T12:00:00Z' },
+        { id: 'b', setNumber: 2, weightKg: 75, reps: 6, loggedAt: '2026-07-19T12:05:00Z' },
+      ],
+    },
+  }
+
+  const lastRequests = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith('/api/me/last'))
+
+  /**
+   * The last-time cells of one exercise, top to bottom — the vertical strip DESIGN.md asks for.
+   *
+   * Found by each cell's visually-hidden label rather than by the visible column header, which
+   * appears once and names the column for sighted users only.
+   */
+  function lastCells(card: ReturnType<typeof within>): HTMLElement[] {
+    return card
+      .getAllByText('Last time', { exact: false })
+      .map((label: HTMLElement) => label.parentElement as HTMLElement)
+  }
+
+  it('shows what she lifted last time, per set, without a tap', async () => {
+    // The feature that beats the paper notebook. It has to be readable mid-set at arm's length,
+    // which is why it is a column of values and not a tooltip, an icon, or a subtitle.
+    mockApi({ last: { 'ex-1': squatLast } })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    // DESIGN.md's format, exactly: `72.5 × 8`. Only one row exists before anything is saved, so
+    // only last time's set 1 is on screen — the strip grows with the rows.
+    await waitFor(() => expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*72\.5\s*×\s*8$/))
+    expect(lastCells(squat)).toHaveLength(1)
+
+    // The column is named once, above it — not prefixed onto every row.
+    expect(squat.getAllByText('Last', { exact: true })).toHaveLength(1)
+  })
+
+  it('carries the strip down as sets are logged', async () => {
+    mockApi({ last: { 'ex-1': squatLast } })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByText(/72\.5/)).toBeInTheDocument())
+
+    await logSet('Back Squat', '100', '8')
+
+    // Row 1 keeps last week's set 1; the new pending row 2 shows last week's set 2. The values
+    // stack by set number rather than repeating one summary for the exercise.
+    await waitFor(() => expect(squat.getByLabelText(/set 2 weight/)).toBeInTheDocument())
+    expect(lastCells(squat)).toHaveLength(2)
+    expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*72\.5\s*×\s*8$/)
+    expect(lastCells(squat)[1]).toHaveTextContent(/^Last time\s*75\s*×\s*6$/)
+
+    // Two rows of values, still one header. This is the assertion the change was made for.
+    expect(squat.getAllByText('Last', { exact: true })).toHaveLength(1)
+  })
+
+  it('shows a single dash when there is nothing to show', async () => {
+    // api.md #33 collapses "never done it" and "not yours" into the same mostRecent: null, so
+    // there is one empty state and it is a dash — not "no data yet" copy, which would break the
+    // column's shape and stop the strip being scannable.
+    mockApi({ last: { 'ex-1': { mostRecent: undefined } } })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    expect(await squat.findByText('–')).toBeInTheDocument()
+    expect(squat.queryByText(/no data/i)).not.toBeInTheDocument()
+  })
+
+  it('does not make the screen wait for last-time', async () => {
+    // Eight exercises is eight requests and there is no batch endpoint. The reason that is
+    // acceptable is that nothing blocks on them: the day, its targets, and the inputs come from
+    // the program alone, so she can log her first set before any of them land.
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    const fetchMock = mockApi({ holdLast: held, last: { 'ex-1': squatLast } })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    expect(squat.getByLabelText(/set 1 reps/)).toBeInTheDocument()
+    expect(squat.getByRole('button', { name: 'Save set' })).toBeEnabled()
+    // Still the empty state, and still fully usable.
+    expect(squat.getByText('–')).toBeInTheDocument()
+
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+
+    release()
+    await waitFor(() => expect(squat.getByText(/72\.5/)).toBeInTheDocument())
+  })
+
+  it('asks once per exercise, not once per prescription', async () => {
+    // A day can prescribe the same exercise twice (top sets then back-offs). One request.
+    const repeated: MeProgramWrapper = {
+      program: {
+        ...program.program,
+        days: [
+          {
+            id: 'day-1', title: 'Lower', position: 1,
+            prescriptions: [
+              { id: 'presc-1', position: 1, targetSets: 1, targetReps: '5', exercise: { id: 'ex-1', name: 'Back Squat' } },
+              { id: 'presc-1b', position: 2, targetSets: 3, targetReps: '8', exercise: { id: 'ex-1', name: 'Back Squat' } },
+            ],
+          },
+        ],
+      },
+    }
+
+    const fetchMock = mockApi({ program: repeated, last: { 'ex-1': squatLast } })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    await waitFor(() => expect(lastRequests(fetchMock)).toHaveLength(1))
+    expect(lastRequests(fetchMock)[0]).toContain('exercise_id=ex-1')
+  })
+
+  it('does not pass today’s own sets off as last time', async () => {
+    // Since #45 the row is created by the first logged set, and #98 resumes it rather than
+    // making a second — so on a resumed session /api/me/last answers with *this* session for
+    // anything already logged today. Those sets are already on screen in the rows above;
+    // repeating them under a `Last` label would be a second, wronger copy of what she is
+    // looking at.
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        performedOn: todayForClient(), programDayId: 'day-1', comment: '', sessionId: SESSION_ID,
+      }),
+    )
+
+    const history: HistoryResponse = {
+      items: [
+        {
+          id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:00:00Z',
+          session: { id: SESSION_ID, performedOn: '2026-07-26', comment: null },
+          exercise: { id: 'ex-1', name: 'Back Squat' },
+        },
+      ],
+      nextCursor: null,
+    }
+
+    mockApi({
+      history,
+      last: {
+        'ex-1': {
+          mostRecent: {
+            sessionId: SESSION_ID,
+            performedOn: '2026-07-26',
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+            sets: [{ id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:00:00Z' }],
+          },
+        },
+      },
+    })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByLabelText(/set 2 weight/)).toBeInTheDocument())
+
+    // The saved row shows 100 once, in the weight column. The Last column stays on dashes.
+    expect(squat.getAllByText('–')).toHaveLength(2)
+    expect(squat.getAllByText('100')).toHaveLength(1)
+  })
+
+  it('falls back to the dash when the last-time read fails', async () => {
+    // Decision support, not a write. Losing it costs her the assist and nothing else, so it
+    // degrades to the pre-#46 state rather than putting an error on a logging screen.
+    const fetchMock = mockApi({ onLast: () => 'network' })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    expect(await squat.findByText('–')).toBeInTheDocument()
+    expect(squat.queryByRole('alert')).not.toBeInTheDocument()
+    // One silent retry per exercise before giving up: two exercises, two attempts each.
+    await waitFor(() => expect(lastRequests(fetchMock)).toHaveLength(4))
+  })
+
+  it('shows reps alone for a bodyweight set', async () => {
+    mockApi({
+      last: {
+        'ex-1': {
+          mostRecent: {
+            sessionId: 'session-last-week', performedOn: '2026-07-19',
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+            sets: [{ id: 'a', setNumber: 1, weightKg: null, reps: 12, loggedAt: '2026-07-19T12:00:00Z' }],
+          },
+        },
+      },
+    })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    // weight_kg NULL is bodyweight (database.md). Reps alone, with no × at all: "– × 12" would
+    // read as a missing number rather than an absent one.
+    await waitFor(() => expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*12$/))
   })
 
   // -- Session creation moves to the first set --
@@ -419,6 +644,64 @@ describe('LogWorkoutScreen', () => {
     expect(setPosts(fetchMock)[0].body).toMatchObject({ setNumber: 3 })
   })
 
+  it('continues set numbering after finishing and reopening the same day', async () => {
+    // Reported: 31 sets in one session with set_number cycling 1-4 seven times. Finish clears
+    // the draft, so a restart has no session id to resume from, the read-back never runs, and
+    // #98 hands the same row back to a screen that thinks it is empty.
+    //
+    // No draft here on purpose — that is the whole point of the bug.
+    const fetchMock = mockApi({
+      // #98: an existing row for this (client, date, program day) comes back as 200.
+      onCreateSession: () => ok({ id: SESSION_ID }, 200),
+      history: {
+        items: [
+          {
+            id: 'set-2', setNumber: 2, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:05:00Z',
+            session: { id: SESSION_ID, performedOn: '2026-07-26', comment: null },
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+          },
+          {
+            id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:00:00Z',
+            session: { id: SESSION_ID, performedOn: '2026-07-26', comment: null },
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+          },
+        ],
+        nextCursor: null,
+      },
+    })
+
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+
+    await logSet('Back Squat', '100', '8')
+
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+    // Set 3, not set 1. Two sets are already in this row.
+    expect(setPosts(fetchMock)[0].body).toMatchObject({ setNumber: 3 })
+    expect(setPosts(fetchMock)[0].url).toBe(`/api/me/sessions/${SESSION_ID}/sets`)
+
+    // And the earlier sets come back on screen rather than the block looking empty.
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByLabelText(/set 4 weight/)).toBeInTheDocument())
+  })
+
+  it('still lands the note when finishing a reopened day with nothing new logged', async () => {
+    // The same seam as the numbering bug. With no sets this visit the screen has no session id,
+    // so Finish takes the create-with-comment path — but #98 resumes the existing row and
+    // deliberately does not overwrite its comment, so the note would vanish without a word.
+    const fetchMock = mockApi({ onCreateSession: () => ok({ id: SESSION_ID }, 200) })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    await userEvent.type(screen.getByLabelText('Note for your trainer'), 'Forgot to say: knee ached.')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+
+    expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument()
+    expect(patches(fetchMock)).toHaveLength(1)
+    expect(patches(fetchMock)[0].body).toEqual({ comment: 'Forgot to say: knee ached.' })
+  })
+
   it('refuses to render rather than log blind when the resume read fails', async () => {
     // Continuing here would mean writing sets into a session whose contents are unknown, which
     // is exactly how duplicate set numbers happen.
@@ -525,6 +808,47 @@ describe('LogWorkoutScreen', () => {
     )
     expect(screen.queryByRole('heading', { name: 'Today' })).not.toBeInTheDocument()
     expect(sessionPosts(fetchMock)).toHaveLength(0)
+  })
+
+  it('finishes after several sets without touching the pre-filled row that follows', async () => {
+    // Reported: four sets logged, Finish tapped, guard still blocks. Reproduces the real
+    // sequence rather than the one-set case — set 1 is typed, sets 2-4 are saved straight from
+    // the pre-fill, and the fifth row is left exactly as the app suggested it.
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    await logSet('Back Squat', '100', '8')
+    const squat = await block('Back Squat')
+
+    for (const next of [2, 3, 4]) {
+      await waitFor(() => expect(squat.getByLabelText(new RegExp(`set ${next} weight`))).toBeInTheDocument())
+      await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    }
+
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(4))
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+
+    expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument()
+  })
+
+  it('clears the unsaved-set warning once that set is saved', async () => {
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 weight/), '100')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Save or clear the set you started')
+
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+
+    // The condition is gone, so the warning about it must be too. Left on screen it reads as
+    // "Finish is still blocked" when the next tap would have worked.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('finishes over a pre-filled row nobody typed into', async () => {
