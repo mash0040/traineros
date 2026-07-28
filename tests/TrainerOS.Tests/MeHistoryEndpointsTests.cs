@@ -16,6 +16,10 @@ using TrainerOS.Api.Endpoints;
 using TrainerOS.Domain.Data;
 using TrainerOS.Domain.Entities;
 
+// Same alias the other endpoint fixtures use: bare `Program` binds to the test host's
+// entry-point class, not the entity.
+using ProgramEntity = TrainerOS.Domain.Entities.Program;
+
 namespace TrainerOS.Tests;
 
 // Fixture builds a multi-session history for client A across two exercises (Squat
@@ -46,6 +50,11 @@ public sealed class MeHistoryEndpointsTestApp : IAsyncLifetime
     public Guid SessionA_OlderId { get; } = Guid.NewGuid();
     public Guid SessionA_NewerId { get; } = Guid.NewGuid();
     public Guid SessionB_Id { get; } = Guid.NewGuid();
+
+    // A program day for the newer session only, so #102's projection has both a set and an
+    // unset value to report. The older session stays freestyle.
+    public Guid ProgramAId { get; } = Guid.NewGuid();
+    public Guid DayAId { get; } = Guid.NewGuid();
 
     // A's set ids across sessions (bench+squat mixed).
     public Guid SetA_Old_Squat1Id { get; } = Guid.NewGuid();
@@ -140,6 +149,13 @@ public sealed class MeHistoryEndpointsTestApp : IAsyncLifetime
                 IsActive = true, CreatedAt = Clock.Now,
             });
 
+            db.Add(new ProgramEntity
+            {
+                Id = ProgramAId, TrainerId = TrainerAId, ClientId = ClientAId,
+                Title = "Winter Block", Status = "active", CreatedAt = Clock.Now,
+            });
+            db.Add(new ProgramDay { Id = DayAId, ProgramId = ProgramAId, Title = "Lower", Position = 1 });
+
             db.Add(new WorkoutSession
             {
                 Id = SessionA_OlderId, TrainerId = TrainerAId, ClientId = ClientAId,
@@ -149,6 +165,7 @@ public sealed class MeHistoryEndpointsTestApp : IAsyncLifetime
             db.Add(new WorkoutSession
             {
                 Id = SessionA_NewerId, TrainerId = TrainerAId, ClientId = ClientAId,
+                ProgramDayId = DayAId,
                 PerformedOn = new DateOnly(2026, 7, 20), Comment = "newer",
                 CreatedAt = Clock.Now,
             });
@@ -313,6 +330,31 @@ public class MeHistoryEndpointsTests : IClassFixture<MeHistoryEndpointsTestApp>
 
         // Fewer than limit → nextCursor is null.
         Assert.Equal(JsonValueKind.Null, body.GetProperty("nextCursor").ValueKind);
+    }
+
+    [Fact]
+    public async Task History_session_summary_carries_program_day_id()
+    {
+        // #102: the log screen resolves "today's session for this program day" from history on
+        // mount. Without this field the only route that answers that question is POST
+        // /api/me/sessions, and asking it costs a row.
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, "/api/me/history?limit=100", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var items = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items");
+
+        // Newest set belongs to the session logged against a program day.
+        var prescribed = items[0].GetProperty("session");
+        Assert.Equal(_app.SessionA_NewerId, prescribed.GetProperty("id").GetGuid());
+        Assert.Equal(_app.DayAId, prescribed.GetProperty("programDayId").GetGuid());
+
+        // The older session is freestyle: the field is present and explicitly null, so a caller
+        // never has to distinguish "absent" from "no day".
+        var freestyle = items[5].GetProperty("session");
+        Assert.Equal(_app.SessionA_OlderId, freestyle.GetProperty("id").GetGuid());
+        Assert.Equal(JsonValueKind.Null, freestyle.GetProperty("programDayId").ValueKind);
     }
 
     [Fact]

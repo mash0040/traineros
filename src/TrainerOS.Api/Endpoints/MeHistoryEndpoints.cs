@@ -29,7 +29,12 @@ public static class MeHistoryEndpoints
         HistorySessionSummary Session,
         HistoryExerciseRef Exercise);
 
-    public sealed record HistorySessionSummary(Guid Id, DateOnly PerformedOn, string? Comment);
+    // ProgramDayId (#102) lets a caller identify which session belongs to which program day
+    // without a write. The log screen needs it on mount: POST /api/me/sessions is the only other
+    // route that resolves (client, performed_on, program_day_id), and asking it costs a row.
+    // Null for a freestyle session, which by design has no day to match on.
+    public sealed record HistorySessionSummary(
+        Guid Id, DateOnly PerformedOn, string? Comment, Guid? ProgramDayId);
 
     public sealed record HistoryExerciseRef(Guid Id, string Name);
 
@@ -108,6 +113,7 @@ public static class MeHistoryEndpoints
                 SessionId = s.Session.Id,
                 SessionPerformedOn = s.Session.PerformedOn,
                 SessionComment = s.Session.Comment,
+                SessionProgramDayId = s.Session.ProgramDayId,
                 s.ExerciseId,
             })
             .AsNoTracking()
@@ -128,7 +134,8 @@ public static class MeHistoryEndpoints
 
         var items = rows.Select(r => new HistoryItem(
             r.Id, r.SetNumber, r.WeightKg, r.Reps, r.LoggedAt,
-            new HistorySessionSummary(r.SessionId, r.SessionPerformedOn, r.SessionComment),
+            new HistorySessionSummary(
+                r.SessionId, r.SessionPerformedOn, r.SessionComment, r.SessionProgramDayId),
             new HistoryExerciseRef(r.ExerciseId, exerciseNames.GetValueOrDefault(r.ExerciseId, ""))
         )).ToList();
 
