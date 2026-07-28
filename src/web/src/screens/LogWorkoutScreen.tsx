@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import type {
   HistoryItem,
+  LastSet,
   MeProgramDetails,
   MeResponse,
   PrescriptionView,
@@ -11,6 +12,7 @@ import {
   ApiError,
   createSession,
   fetchHistory,
+  fetchLastForExercise,
   fetchMyProgram,
   logSet,
   updateSessionComment,
@@ -49,6 +51,15 @@ type Pending = {
 }
 
 type Block = { saved: SavedSet[]; pending: Pending }
+
+/**
+ * What ensureSession hands back.
+ *
+ * `restored` is non-null only when the server resumed a row that already held sets, and it
+ * carries them so the caller can number its next set from what is really there rather than from
+ * the state it captured before asking.
+ */
+type EnsuredSession = { id: string; restored: Record<string, Block> | null }
 
 const EMPTY_PENDING: Pending = { weight: '', reps: '', dirty: false, saving: false, failure: null }
 
@@ -97,16 +108,26 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [blocks, setBlocks] = useState<Record<string, Block>>({})
 
+  // Keyed by exercise id. Absent means still in flight, null means nothing to show — both
+  // render the same dash, which is why the screen never waits on them.
+  const [lastTimes, setLastTimes] = useState<Record<string, LastSet[] | null>>({})
+
   const [finishing, setFinishing] = useState(false)
   const [finishError, setFinishError] = useState<string | null>(null)
+  const [finishBlocked, setFinishBlocked] = useState(false)
 
   const performedOn = useMemo(() => todayIn(me.timezone), [me.timezone])
 
   // Guard 2. A ref, not state: two save handlers firing in the same tick must see the same
   // in-flight promise, and a state update would not have landed yet for the second one.
-  const creating = useRef<Promise<string> | null>(null)
+  const creating = useRef<Promise<EnsuredSession> | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   sessionIdRef.current = sessionId
+
+  // ensureSession needs the program to map restored sets back onto prescriptions, but must not
+  // be rebuilt when it changes — a new callback identity mid-flight would not share `creating`.
+  const programRef = useRef<MeProgramDetails | null>(null)
+  programRef.current = program
 
   // Loading and resuming are one operation. Splitting them let the persist effect fire between
   // the two and overwrite a real draft with the empty initial state.
@@ -154,6 +175,71 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     }
   }, [attempt, performedOn, dayId])
 
+  // Last-time (#46). Fired after the screen is already on the page, one request per distinct
+  // exercise, all in parallel and none of them blocking anything.
+  //
+  // How this is fetched, decided (#46): there is no batch endpoint, so eight exercises is eight
+  // requests. Two things make that acceptable and one makes it invisible.
+  //   * They are parallel, so the wall clock is one round trip plus server time, not eight. Each
+  //     is index-served (logged_sets on exercise_id, logged_at — database.md §Indexing).
+  //   * They are deduplicated by exercise, not per prescription: a day that prescribes the same
+  //     exercise twice still asks once.
+  //   * The screen does not wait for any of them. The day, the targets, and the inputs render
+  //     from the program alone; last-time cells start on the dash DESIGN.md specifies for the
+  //     empty state and fill in as answers land. So the cost of eight requests is never paid in
+  //     time-to-usable — she can log her first set before any of them return.
+  // The honest cost is server-side: eight queries per screen open instead of one. At v1 scale
+  // (one trainer, a handful of clients) that is not worth an endpoint. If it ever is, the fix is
+  // a batch route taking exercise_ids, and this effect becomes one call.
+  useEffect(() => {
+    if (load !== 'ready') {
+      return
+    }
+
+    const chosen = (program?.days ?? []).find((candidate) => candidate.id === dayId)
+    const exerciseIds = [
+      ...new Set(
+        (chosen?.prescriptions ?? [])
+          .map((prescription) => prescription.exercise?.id)
+          .filter((id): id is string => id !== undefined),
+      ),
+    ]
+
+    let cancelled = false
+    for (const exerciseId of exerciseIds) {
+      // One silent retry, then the dash. A dropped read of decision support is not worth an
+      // error message on a screen whose job is logging.
+      fetchLastForExercise(exerciseId)
+        .catch(() => fetchLastForExercise(exerciseId))
+        .then((response) => {
+          if (cancelled) {
+            return
+          }
+
+          const recent = response.mostRecent
+          // Today's own work is not "last time". Since #45 the row is created by the first
+          // logged set and #98 resumes it, so on a resumed session /api/me/last answers with
+          // this very session for anything already logged today — and those sets are visible
+          // in the rows directly above. Showing them again under a `Last` label would be a
+          // second, wronger copy of what she is looking at.
+          const isThisSession = recent?.sessionId !== undefined && recent.sessionId === sessionIdRef.current
+          setLastTimes((previous) => ({
+            ...previous,
+            [exerciseId]: recent == null || isThisSession ? null : (recent.sets ?? null),
+          }))
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setLastTimes((previous) => ({ ...previous, [exerciseId]: null }))
+          }
+        })
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [load, program, dayId])
+
   // Comment save timing, unchanged from #47 and deliberately not a PATCH per keystroke: that
   // would be a request storm on a phone for no benefit. Keystrokes go to the device, and the
   // one network write happens at Finish (#96's PATCH).
@@ -170,18 +256,22 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     writeDraft({ performedOn, programDayId: dayId, comment, sessionId })
   }, [comment, sessionId, hydrated, performedOn, dayId])
 
-  const ensureSession = useCallback(async (): Promise<string> => {
+  const ensureSession = useCallback(async (): Promise<EnsuredSession> => {
     if (sessionIdRef.current !== null) {
-      return sessionIdRef.current
+      return { id: sessionIdRef.current, restored: null }
     }
 
     if (creating.current !== null) {
       return creating.current
     }
 
-    const inFlight = (async () => {
-      const created = await createSession({ performedOn, programDayId: dayId, comment: null })
-      if (created.id === undefined) {
+    const inFlight = (async (): Promise<EnsuredSession> => {
+      const { session, resumed } = await createSession({
+        performedOn,
+        programDayId: dayId,
+        comment: null,
+      })
+      if (session.id === undefined) {
         throw new ApiError(0, 'unknown', 'Something went wrong. Try again.')
       }
 
@@ -193,12 +283,45 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
         performedOn,
         programDayId: dayId,
         comment: existing?.comment ?? '',
-        sessionId: created.id,
+        sessionId: session.id,
       })
 
-      sessionIdRef.current = created.id
-      setSessionId(created.id)
-      return created.id
+      sessionIdRef.current = session.id
+      setSessionId(session.id)
+
+      // The second half of guard 3, and the seam the set-numbering bug came through.
+      //
+      // Guard 3 on mount only fires when a draft carried a session id, and Finish clears the
+      // draft. So a client who finishes and reopens the same day has no draft, the screen
+      // believes the block is empty, #98 hands back the row she already filled, and numbering
+      // restarts at 1 — logged_sets has no unique constraint on (session_id, exercise_id,
+      // set_number), so the database takes every duplicate.
+      //
+      // Restoring on mount is not available: identifying today's session for this program day
+      // needs a lookup the API does not offer (history's session summary carries no
+      // program_day_id, and POST is the only route that resolves the triple). So the read-back
+      // happens here, at the first moment the screen learns the row already existed.
+      if (!resumed) {
+        return { id: session.id, restored: null }
+      }
+
+      const history = await fetchHistory(HISTORY_PAGE)
+      const restored = rebuildBlocks(history.items ?? [], session.id, programRef.current, dayId)
+
+      setBlocks((previous) => {
+        const merged = { ...previous }
+        for (const [prescriptionId, block] of Object.entries(restored)) {
+          merged[prescriptionId] = {
+            saved: block.saved,
+            // Her half-typed row survives the rebuild. She is mid-save on one of these right
+            // now; replacing it with a pre-fill would retype the set being written.
+            pending: previous[prescriptionId]?.pending ?? block.pending,
+          }
+        }
+        return merged
+      })
+
+      return { id: session.id, restored }
     })()
 
     creating.current = inFlight
@@ -219,6 +342,26 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
   function blockFor(prescriptionId: string): Block {
     return blocks[prescriptionId] ?? { saved: [], pending: EMPTY_PENDING }
   }
+
+  // Exercises with a set she typed and never saved — the one place a set could still vanish
+  // silently at Finish.
+  //
+  // Derived every render rather than captured when Finish was tapped. Stored, the message
+  // outlived the condition: she saved the row it named and the warning stayed on screen,
+  // which reads as "Finish is still refusing" when the next tap would have worked. It also
+  // went stale in the other direction, still naming both exercises after one was resolved.
+  // `dirty` is what keeps a pre-filled row out of this list; see Pending.
+  const unsavedNames = prescriptions
+    .filter((prescription) => {
+      const pending = blockFor(prescription.id ?? '').pending
+      return pending.dirty && (pending.weight.trim() !== '' || pending.reps.trim() !== '')
+    })
+    .map((prescription) => prescription.exercise?.name ?? 'an exercise')
+
+  const problem =
+    finishBlocked && unsavedNames.length > 0
+      ? `Save or clear the set you started on ${listNames(unsavedNames)} first.`
+      : finishError
 
   function updatePending(prescriptionId: string, patch: Partial<Pending>) {
     setBlocks((previous) => {
@@ -258,11 +401,17 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     updatePending(key, { saving: true, failure: null })
 
     try {
-      const targetSession = await ensureSession()
+      const { id: targetSession, restored } = await ensureSession()
+
+      // Numbered from what the session really holds, not from what this handler captured before
+      // asking. When ensureSession resumed a row, `block` predates knowing that row had sets in
+      // it — using it is how numbering restarted at 1 on every reopen.
+      const alreadyLogged = restored?.[key]?.saved.length ?? block.saved.length
+
       const saved = await logSet(targetSession, {
         exerciseId,
         programDayExerciseId: key,
-        setNumber: block.saved.length + 1,
+        setNumber: alreadyLogged + 1,
         weightKg,
         reps,
       })
@@ -296,18 +445,12 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
 
     // Nothing is written implicitly at Finish. A typed-but-unsaved row is the one place this
     // screen could still lose a set silently, so it blocks and says which exercise instead.
-    const unsaved = prescriptions.filter((prescription) => {
-      const pending = blockFor(prescription.id ?? '').pending
-      // Only what she typed. A pre-filled row she never touched is a suggestion, and clearing
-      // a row she did touch leaves nothing to lose.
-      return pending.dirty && (pending.weight.trim() !== '' || pending.reps.trim() !== '')
-    })
-    if (unsaved.length > 0) {
-      const names = unsaved.map((prescription) => prescription.exercise?.name ?? 'an exercise')
-      setFinishError(`Save or clear the set you started on ${listNames(names)} first.`)
+    if (unsavedNames.length > 0) {
+      setFinishBlocked(true)
       return
     }
 
+    setFinishBlocked(false)
     setFinishing(true)
     setFinishError(null)
 
@@ -321,9 +464,21 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
           await updateSessionComment(sessionId, trimmed)
         }
       } else if (trimmed !== '') {
-        // A note but no sets. The row does not exist yet and POST takes a comment directly, so
-        // this is one request rather than a create followed by a patch.
-        await createSession({ performedOn, programDayId: dayId, comment: trimmed })
+        // A note but no sets logged this visit. POST takes a comment directly, so creating is
+        // one request rather than a create followed by a patch.
+        const { session, resumed } = await createSession({
+          performedOn,
+          programDayId: dayId,
+          comment: trimmed,
+        })
+
+        // Unless the row already existed — reopening a day finished earlier reaches here with
+        // no session id, and #98 deliberately leaves a resumed row's comment alone rather than
+        // let a create overwrite what she already wrote. The note needs #96's PATCH to land;
+        // without this it was posted, ignored, and lost without a word.
+        if (resumed && session.id !== undefined) {
+          await updateSessionComment(session.id, trimmed)
+        }
       }
 
       clearDraft()
@@ -396,6 +551,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
             <ExerciseBlock
               block={blockFor(prescription.id ?? '')}
               key={prescription.id}
+              lastSets={lastTimes[prescription.exercise?.id ?? ''] ?? null}
               onChangeReps={(reps) => updatePending(prescription.id ?? '', { reps, dirty: true, failure: null })}
               onChangeWeight={(weight) =>
                 updatePending(prescription.id ?? '', { weight, dirty: true, failure: null })
@@ -411,13 +567,13 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
 
       <div className="sticky bottom-0 -mx-6 mt-10 border-t border-edge bg-surface px-6 pb-8 pt-4 shadow-[var(--shadow-sticky)]">
         <div className="mx-auto grid w-full max-w-lg gap-2">
-          {finishError !== null && (
+          {problem !== null && (
             <p className="text-sm text-danger" id="finish-error" role="alert">
-              {finishError}
+              {problem}
             </p>
           )}
           <button
-            aria-describedby={finishError === null ? undefined : 'finish-error'}
+            aria-describedby={problem === null ? undefined : 'finish-error'}
             className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
             disabled={finishing}
             onClick={() => void onFinish()}
@@ -451,12 +607,14 @@ const LOG_ROW_GRID = 'grid grid-cols-[2rem_5rem_1fr_1fr] items-end gap-3'
 
 function ExerciseBlock({
   block,
+  lastSets,
   onChangeReps,
   onChangeWeight,
   onSave,
   prescription,
 }: {
   block: Block
+  lastSets: LastSet[] | null
   onChangeReps: (value: string) => void
   onChangeWeight: (value: string) => void
   onSave: () => void
@@ -482,27 +640,42 @@ function ExerciseBlock({
       )}
 
       <div className="mt-4 grid gap-3 border-t border-edge pt-4">
+        {/* One header row naming all four columns at the same height, rather than labels
+            scattered down the block. aria-hidden throughout: every cell beneath already carries
+            its own label — the values via visually-hidden text (see LastCell), the inputs via
+            aria-label — because a header row has no programmatic association with the cells
+            below it and would leave a row-by-row reading announcing bare numbers.
+
+            kg and Reps are right-aligned to sit over right-aligned digits. Last is not: its
+            values start at the left of their column. */}
+        <div className={LOG_ROW_GRID} aria-hidden="true">
+          <span />
+          <span className="text-xs font-normal text-muted">Last</span>
+          <span className="text-right text-xs font-normal text-muted">kg</span>
+          <span className="text-right text-xs font-normal text-muted">Reps</span>
+        </div>
+
         {block.saved.map((set) => (
-          <SavedRow key={set.id} set={set} />
+          <SavedRow key={set.id} last={lastTimeFor(lastSets, set.setNumber)} set={set} />
         ))}
 
         <div className={LOG_ROW_GRID}>
-          <span className="pb-2 text-sm text-muted tabular-nums">{nextSetNumber}</span>
+          {/* No bottom padding any more: with the unit labels moved to the header row every
+              cell here is a single line, so items-end lands them on one edge. */}
+          <span className="text-sm text-muted tabular-nums">{nextSetNumber}</span>
 
-          {/* Rank 2, #46's column. The `Last` label with a single dash is the empty state
-              DESIGN.md specifies; the numbers that replace the dash are that ticket's. */}
-          <LastCell />
+          {/* Rank 2. Its own column, left of the inputs, so successive sets stack into a
+              vertical strip of last-time values (DESIGN.md §Log row). */}
+          <LastCell set={lastTimeFor(lastSets, nextSetNumber)} />
 
           <NumberField
             inputMode="decimal"
-            label="kg"
             name={`${name} set ${nextSetNumber} weight in kilograms`}
             onChange={onChangeWeight}
             value={block.pending.weight}
           />
           <NumberField
             inputMode="numeric"
-            label="Reps"
             name={`${name} set ${nextSetNumber} reps`}
             onChange={onChangeReps}
             value={block.pending.reps}
@@ -534,11 +707,11 @@ function ExerciseBlock({
 // A set the server has: static numbers, same columns, same weight treatment (DESIGN.md gives
 // the value in a completed set row 600). Turning back into plain text is the confirmation —
 // there is no motion vocabulary in v1 and a toast per set would be intolerable at 20 sets.
-function SavedRow({ set }: { set: SavedSet }) {
+function SavedRow({ last, set }: { last: LastSet | undefined; set: SavedSet }) {
   return (
     <div className={LOG_ROW_GRID}>
       <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
-      <LastCell />
+      <LastCell set={last} />
       <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
         {set.weightKg === null ? '—' : set.weightKg}
       </span>
@@ -547,13 +720,49 @@ function SavedRow({ set }: { set: SavedSet }) {
   )
 }
 
-function LastCell() {
-  return (
-    <span className="grid gap-1">
-      <span className="text-xs text-muted">Last</span>
+// Rank 2 (DESIGN.md §Log row): the weight × reps she hit last time, readable at arm's length
+// mid-set without tapping anything. This is the feature that beats the paper notebook, so it
+// gets --text-base / 600 / --ink and its own column — never a subtitle, a tooltip, an icon, or
+// label styling, and never behind a tap. The × stays --muted at the same size as the numbers
+// and is never bolded to balance the row; the numbers balance it.
+//
+// The label is visually hidden here and shown once as a column header instead. It cannot simply
+// be dropped: a column header sits in a sibling row with no programmatic association to these
+// cells, so a screen reader moving down the block would announce a bare "72.5 × 8" with nothing
+// saying what it is. Hidden text costs sighted users nothing and keeps that context.
+function LastCell({ set }: { set: LastSet | undefined }) {
+  const value =
+    set === undefined ? (
+      // One dash, at --muted. Not "no data yet" copy — and it holds the row's place so the
+      // strip stays aligned to set number when last time ran to fewer sets than today.
       <span className="text-base font-semibold text-muted tabular-nums">&ndash;</span>
+    ) : (
+      <span className="text-base font-semibold text-ink tabular-nums">
+        {set.weightKg === null || set.weightKg === undefined ? (
+          // Bodyweight (weight_kg NULL, database.md). Reps alone: "– × 8" would read as a
+          // missing number rather than an absent one, and DESIGN.md gives no other glyph.
+          set.reps
+        ) : (
+          <>
+            {set.weightKg}
+            <span className="text-muted"> × </span>
+            {set.reps}
+          </>
+        )}
+      </span>
+    )
+
+  return (
+    <span>
+      <span className="sr-only">Last time </span>
+      {value}
     </span>
   )
+}
+
+/** Last time's set N, for this row's set N. Missing when she did fewer sets last time. */
+function lastTimeFor(lastSets: LastSet[] | null, setNumber: number): LastSet | undefined {
+  return lastSets?.find((candidate) => candidate.setNumber === setNumber)
 }
 
 // Rank 1 (DESIGN.md §Log row): --text-lg / 600 / --ink-bold, tabular-nums, digits right-aligned,
@@ -561,34 +770,30 @@ function LastCell() {
 //
 // type="text" with an inputMode rather than type="number": number inputs scroll-wheel their own
 // value, reject a locale's decimal comma, and put spinners inside a 44px target.
+//
+// The visible unit is in the block's header row. `name` still spells it out ("… weight in
+// kilograms") because the header is aria-hidden and this is the input's only accessible name.
 function NumberField({
   inputMode,
-  label,
   name,
   onChange,
   value,
 }: {
   inputMode: 'decimal' | 'numeric'
-  label: string
   name: string
   onChange: (value: string) => void
   value: string
 }) {
   return (
-    <span className="grid gap-1">
-      <span aria-hidden="true" className="text-xs text-muted">
-        {label}
-      </span>
-      <input
-        aria-label={name}
-        autoComplete="off"
-        className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge bg-surface px-2 text-right text-lg font-semibold text-ink-bold tabular-nums"
-        inputMode={inputMode}
-        onChange={(event) => onChange(event.target.value)}
-        type="text"
-        value={value}
-      />
-    </span>
+    <input
+      aria-label={name}
+      autoComplete="off"
+      className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge bg-surface px-2 text-right text-lg font-semibold text-ink-bold tabular-nums"
+      inputMode={inputMode}
+      onChange={(event) => onChange(event.target.value)}
+      type="text"
+      value={value}
+    />
   )
 }
 

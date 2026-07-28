@@ -1,5 +1,6 @@
 import type {
   HistoryResponse,
+  LastResponse,
   LoggedSetResponse,
   MeProgramWrapper,
   MeResponse,
@@ -81,6 +82,21 @@ async function readError(response: Response): Promise<ApiError> {
 // the endpoints now declare .Produces<T>(): before that, every response type was `unknown`
 // and each caller narrowed by hand.
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
+  return (await requestDetailed<T>(url, init)).body
+}
+
+/**
+ * As `request`, but keeps the status code.
+ *
+ * Only one caller needs it: POST /api/me/sessions answers 201 when it created the row and 200
+ * when it handed back an existing one (#98), and the difference decides whether the log screen
+ * has to read back what is already in that session. Kept as a status rather than mirrored into
+ * a `resumed` field on the body, because two sources for one fact eventually disagree.
+ */
+async function requestDetailed<T>(
+  url: string,
+  init: RequestInit = {},
+): Promise<{ body: T; status: number }> {
   let response: Response
   try {
     response = await fetch(url, {
@@ -99,7 +115,8 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     throw await readError(response)
   }
 
-  return (response.status === 204 ? null : await response.json()) as T
+  const body = (response.status === 204 ? null : await response.json()) as T
+  return { body, status: response.status }
 }
 
 /** POST /api/auth/magic-link. Always 202 whether or not the email exists (api.md #20). */
@@ -149,9 +166,22 @@ export function fetchMyProgram(): Promise<MeProgramWrapper> {
   return request<MeProgramWrapper>('/api/me/program')
 }
 
-/** POST /api/me/sessions. Creates the workout_sessions row. */
-export function createSession(body: PostApiMeSessionsData['body']): Promise<SessionResponse> {
-  return request<SessionResponse>('/api/me/sessions', { method: 'POST', body: JSON.stringify(body) })
+/**
+ * POST /api/me/sessions. Creates the workout_sessions row, or hands back the one that already
+ * exists for this (client, performed_on, program_day_id) — #98.
+ *
+ * `resumed` is the caller's cue that the row may already contain sets it knows nothing about.
+ * Ignoring it is how set numbering restarts at 1 on a second visit to the same day.
+ */
+export async function createSession(
+  body: PostApiMeSessionsData['body'],
+): Promise<{ session: SessionResponse; resumed: boolean }> {
+  const { body: session, status } = await requestDetailed<SessionResponse>('/api/me/sessions', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+  return { session, resumed: status === 200 }
 }
 
 /**
@@ -191,6 +221,19 @@ export function updateSessionComment(sessionId: string, comment: string | null):
  */
 export function fetchHistory(limit: number): Promise<HistoryResponse> {
   return request<HistoryResponse>(`/api/me/history?limit=${limit}`)
+}
+
+/**
+ * GET /api/me/last. The sets from the most recent session containing this exercise (#33).
+ *
+ * `{ mostRecent: null }` covers both "never done it" and "not yours" — the client-scoped join
+ * yields nothing either way, which is deliberate and means there is no branch to write here.
+ *
+ * Query params on this endpoint are snake_case; JSON bodies elsewhere are camelCase. That
+ * split is api.md #33's, not a slip.
+ */
+export function fetchLastForExercise(exerciseId: string): Promise<LastResponse> {
+  return request<LastResponse>(`/api/me/last?exercise_id=${encodeURIComponent(exerciseId)}`)
 }
 
 export async function loadSession(): Promise<Session> {
