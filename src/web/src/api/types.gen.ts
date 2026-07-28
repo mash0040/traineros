@@ -132,6 +132,7 @@ export type HistorySessionSummary = {
     id?: string;
     performedOn?: string;
     comment?: string | null;
+    programDayId?: string | null;
 };
 
 export type LastMostRecent = {

@@ -136,27 +136,56 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     setLoad('loading')
 
     async function boot() {
-      const wrapper = await fetchMyProgram()
+      // Fired together: the day comes from the program, today's session from history. Serialised
+      // they would add a round trip to every screen open, and both are needed before the first
+      // row can be numbered.
+      const [wrapper, history] = await Promise.all([
+        fetchMyProgram(),
+        // Non-fatal on its own. If there turns out to be no session, nothing was lost; if there
+        // is one, ensureSession's read-back still catches it at the first save. The mount-time
+        // restore is an optimisation over that path, not a replacement for it.
+        fetchHistory(HISTORY_PAGE).catch(() => null),
+      ])
+
       const draft = readDraft(performedOn, dayId)
 
-      // Guard 3. Only on a resume — a fresh workout has nothing to read back, and this is a
-      // request on the critical path of opening the screen.
-      let restored: Record<string, Block> = {}
-      if (draft?.sessionId != null) {
-        const history = await fetchHistory(HISTORY_PAGE)
-        restored = rebuildBlocks(history.items ?? [], draft.sessionId, wrapper.program ?? null, dayId)
+      // A draft naming a session is proof the row exists. Not being able to read what is in it
+      // means logging blind into it, which is how duplicate set numbers get written — so that
+      // case stays fatal rather than falling through to an empty screen.
+      if (draft?.sessionId != null && history === null) {
+        throw new ApiError(0, 'network', 'Something went wrong. Try again.')
       }
+
+      const items = history?.items ?? []
+
+      // #102: history's session summary now carries program_day_id, so today's session for this
+      // day is identifiable from a read. Before that, POST /api/me/sessions was the only route
+      // that resolved the triple, which is why the restore could not happen until the first save
+      // — and why, until it did, the screen had no session id for #46's self-session filter to
+      // compare against and showed her own earlier sets from today under the Last header.
+      const resumedSession = draft?.sessionId ?? findSessionForDay(items, performedOn, dayId)
+
+      const restored =
+        resumedSession === null
+          ? {}
+          : rebuildBlocks(items, resumedSession, wrapper.program ?? null, dayId)
+
+      // The note already on the row, when there is no local draft to prefer. Without it a client
+      // reopening a finished day sees an empty box, and anything she types there replaces a note
+      // she was never shown.
+      const storedComment =
+        items.find((item) => item.session?.id === resumedSession)?.session?.comment ?? ''
 
       if (cancelled) {
         return
       }
 
       setProgram(wrapper.program ?? null)
-      setSessionId(draft?.sessionId ?? null)
-      sessionIdRef.current = draft?.sessionId ?? null
-      setComment(draft?.comment ?? '')
+      setSessionId(resumedSession)
+      sessionIdRef.current = resumedSession
+      setComment(draft?.comment ?? storedComment)
       setBlocks(restored)
-      setResumed(draft !== null && (draft.comment !== '' || draft.sessionId !== null))
+      setResumed(resumedSession !== null || (draft !== null && draft.comment !== ''))
       setHydrated(true)
       setLoad('ready')
     }
@@ -864,6 +893,40 @@ function prefillFrom(set: SavedSet): Pending {
     saving: false,
     failure: null,
   }
+}
+
+/**
+ * Today's session for this program day, if one is already in history (#102).
+ *
+ * Matched on the triple #98 made unique — client (implicit, the endpoint is client-scoped),
+ * performed_on, program_day_id — so the first hit is the only hit.
+ *
+ * Freestyle days return null: #98 deliberately leaves program_day_id NULL unconstrained, so
+ * several freestyle sessions can share a date and there is no single row to resume. The log
+ * screen never reaches that state today (a null day renders the not-in-your-program state
+ * instead), but answering "I don't know" is the only correct answer if it ever does.
+ */
+function findSessionForDay(
+  items: HistoryItem[],
+  performedOn: string,
+  dayId: string | null,
+): string | null {
+  if (dayId === null) {
+    return null
+  }
+
+  for (const item of items) {
+    const session = item.session
+    if (
+      session?.id !== undefined &&
+      session.performedOn === performedOn &&
+      session.programDayId === dayId
+    ) {
+      return session.id
+    }
+  }
+
+  return null
 }
 
 /**

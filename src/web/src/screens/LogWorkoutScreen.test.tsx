@@ -644,6 +644,169 @@ describe('LogWorkoutScreen', () => {
     expect(setPosts(fetchMock)[0].body).toMatchObject({ setNumber: 3 })
   })
 
+  /** History as it looks after two sets were logged into today's session for day-1. */
+  function todaysSessionHistory(comment: string | null = null): HistoryResponse {
+    const session = {
+      id: SESSION_ID,
+      performedOn: todayForClient(),
+      comment,
+      programDayId: 'day-1',
+    }
+    return {
+      items: [
+        {
+          id: 'set-2', setNumber: 2, weightKg: 102.5, reps: 8, loggedAt: '2026-07-28T12:05:00Z',
+          session, exercise: { id: 'ex-1', name: 'Back Squat' },
+        },
+        {
+          id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-28T12:00:00Z',
+          session, exercise: { id: 'ex-1', name: 'Back Squat' },
+        },
+      ],
+      nextCursor: null,
+    }
+  }
+
+  it('restores today’s session on mount, with no draft and without writing', async () => {
+    // #102: program_day_id in history's session summary makes today's session identifiable
+    // from a read. Before it, POST was the only route that resolved the triple, so the screen
+    // could not know the row existed until it had already written to it.
+    const fetchMock = mockApi({ history: todaysSessionHistory() })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByLabelText(/set 3 weight/)).toBeInTheDocument())
+    expect(squat.getByText('102.5')).toBeInTheDocument()
+    expect(screen.getByText('Picking up where you left off.')).toBeInTheDocument()
+
+    // Nothing was created to find that out.
+    expect(sessionPosts(fetchMock)).toHaveLength(0)
+  })
+
+  it('does not show today’s own sets as last time before the first save', async () => {
+    // The seam #102 closes. #46 filters last-time results belonging to the current session, but
+    // that filter needs a session id — and until the mount-time restore the screen had none
+    // before the first save. So a client reopening mid-workout saw her own earlier sets from
+    // today sitting under the Last header.
+    mockApi({
+      history: todaysSessionHistory(),
+      last: {
+        'ex-1': {
+          mostRecent: {
+            sessionId: SESSION_ID,
+            performedOn: todayForClient(),
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+            sets: [{ id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-28T12:00:00Z' }],
+          },
+        },
+      },
+    })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByLabelText(/set 3 weight/)).toBeInTheDocument())
+
+    // Three rows, every Last cell still a dash — her own sets are shown as her own sets, in
+    // the weight column, and not a second time as history.
+    await waitFor(() => expect(lastCells(squat)).toHaveLength(3))
+    for (const cell of lastCells(squat)) {
+      expect(cell).toHaveTextContent(/^Last time\s*–$/)
+    }
+  })
+
+  it('does not resume another program day logged the same afternoon', async () => {
+    // The case program_day_id exists to answer, and the reason matching on date alone is not
+    // enough: #98 treats Day A in the morning and Day B in the evening as two sessions, so a
+    // date is not an identity. Opening Lower must not adopt Upper's row.
+    const fetchMock = mockApi({
+      history: {
+        items: [
+          {
+            id: 'other', setNumber: 1, weightKg: 40, reps: 12, loggedAt: '2026-07-28T09:00:00Z',
+            session: {
+              id: 'session-upper',
+              performedOn: todayForClient(),
+              comment: 'Upper done early.',
+              programDayId: 'day-2',
+            },
+            exercise: { id: 'ex-2', name: 'Leg Curl' },
+          },
+        ],
+        nextCursor: null,
+      },
+    })
+    renderScreen('day-1')
+
+    const squat = await block('Back Squat')
+    // A fresh block: set 1, nothing restored, nothing resumed.
+    expect(squat.getByLabelText(/set 1 weight/)).toBeInTheDocument()
+    expect(screen.queryByText('Picking up where you left off.')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Note for your trainer')).toHaveValue('')
+
+    // And the first set creates Lower's own session rather than writing into Upper's.
+    await logSet('Back Squat', '100', '8')
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+    expect(sessionPosts(fetchMock)).toHaveLength(1)
+    expect(setPosts(fetchMock)[0].body).toMatchObject({ setNumber: 1 })
+  })
+
+  it('brings back the note already on the resumed session', async () => {
+    // Otherwise she reopens to an empty box and anything she types replaces a note she was
+    // never shown.
+    mockApi({ history: todaysSessionHistory('Knee ached on set 2.') })
+    renderScreen()
+
+    expect(await screen.findByLabelText('Note for your trainer')).toHaveValue('Knee ached on set 2.')
+  })
+
+  it('falls back to resuming at first save when history cannot be read', async () => {
+    // The mount-time restore is an optimisation on top of #45's path, not a replacement. With
+    // no draft there is nothing proving a session exists, so a failed history read must not
+    // take the screen down — ensureSession still catches it at the first save.
+    let allowHistory = false
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body))
+
+      if (url === '/api/me/program') {
+        return { ok: true, status: 200, json: async () => program }
+      }
+      if (url.startsWith('/api/me/last')) {
+        return { ok: true, status: 200, json: async () => ({ mostRecent: null }) }
+      }
+      if (url.startsWith('/api/me/history')) {
+        if (!allowHistory) {
+          throw new TypeError('Failed to fetch')
+        }
+        return { ok: true, status: 200, json: async () => todaysSessionHistory() }
+      }
+      if (url === '/api/me/sessions' && method === 'POST') {
+        allowHistory = true
+        return { ok: true, status: 200, json: async () => ({ id: SESSION_ID }) }
+      }
+      if (url.endsWith('/sets') && method === 'POST') {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ id: 'new', setNumber: body.setNumber, weightKg: body.weightKg, reps: body.reps }),
+        }
+      }
+      throw new Error(`unexpected ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderScreen()
+    // The screen renders rather than refusing: nothing proved a session existed.
+    const squat = await block('Back Squat')
+    expect(squat.getByLabelText(/set 1 weight/)).toBeInTheDocument()
+
+    await logSet('Back Squat', '105', '6')
+
+    // #45's read-back still numbers it correctly.
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+    expect(setPosts(fetchMock)[0].body).toMatchObject({ setNumber: 3 })
+  })
+
   it('continues set numbering after finishing and reopening the same day', async () => {
     // Reported: 31 sets in one session with set_number cycling 1-4 seven times. Finish clears
     // the draft, so a restart has no session id to resume from, the read-back never runs, and
@@ -734,13 +897,14 @@ describe('LogWorkoutScreen', () => {
         performedOn: '2020-01-01', programDayId: 'day-1', comment: 'Old note.', sessionId: 'stale-session',
       }),
     )
-    const fetchMock = mockApi()
+    mockApi()
     renderScreen()
 
     expect(await screen.findByLabelText('Note for your trainer')).toHaveValue('')
     expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
-    // No history read, because there is no session to resume.
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/me/history'))).toHaveLength(0)
+    // History is read on every mount since #102, but it holds nothing for this day, so no
+    // session is resumed from either source.
+    expect(screen.queryByText('Picking up where you left off.')).not.toBeInTheDocument()
   })
 
   // -- Finishing --
