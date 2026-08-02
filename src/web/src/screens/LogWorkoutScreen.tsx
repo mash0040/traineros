@@ -11,6 +11,7 @@ import type {
 import {
   ApiError,
   createSession,
+  deleteSet,
   fetchHistory,
   fetchLastForExercise,
   fetchMyProgram,
@@ -467,6 +468,37 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     }
   }
 
+  // Mirrors the server's renumbering (#105) onto the local copy: sets above the removed one
+  // shift down, so the block stays 1..n and the next set number — saved.length + 1 — keeps
+  // agreeing with what is actually in the row. Throws on failure; the block renders the error.
+  async function onDeleteSet(prescriptionId: string, setId: string) {
+    await deleteSet(setId)
+
+    setBlocks((previous) => {
+      const current = previous[prescriptionId]
+      const removed = current?.saved.find((candidate) => candidate.id === setId)
+      if (current === undefined || removed === undefined) {
+        return previous
+      }
+
+      return {
+        ...previous,
+        [prescriptionId]: {
+          ...current,
+          saved: current.saved
+            .filter((candidate) => candidate.id !== setId)
+            .map((candidate) =>
+              candidate.setNumber > removed.setNumber
+                ? { ...candidate, setNumber: candidate.setNumber - 1 }
+                : candidate,
+            ),
+          // The pending row is left exactly as it is. She may be part-way through typing the
+          // next set while cleaning up a mistake in an earlier one.
+        },
+      }
+    })
+  }
+
   async function onFinish() {
     if (finishing) {
       return
@@ -585,6 +617,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
               onChangeWeight={(weight) =>
                 updatePending(prescription.id ?? '', { weight, dirty: true, failure: null })
               }
+              onDelete={(setId) => onDeleteSet(prescription.id ?? '', setId)}
               onSave={() => void onSaveSet(prescription)}
               prescription={prescription}
             />
@@ -639,6 +672,7 @@ function ExerciseBlock({
   lastSets,
   onChangeReps,
   onChangeWeight,
+  onDelete,
   onSave,
   prescription,
 }: {
@@ -646,6 +680,7 @@ function ExerciseBlock({
   lastSets: LastSet[] | null
   onChangeReps: (value: string) => void
   onChangeWeight: (value: string) => void
+  onDelete: (setId: string) => Promise<void>
   onSave: () => void
   prescription: PrescriptionView
 }) {
@@ -653,6 +688,33 @@ function ExerciseBlock({
   const name = exercise?.name ?? 'Exercise'
   const target = targetLine(prescription)
   const nextSetNumber = block.saved.length + 1
+
+  // Which saved row has its actions showing. One at a time, per exercise.
+  const [openSetId, setOpenSetId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteFailure, setDeleteFailure] = useState<Failure | null>(null)
+
+  async function remove(setId: string) {
+    if (deleting) {
+      return
+    }
+
+    setDeleting(true)
+    setDeleteFailure(null)
+    try {
+      await onDelete(setId)
+      setOpenSetId(null)
+    } catch (caught) {
+      setDeleteFailure(classify(caught))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  function toggle(setId: string) {
+    setDeleteFailure(null)
+    setOpenSetId((previous) => (previous === setId ? null : setId))
+  }
 
   return (
     // Labelled so the whole block is announced as a unit, and so a test can scope to one
@@ -685,7 +747,16 @@ function ExerciseBlock({
         </div>
 
         {block.saved.map((set) => (
-          <SavedRow key={set.id} last={lastTimeFor(lastSets, set.setNumber)} set={set} />
+          <SavedRow
+            deleteFailure={openSetId === set.id ? deleteFailure : null}
+            deleting={deleting}
+            key={set.id}
+            last={lastTimeFor(lastSets, set.setNumber)}
+            onDelete={() => void remove(set.id)}
+            onToggle={() => toggle(set.id)}
+            open={openSetId === set.id}
+            set={set}
+          />
         ))}
 
         <div className={LOG_ROW_GRID}>
@@ -736,17 +807,92 @@ function ExerciseBlock({
 // A set the server has: static numbers, same columns, same weight treatment (DESIGN.md gives
 // the value in a completed set row 600). Turning back into plain text is the confirmation —
 // there is no motion vocabulary in v1 and a toast per set would be intolerable at 20 sets.
-function SavedRow({ last, set }: { last: LastSet | undefined; set: SavedSet }) {
+//
+// The row is also the way to remove that set (#105). Two decisions behind that shape:
+//
+//   * No confirmation dialog. DESIGN.md calls the modal the lazy first answer, and a dialog for
+//     a same-day typo is heavier than the mistake. Revealing is not destroying, so the first tap
+//     is free — which is what lets the second one be immediate.
+//   * The whole row is the target, not a small × inside it. A delete glyph sized to be safe on
+//     a gym floor would dominate a row it is not the point of, and sized to fit would be a
+//     mis-tap waiting to happen. The destructive control appears *below* the row instead, so a
+//     second tap in the same place collapses it rather than landing on Delete — the finger has
+//     to move to do damage.
+function SavedRow({
+  deleteFailure,
+  deleting,
+  last,
+  onDelete,
+  onToggle,
+  open,
+  set,
+}: {
+  deleteFailure: Failure | null
+  deleting: boolean
+  last: LastSet | undefined
+  onDelete: () => void
+  onToggle: () => void
+  open: boolean
+  set: SavedSet
+}) {
   return (
-    <div className={LOG_ROW_GRID}>
-      <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
-      <LastCell set={last} />
-      <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
-        {set.weightKg === null ? '—' : set.weightKg}
-      </span>
-      <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
+    <div className="grid gap-2">
+      {/* Labelled rather than read from its cells: "1 Last time – 100 8" is not a sentence, and
+          the row's job here is to be one announceable thing that opens. */}
+      <button
+        aria-expanded={open}
+        aria-label={savedRowLabel(set, last)}
+        className={`${LOG_ROW_GRID} w-full rounded-sm text-left ${open ? 'bg-surface-sunk' : ''}`}
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
+        <LastCell set={last} />
+        <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
+          {set.weightKg === null ? '—' : set.weightKg}
+        </span>
+        <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
+      </button>
+
+      {open && (
+        <div className="grid gap-2">
+          {deleteFailure !== null && (
+            <p className="text-sm text-danger" role="alert">
+              {deleteFailure.message}
+            </p>
+          )}
+          <button
+            className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge px-4 text-base font-semibold text-danger disabled:text-muted"
+            disabled={deleting}
+            onClick={onDelete}
+            type="button"
+          >
+            {deleting ? 'Removing' : `Remove set ${set.setNumber}`}
+          </button>
+        </div>
+      )}
     </div>
   )
+}
+
+// What the row announces. Includes last-time because the button's own contents stop being read
+// separately once it carries a label, and that number is the reason the column exists.
+function savedRowLabel(set: SavedSet, last: LastSet | undefined): string {
+  const performed =
+    set.weightKg === null
+      ? `${set.reps} reps`
+      : `${set.weightKg} kilograms by ${set.reps} reps`
+
+  if (last === undefined) {
+    return `Set ${set.setNumber}, ${performed}`
+  }
+
+  const previously =
+    last.weightKg === null || last.weightKg === undefined
+      ? `${last.reps} reps`
+      : `${last.weightKg} kilograms by ${last.reps} reps`
+
+  return `Set ${set.setNumber}, ${performed}. Last time ${previously}`
 }
 
 // Rank 2 (DESIGN.md §Log row): the weight × reps she hit last time, readable at arm's length
