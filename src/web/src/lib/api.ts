@@ -201,6 +201,16 @@ export function logSet(
   })
 }
 
+/**
+ * DELETE /api/me/sets/:id (#105). Same-day window on logged_at, 204 on success.
+ *
+ * The server closes the gap it leaves: sets above the deleted one shift down, so numbering
+ * stays 1..n. Callers holding a local copy have to do the same to it.
+ */
+export async function deleteSet(setId: string): Promise<void> {
+  await request<null>(`/api/me/sets/${encodeURIComponent(setId)}`, { method: 'DELETE' })
+}
+
 /** PATCH /api/me/sessions/:id (#96). Comment only; null clears it. Same-day window on created_at. */
 export function updateSessionComment(sessionId: string, comment: string | null): Promise<SessionResponse> {
   const body: PatchApiMeSessionsByIdData['body'] = { comment }

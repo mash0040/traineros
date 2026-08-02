@@ -39,6 +39,9 @@ public sealed class MeSetPatchTestApp : IAsyncLifetime
     public Guid ClientBId { get; } = Guid.NewGuid();
 
     public Guid ExerciseAId { get; } = Guid.NewGuid();
+
+    /// A's second exercise. Renumbering is per-exercise, so proving that needs two in one session.
+    public Guid ExerciseA_OtherId { get; } = Guid.NewGuid();
     public Guid ExerciseBId { get; } = Guid.NewGuid();
 
     public Guid SessionAId { get; } = Guid.NewGuid();
@@ -113,6 +116,11 @@ public sealed class MeSetPatchTestApp : IAsyncLifetime
             });
             db.Add(new Exercise
             {
+                Id = ExerciseA_OtherId, TrainerId = TrainerAId, Name = "Overhead Press",
+                IsActive = true, CreatedAt = Clock.Now,
+            });
+            db.Add(new Exercise
+            {
                 Id = ExerciseBId, TrainerId = TrainerBId, Name = "B's Deadlift",
                 IsActive = true, CreatedAt = Clock.Now,
             });
@@ -165,6 +173,47 @@ public sealed class MeSetPatchTestApp : IAsyncLifetime
             db.SaveChanges();
             return set.Id;
         });
+    }
+
+    /// A run of consecutive sets numbered 1..count against one exercise, for the renumbering
+    /// tests. Its own session so a test can count rows without other tests' sets in the way.
+    public (Guid SessionId, List<Guid> SetIds) SeedRunForClientA(
+        int count, DateTimeOffset loggedAt, Guid? exerciseId = null)
+    {
+        return WithDb(db =>
+        {
+            var sessionId = Guid.NewGuid();
+            db.Add(new WorkoutSession
+            {
+                Id = sessionId, TrainerId = TrainerAId, ClientId = ClientAId,
+                PerformedOn = DateOnly.FromDateTime(loggedAt.UtcDateTime), CreatedAt = loggedAt,
+            });
+
+            var ids = new List<Guid>();
+            for (var number = 1; number <= count; number++)
+            {
+                var set = new LoggedSet
+                {
+                    Id = Guid.NewGuid(), SessionId = sessionId, ExerciseId = exerciseId ?? ExerciseAId,
+                    SetNumber = number, WeightKg = 100m, Reps = number, LoggedAt = loggedAt,
+                };
+                db.Add(set);
+                ids.Add(set.Id);
+            }
+
+            db.SaveChanges();
+            return (sessionId, ids);
+        });
+    }
+
+    public List<(Guid Id, int SetNumber, int Reps)> SetsIn(Guid sessionId, Guid exerciseId)
+    {
+        return WithDb(db => db.LoggedSetsForClient(ClientAId)
+            .Where(s => s.SessionId == sessionId && s.ExerciseId == exerciseId)
+            .OrderBy(s => s.SetNumber)
+            .AsNoTracking()
+            .Select(s => new ValueTuple<Guid, int, int>(s.Id, s.SetNumber, s.Reps))
+            .ToList());
     }
 
     public void WithDb(Action<TrainerOsDbContext> action) => WithDb(db =>
@@ -399,6 +448,172 @@ public class MeSetPatchTests : IClassFixture<MeSetPatchTestApp>
         });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // -- DELETE /api/me/sets/:id (#105) --
+
+    [Fact]
+    public async Task Anonymous_delete_is_401()
+    {
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Delete, $"/api/me/sets/{setId}", null));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trainer_role_delete_is_404()
+    {
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{setId}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Client_deletes_own_set_same_day()
+    {
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{setId}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.False(_app.WithDb(db => db.LoggedSetsForClient(_app.ClientAId).Any(s => s.Id == setId)));
+    }
+
+    [Fact]
+    public async Task Client_A_deleting_client_Bs_set_is_404()
+    {
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{_app.SetBId}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.NotNull(_app.WithDb(db => db.Find<LoggedSet>(_app.SetBId)));
+    }
+
+    [Fact]
+    public async Task Delete_nonexistent_id_is_404_indistinguishable()
+    {
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var madeUp = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{Guid.NewGuid()}", session);
+        var crossClient = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{_app.SetBId}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, madeUp.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, crossClient.StatusCode);
+        Assert.Equal(
+            await madeUp.Content.ReadAsStringAsync(),
+            await crossClient.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Delete_after_local_midnight_is_404_and_keeps_the_set()
+    {
+        var loggedAt = new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero);
+        var setId = _app.SeedSetForClientA(loggedAt);
+        _app.Clock.Now = new DateTimeOffset(2026, 7, 22, 12, 0, 0, TimeSpan.Zero);
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{setId}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("not_found", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.True(_app.WithDb(db => db.LoggedSetsForClient(_app.ClientAId).Any(s => s.Id == setId)));
+    }
+
+    [Fact]
+    public async Task Delete_window_is_client_local_not_utc()
+    {
+        // 22:00 UTC = 18:00 local; deleted at 03:00 UTC next day = 23:00 local the same day.
+        // A UTC-day rule refuses this; the client-local rule must allow it.
+        var setId = _app.SeedSetForClientA(new DateTimeOffset(2026, 7, 21, 22, 0, 0, TimeSpan.Zero));
+        _app.Clock.Now = new DateTimeOffset(2026, 7, 22, 3, 0, 0, TimeSpan.Zero);
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{setId}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    // -- Renumbering --
+
+    [Fact]
+    public async Task Deleting_a_middle_set_closes_the_gap()
+    {
+        // The decision this endpoint turns on. Deleting the accidental duplicate that api.md
+        // §Cross-cutting names must leave 1..n, not "set 1, set 3" — which reads as a lost set
+        // rather than a corrected one, and misaligns the log screen's last-time strip.
+        var (sessionId, ids) = _app.SeedRunForClientA(4, FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{ids[1]}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var remaining = _app.SetsIn(sessionId, _app.ExerciseAId);
+        Assert.Equal(new[] { 1, 2, 3 }, remaining.Select(s => s.SetNumber).ToArray());
+        // Identity preserved, not just the numbering: sets 3 and 4 shifted down, they were not
+        // rewritten into each other. Reps carry the original set's ordinal from the seed.
+        Assert.Equal(new[] { ids[0], ids[2], ids[3] }, remaining.Select(s => s.Id).ToArray());
+        Assert.Equal(new[] { 1, 3, 4 }, remaining.Select(s => s.Reps).ToArray());
+    }
+
+    [Fact]
+    public async Task Deleting_the_last_set_renumbers_nothing()
+    {
+        var (sessionId, ids) = _app.SeedRunForClientA(3, FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        await SendAsync(HttpMethod.Delete, $"/api/me/sets/{ids[2]}", session);
+
+        var remaining = _app.SetsIn(sessionId, _app.ExerciseAId);
+        Assert.Equal(new[] { 1, 2 }, remaining.Select(s => s.SetNumber).ToArray());
+        Assert.Equal(new[] { ids[0], ids[1] }, remaining.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task Renumbering_does_not_touch_another_exercise_in_the_same_session()
+    {
+        // Set numbers are per-exercise. Deleting a squat set must leave the presses alone.
+        var (sessionId, squatIds) = _app.SeedRunForClientA(3, FakeClock.BaseNow);
+        _app.WithDb(db =>
+        {
+            for (var number = 1; number <= 3; number++)
+            {
+                db.Add(new LoggedSet
+                {
+                    Id = Guid.NewGuid(), SessionId = sessionId, ExerciseId = _app.ExerciseA_OtherId,
+                    SetNumber = number, WeightKg = 50m, Reps = number, LoggedAt = FakeClock.BaseNow,
+                });
+            }
+            db.SaveChanges();
+        });
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        await SendAsync(HttpMethod.Delete, $"/api/me/sets/{squatIds[0]}", session);
+
+        Assert.Equal(new[] { 1, 2 }, _app.SetsIn(sessionId, _app.ExerciseAId).Select(s => s.SetNumber).ToArray());
+        Assert.Equal(
+            new[] { 1, 2, 3 },
+            _app.SetsIn(sessionId, _app.ExerciseA_OtherId).Select(s => s.SetNumber).ToArray());
+    }
+
+    [Fact]
+    public async Task A_refused_delete_renumbers_nothing()
+    {
+        // The shift happens after the row is gone and inside the same transaction, so a delete
+        // that never happens must not leave the numbering rearranged behind it.
+        var loggedAt = new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero);
+        var (sessionId, ids) = _app.SeedRunForClientA(3, loggedAt);
+        _app.Clock.Now = new DateTimeOffset(2026, 7, 22, 12, 0, 0, TimeSpan.Zero);
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await SendAsync(HttpMethod.Delete, $"/api/me/sets/{ids[0]}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(new[] { 1, 2, 3 }, _app.SetsIn(sessionId, _app.ExerciseAId).Select(s => s.SetNumber).ToArray());
     }
 
     // Contrast: if the same-day rule used UTC instead of client local, the log at

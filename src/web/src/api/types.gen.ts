@@ -675,6 +675,24 @@ export type PatchApiMeSessionsByIdResponses = {
 
 export type PatchApiMeSessionsByIdResponse = PatchApiMeSessionsByIdResponses[keyof PatchApiMeSessionsByIdResponses];
 
+export type DeleteApiMeSetsByIdData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/me/sets/{id}';
+};
+
+export type DeleteApiMeSetsByIdResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type DeleteApiMeSetsByIdResponse = DeleteApiMeSetsByIdResponses[keyof DeleteApiMeSetsByIdResponses];
+
 export type PatchApiMeSetsByIdData = {
     body: UpdateSetRequest;
     path: {

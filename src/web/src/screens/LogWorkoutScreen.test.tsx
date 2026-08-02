@@ -79,6 +79,7 @@ describe('LogWorkoutScreen', () => {
       holdLast?: Promise<void>
       last?: Record<string, LastResponse>
       onCreateSession?: (attempt: number) => Reply
+      onDeleteSet?: (url: string) => Reply
       onLast?: (exerciseId: string) => Reply
       onLogSet?: (attempt: number) => Reply
       onPatch?: (attempt: number) => Reply
@@ -142,6 +143,10 @@ describe('LogWorkoutScreen', () => {
             201,
           )
         return send(reply)
+      }
+
+      if (method === 'DELETE') {
+        return send(options.onDeleteSet?.(url) ?? { ok: true, status: 204, body: null })
       }
 
       if (method === 'PATCH') {
@@ -516,6 +521,134 @@ describe('LogWorkoutScreen', () => {
     expect(setPosts(fetchMock)[1].body).toMatchObject({ setNumber: 2, weightKg: 100, reps: 8 })
     // Only one session for both.
     expect(sessionPosts(fetchMock)).toHaveLength(1)
+  })
+
+  // -- Removing a set (#105) --
+
+  const deletes = (f: ReturnType<typeof mockApi>) => callsTo(f, 'DELETE', /\/api\/me\/sets\//)
+
+  /** Logs `count` sets of Back Squat and returns the block. */
+  async function logRun(count: number) {
+    await logSet('Back Squat', '100', '8')
+    const squat = await block('Back Squat')
+    for (let next = 2; next <= count; next += 1) {
+      await waitFor(() => expect(squat.getByLabelText(new RegExp(`set ${next} weight`))).toBeInTheDocument())
+      await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    }
+    await waitFor(() =>
+      expect(squat.getByLabelText(new RegExp(`set ${count + 1} weight`))).toBeInTheDocument(),
+    )
+    return squat
+  }
+
+  it('needs two deliberate taps to remove a set, and no dialog', async () => {
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    // Nothing destructive is on screen until the row is opened: the first tap cannot delete.
+    expect(squat.queryByRole('button', { name: /Remove set/ })).not.toBeInTheDocument()
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    expect(squat.getByRole('button', { name: 'Remove set 1' })).toBeInTheDocument()
+    // No dialog stands between her and the fix.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 1' }))
+
+    await waitFor(() => expect(deletes(fetchMock)).toHaveLength(1))
+    expect(deletes(fetchMock)[0].url).toBe('/api/me/sets/set-1')
+  })
+
+  it('closes the row again on a second tap in the same place', async () => {
+    // The safety property. The destructive control sits below the row, so tapping twice where
+    // she just tapped collapses it rather than removing the set — her finger has to move.
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    const row = squat.getByRole('button', { name: /^Set 1,/ })
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(squat.queryByRole('button', { name: /Remove set/ })).not.toBeInTheDocument()
+    expect(deletes(fetchMock)).toHaveLength(0)
+  })
+
+  it('closes the numbering gap after removing a middle set', async () => {
+    // Mirrors the server's renumbering. Left alone, the block would read "1, 3" after fixing a
+    // double-tap, and the next set would be numbered 3 again — a collision.
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(3)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 2,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 2' }))
+
+    await waitFor(() => expect(deletes(fetchMock)).toHaveLength(1))
+    // Two rows left, numbered 1 and 2 — and the pending row follows them at 3.
+    await waitFor(() => expect(squat.getByLabelText(/set 3 weight/)).toBeInTheDocument())
+    expect(squat.getByRole('button', { name: /^Set 1,/ })).toBeInTheDocument()
+    expect(squat.getByRole('button', { name: /^Set 2,/ })).toBeInTheDocument()
+    expect(squat.queryByRole('button', { name: /^Set 3,/ })).not.toBeInTheDocument()
+
+    // The next set goes in at 3, not back at 3-that-already-exists.
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(4))
+    expect(setPosts(fetchMock)[3].body).toMatchObject({ setNumber: 3 })
+  })
+
+  it('keeps the set and says so when removing it fails', async () => {
+    // Same split as every other write on this screen: unreachable is worth another tap, a
+    // refusal is not. A set that is still there must not look deleted.
+    const fetchMock = mockApi({ onDeleteSet: () => 'network' })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(2)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 1' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent('No connection.')
+    expect(squat.getByRole('button', { name: /^Set 1,/ })).toBeInTheDocument()
+    expect(squat.getByRole('button', { name: /^Set 2,/ })).toBeInTheDocument()
+    // Still open, so the retry is one tap away.
+    expect(squat.getByRole('button', { name: 'Remove set 1' })).toBeEnabled()
+    expect(deletes(fetchMock)).toHaveLength(1)
+  })
+
+  it('reports what the server said when it refuses to remove a set', async () => {
+    // Past the same-day window the API answers 404, the same shape as a set that never existed.
+    mockApi({ onDeleteSet: () => rejected(404, 'not_found', 'Not Found') })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 1' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent('Not Found')
+    expect(squat.queryByText(/No connection/)).not.toBeInTheDocument()
+    expect(squat.getByRole('button', { name: /^Set 1,/ })).toBeInTheDocument()
+  })
+
+  it('announces the row with its numbers rather than its cells', async () => {
+    mockApi({ last: { 'ex-1': squatLast } })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    // The visible cells read "1 Last time 72.5 × 8 100 8", which is not a sentence. The label
+    // carries the same facts in an order that is, including last time — the button's contents
+    // stop being announced separately once it has one.
+    expect(
+      squat.getByRole('button', { name: 'Set 1, 100 kilograms by 8 reps. Last time 72.5 kilograms by 8 reps' }),
+    ).toBeInTheDocument()
   })
 
   // -- Failure handling on a set write --

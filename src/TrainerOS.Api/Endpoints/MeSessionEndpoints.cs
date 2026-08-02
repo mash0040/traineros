@@ -66,6 +66,11 @@ public static class MeSessionEndpoints
         var meSets = api.MapGroup("/me/sets").RequireClient();
         meSets.MapPatch("/{id:guid}", UpdateSet)
             .Produces<LoggedSetResponse>();
+        meSets.MapDelete("/{id:guid}", DeleteSet)
+            // No body: the caller already knows which set it asked to remove, and the rows it
+            // renumbers are derivable from that. 404 covers not-yours, never-existed, and
+            // past-the-window alike.
+            .Produces(StatusCodes.Status204NoContent);
         return api;
     }
 
@@ -394,6 +399,71 @@ public static class MeSessionEndpoints
         return Results.Ok(new LoggedSetResponse(
             set.Id, set.SessionId, set.ExerciseId, set.ProgramDayExerciseId,
             set.SetNumber, set.WeightKg, set.Reps, set.LoggedAt));
+    }
+
+    // DELETE /api/me/sets/:id — remove a set logged by mistake.
+    //
+    // The motivating case is written into api.md §Cross-cutting: POST /sessions/:id/sets is not
+    // idempotent, "double-tap creates a duplicate set the client can delete same-day". Same
+    // ownership and same window as the patch beside it — a set that is not hers, never existed,
+    // or was logged yesterday all answer 404, so nothing here is an existence oracle.
+    //
+    // Renumbering, decided: sets above the deleted one shift down, so a session's set numbers
+    // stay 1..n with no gaps.
+    //
+    // The alternative — leave a gap, treat set_number as a label rather than an index — would be
+    // right if the number were an identifier, but it is not one. PATCH already lets a client
+    // rewrite it, /api/me/last groups by it, and the log screen aligns its last-time strip on
+    // it, so a gap silently misaligns last week's set 2 against this week's set 3. And the case
+    // this endpoint exists for is deleting an accidental duplicate: finishing that fix and being
+    // left looking at "set 1, set 3" reads as a lost set rather than a corrected one.
+    private static async Task<IResult> DeleteSet(
+        Guid id,
+        HttpContext http,
+        TrainerOsDbContext db,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var client = http.GetCurrentUser()!;
+
+        var set = await db.LoggedSetsForClient(client.Id)
+            .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
+        if (set is null)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Same-day window in the client's own timezone, measured on logged_at — the entry event,
+        // per #32. Deleting a set from last week is history revision, not a typo fix.
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(client.Timezone);
+        var loggedLocal = TimeZoneInfo.ConvertTime(set.LoggedAt, tz);
+        var todayLocal = TimeZoneInfo.ConvertTime(clock.GetUtcNow(), tz);
+        if (DateOnly.FromDateTime(loggedLocal.DateTime) != DateOnly.FromDateTime(todayLocal.DateTime))
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Two writes, so the transaction is doing real work: a crash between them would leave
+        // the gap this endpoint exists to avoid.
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        db.Remove(set);
+        await db.SaveChangesAsync(cancellationToken);
+
+        // Scoped to this exercise within this session: set numbers are per-exercise, so deleting
+        // a squat set must not renumber the presses logged after it. Still routed through the
+        // client-scoped query, so the shift cannot reach another client's rows.
+        await db.LoggedSetsForClient(client.Id)
+            .Where(s => s.SessionId == set.SessionId
+                && s.ExerciseId == set.ExerciseId
+                && s.SetNumber > set.SetNumber)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(s => s.SetNumber, s => s.SetNumber - 1),
+                cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        return Results.NoContent();
     }
 
     private static string? NullIfBlank(string? value)
