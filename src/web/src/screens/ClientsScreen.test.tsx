@@ -324,6 +324,117 @@ describe('ClientsScreen', () => {
     expect(await screen.findByText('Ada')).toBeInTheDocument()
   })
 
+  it('refuses a malformed address without asking the server', async () => {
+    // #114 item 3. The form carries noValidate, so nothing but this check stands between a
+    // typo and a POST — and the message has to be in the page rather than a native bubble,
+    // which is what "failing silently" was.
+    const fetchMock = mockApi({ clients: [ada] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Ada')
+    await userEvent.type(screen.getByLabelText('Email'), 'Ada <ada@example.com>')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Please enter a valid email address.')
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'true')
+    // The message is attached to the field it is about, and to no other.
+    expect(screen.getByLabelText('Email')).toHaveAccessibleDescription(
+      'Please enter a valid email address.',
+    )
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false')
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0)
+    // Nothing typed is thrown away — the whole point is that it can be corrected.
+    expect(screen.getByLabelText('Email')).toHaveValue('Ada <ada@example.com>')
+  })
+
+  it('points a missing name at the name field, not the email field', async () => {
+    // The bug the field-tagged error shape exists to prevent: one `error` string marked every
+    // input invalid, so a screen reader sent the trainer to fix an address that was fine.
+    mockApi({ clients: [ada] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Email'), 'ada@example.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter their name.')
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false')
+  })
+
+  it('surfaces the server’s rejection for an address the form let through', async () => {
+    // The client rule is looser than the server's on purpose, so this path is expected traffic
+    // rather than an edge case: the server is the authority and its message is what shows.
+    //
+    // Both layers now word this rejection identically, which is the point for the trainer and
+    // a problem for this test — the message alone no longer proves which layer produced it.
+    // So the request itself is the assertion: the POST going out is what says the form let the
+    // address through, and the alert is what says the answer came back and landed on screen.
+    const fetchMock = mockApi({
+      clients: [ada],
+      onPost: () => ({
+        ok: false,
+        status: 400,
+        // Verbatim from ClientEndpoints.CreateClient.
+        json: async () => ({
+          error: { code: 'bad_request', message: 'Please enter a valid email address.' },
+        }),
+      }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Ada')
+    // Passes looksLikeEmail, refused by EmailAddresses.IsValid.
+    await userEvent.type(screen.getByLabelText('Email'), 'ada@example..com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Please enter a valid email address.')
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST'),
+    ).toHaveLength(1)
+    expect(screen.queryByText(/added\. Tell them to log in\./)).not.toBeInTheDocument()
+  })
+
+  it('closes the add form from the disclosure, with no second completion path in the form', async () => {
+    // #114 item 4. "Done" sat beside "Add client" and read as a second way to finish the form.
+    // It is gone rather than renamed "Cancel", because after a successful add there is nothing
+    // to cancel — see the toggle in ClientsScreen.tsx.
+    mockApi({ clients: [ada] })
+    renderScreen()
+
+    const toggle = await screen.findByRole('button', { name: 'Add a client' })
+    await userEvent.click(toggle)
+
+    expect(screen.queryByRole('button', { name: 'Done' })).not.toBeInTheDocument()
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(close)
+
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add a client' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps the form open after adding, so the next client is one form away', async () => {
+    // The state that makes "Cancel" the wrong label: the add already happened and the form is
+    // standing open for another.
+    const created: ClientResponse = { ...grace, id: 'client-new', displayName: 'Barbara', email: 'barbara@example.com' }
+    mockApi({ clients: [ada], onPost: () => ({ json: async () => created }) })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Barbara')
+    await userEvent.type(screen.getByLabelText('Email'), 'barbara@example.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    await screen.findByText('Barbara added. Tell them to log in.')
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    // Emptied and ready, not closed.
+    expect(screen.getByLabelText('Email')).toHaveValue('')
+  })
+
   it('treats an empty roster as an empty state, not an error', async () => {
     mockApi({ clients: [] })
     renderScreen()
