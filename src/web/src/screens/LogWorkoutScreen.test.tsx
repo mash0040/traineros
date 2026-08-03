@@ -1089,8 +1089,8 @@ describe('LogWorkoutScreen', () => {
     expect(patches(fetchMock)).toHaveLength(0)
   })
 
-  it('refuses to finish on top of a set that was typed but never saved', async () => {
-    // The last place a set could still vanish silently. It blocks and names the exercise.
+  it('asks before finishing on top of a set that was typed but never saved', async () => {
+    // The last place a set could still vanish silently. It names the exercise and waits.
     const fetchMock = mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
@@ -1101,10 +1101,84 @@ describe('LogWorkoutScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Save or clear the set you started on Back Squat first.',
+      'Unsaved set on Back Squat. Discard and finish?',
     )
+    // Asking is not doing: nothing is written and nothing has left the screen until she answers.
     expect(screen.queryByRole('heading', { name: 'Today' })).not.toBeInTheDocument()
     expect(sessionPosts(fetchMock)).toHaveLength(0)
+    expect(squat.getByLabelText(/set 1 weight/)).toHaveValue('100')
+  })
+
+  it('finishes when she confirms the discard, without saving the row', async () => {
+    // The point of #108: one tap answers, where #45 wanted the digits cleared by hand.
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 weight/), '100')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Discard' }))
+
+    expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument()
+    // Discarded means discarded. The row she abandoned must not be written on the way out.
+    expect(setPosts(fetchMock)).toHaveLength(0)
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+  })
+
+  it('stays on the workout with the typed set intact when she cancels', async () => {
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 weight/), '100')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('heading', { name: 'Today' })).not.toBeInTheDocument()
+    expect(sessionPosts(fetchMock)).toHaveLength(0)
+    expect(squat.getByLabelText(/set 1 weight/)).toHaveValue('100')
+    expect(squat.getByLabelText(/set 1 reps/)).toHaveValue('8')
+
+    // Cancel returns the bar to the control she started from, not a dead end.
+    expect(screen.getByRole('button', { name: 'Finish workout' })).toBeEnabled()
+
+    // And the row is still savable, which is the other half of what Cancel is for.
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+  })
+
+  it('puts focus on Cancel when the prompt replaces the Finish button', async () => {
+    // The button that raised the prompt unmounts with it. Without the move, focus falls to the
+    // body and a keyboard user walks the whole screen back to an answer they just asked for.
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
+  })
+
+  it('names every exercise holding an unsaved set', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
+    const curl = await block('Leg Curl')
+    await userEvent.type(curl.getByLabelText(/set 1 reps/), '12')
+    await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Unsaved sets on Back Squat and Leg Curl. Discard and finish?',
+    )
   })
 
   it('finishes after several sets without touching the pre-filled row that follows', async () => {
@@ -1129,7 +1203,7 @@ describe('LogWorkoutScreen', () => {
     expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument()
   })
 
-  it('clears the unsaved-set warning once that set is saved', async () => {
+  it('takes the discard prompt down once that set is saved', async () => {
     const fetchMock = mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
@@ -1138,14 +1212,16 @@ describe('LogWorkoutScreen', () => {
     await userEvent.type(squat.getByLabelText(/set 1 weight/), '100')
     await userEvent.type(squat.getByLabelText(/set 1 reps/), '8')
     await userEvent.click(screen.getByRole('button', { name: 'Finish workout' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Save or clear the set you started')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unsaved set on Back Squat')
 
     await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
     await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
 
-    // The condition is gone, so the warning about it must be too. Left on screen it reads as
-    // "Finish is still blocked" when the next tap would have worked.
+    // The condition is gone, so the question about it must be too — it now names a set that is
+    // safely on the server, and offers to discard it.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Finish workout' })).toBeInTheDocument()
   })
 
   it('finishes over a pre-filled row nobody typed into', async () => {
