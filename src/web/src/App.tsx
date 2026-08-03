@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
+import { ClientsScreen } from './screens/ClientsScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
@@ -34,6 +35,14 @@ export default function App() {
         {/* No wrapper: History reads everything it shows from GET /api/me/history, so it needs
             nothing from the session beyond being inside the gate. */}
         <Route path="/history" element={<HistoryScreen />} />
+      </Route>
+
+      {/* The trainer's screens, behind their own gate (#50). Deliberately not under a /trainer
+          prefix: a session is a trainer's or a client's and never both, so the two sets of
+          paths cannot collide, and prefixing would put a segment in every trainer URL whose
+          only job is to distinguish them from screens that account can never open. */}
+      <Route element={<RequireTrainerSession />}>
+        <Route path="/clients" element={<ClientsScreen />} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login
@@ -79,11 +88,63 @@ function RequireClientSession() {
     return <Navigate replace to="/login" />
   }
 
+  // A trainer who landed on a client path. Since #50 there is somewhere to send them, so the
+  // "trainer dashboard arrives later" placeholder #42 rendered here is gone. `replace` because
+  // the client URL was never theirs to go back to.
   if (session.kind === 'notAClient') {
-    return <TrainerPlaceholder />
+    return <Navigate replace to="/clients" />
   }
 
   return <Outlet context={{ me: session.me }} />
+}
+
+// The trainer half of the same gate.
+//
+// What "trainer" means to the SPA, precisely: the session cookie is valid and GET /api/me
+// answered 404. That route is client-only, so a 404 with a live session is the API saying
+// "authenticated, not a client" — and since the auth middleware refuses sessions belonging to
+// deactivated users, the only remaining role is trainer. No endpoint returns trainer identity,
+// so this is inference rather than a claim the API made, which is why `loadSession` keeps
+// calling the state `notAClient` and this comment does the naming instead.
+function RequireTrainerSession() {
+  const [session, setSession] = useState<Session | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    loadSession()
+      .then((result) => {
+        if (!cancelled) {
+          setSession(result)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSession({ kind: 'anonymous' })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (session === null) {
+    return null
+  }
+
+  if (session.kind === 'anonymous') {
+    return <Navigate replace to="/login" />
+  }
+
+  // A client who typed a trainer URL. Not an error page: they have a perfectly good session,
+  // it just is not for this. Every route behind this gate is trainer-only server-side anyway,
+  // so the redirect is a courtesy on top of the real gate, never the gate itself.
+  if (session.kind === 'client') {
+    return <Navigate replace to="/" />
+  }
+
+  return <Outlet />
 }
 
 function TodayRoute() {
@@ -91,21 +152,6 @@ function TodayRoute() {
   // in a test without a router around it.
   const { me } = useClientSession()
   return <TodayScreen me={me} />
-}
-
-// /api/me is client-only, so a trainer holds a valid session and still gets 404 from it. Their
-// screens are epic #8; until then this says so instead of bouncing them to login as though
-// their session had failed.
-function TrainerPlaceholder() {
-  return (
-    <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
-      <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
-      <div className="mx-auto grid w-full max-w-lg content-center gap-2">
-        <h1 className="text-xl font-semibold text-ink-bold">Signed in</h1>
-        <p className="text-base text-muted">The trainer dashboard arrives with the trainer screens.</p>
-      </div>
-    </main>
-  )
 }
 
 function LogWorkoutRoute() {

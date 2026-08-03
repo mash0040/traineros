@@ -1,11 +1,15 @@
 import type {
+  ClientResponse,
+  ClientSessionResponse,
   HistoryResponse,
   LastResponse,
   LoggedSetResponse,
   MeProgramWrapper,
   MeResponse,
+  PatchApiClientsByIdData,
   PatchApiMeSessionsByIdData,
   PostApiAuthMagicLinkData,
+  PostApiClientsData,
   PostApiAuthVerifyData,
   PostApiMeSessionsByIdSetsData,
   PostApiMeSessionsData,
@@ -136,6 +140,59 @@ export async function checkMagicLink(token: string): Promise<boolean> {
 export async function consumeMagicLink(token: string): Promise<void> {
   const body: PostApiAuthVerifyData['body'] = { token }
   await request<unknown>('/api/auth/verify', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// -- Trainer roster (#25). Every route below is trainer-only and scoped to the session's
+// trainer, so none of them takes an owning-trainer id: there is nothing for a caller to
+// tamper with, the same structural argument the /api/me/* namespace rests on.
+
+/** GET /api/clients. The roster, already ordered by display name. Includes deactivated clients. */
+export function fetchClients(): Promise<ClientResponse[]> {
+  return request<ClientResponse[]>('/api/clients')
+}
+
+/**
+ * POST /api/clients. Creates the client row and sends nothing.
+ *
+ * api.md is explicit that this has no email side effect: the invite is the trainer telling
+ * them to log in. So a 201 here is not "they have been notified", and the screen must not
+ * say it was.
+ *
+ * 409 email_taken is the one rejection worth handling by itself — it is the only one the
+ * trainer can act on, by using the address the client already has.
+ */
+export function createClient(body: PostApiClientsData['body']): Promise<ClientResponse> {
+  return request<ClientResponse>('/api/clients', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/**
+ * PATCH /api/clients/:id. Edit, or flip is_active.
+ *
+ * Deactivating is not only a flag: the endpoint disables the client's reminder schedules in
+ * the same transaction. Reactivating does not turn them back on, and nothing here pretends
+ * otherwise — that asymmetry belongs to #25 and is surfaced in the UI copy instead.
+ */
+export function updateClient(
+  clientId: string,
+  body: PatchApiClientsByIdData['body'],
+): Promise<ClientResponse> {
+  return request<ClientResponse>(`/api/clients/${encodeURIComponent(clientId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/clients/:id/sessions. Every session that client has ever logged, newest first.
+ *
+ * There is no limit parameter and no summary field on the roster, so this is also the only
+ * way to answer "when did they last train" — see the Clients screen for what that costs and
+ * when it stops being acceptable.
+ */
+export function fetchClientSessions(clientId: string): Promise<ClientSessionResponse[]> {
+  return request<ClientSessionResponse[]>(
+    `/api/clients/${encodeURIComponent(clientId)}/sessions`,
+  )
 }
 
 /**
