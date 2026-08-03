@@ -1,5 +1,3 @@
-using System.Net.Mail;
-
 using Microsoft.EntityFrameworkCore;
 
 using TrainerOS.Api.Auth;
@@ -82,9 +80,21 @@ public static class ClientEndpoints
                 ApiError.Create("bad_request", "email, display_name, and timezone are required."));
         }
 
-        if (!MailAddress.TryCreate(email, out _))
+        // #114: this used to be MailAddress.TryCreate directly, which parses mailbox syntax
+        // rather than a bare address and so let "Ada <ada@example.com>" through to be stored
+        // verbatim. See EmailAddresses for what that broke and why the round-trip check is
+        // the fix. The stakes are high here specifically because email is write-once: there
+        // is no field on UpdateClientRequest to correct a typo with, so an address that gets
+        // past this point is wrong until someone deletes the row in the database.
+        if (!EmailAddresses.IsValid(email))
         {
-            return Results.BadRequest(ApiError.Create("bad_request", "email is not a valid address."));
+            // Worded identically to the SPA's own client-side check (web/src/screens/
+            // ClientsScreen.tsx). The two rules deliberately differ in strictness — the client
+            // one is looser and lets some inputs through to be refused here — so the trainer
+            // can see the same rejection from either layer for what is, to them, one mistake.
+            // If this string changes, that one changes with it.
+            return Results.BadRequest(
+                ApiError.Create("bad_request", "Please enter a valid email address."));
         }
 
         if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out _))

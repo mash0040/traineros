@@ -2,9 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { ClientResponse } from '../api/types.gen'
 import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
+import { looksLikeEmail } from '../lib/email'
 import { formatSessionDate } from '../lib/history'
 import { todayIn } from '../lib/workoutDraft'
 import { TrainerShell } from './TrainerShell'
+import {
+  trainerDanger,
+  trainerField,
+  trainerPrimary,
+  trainerQuiet,
+  trainerSecondary,
+} from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -147,7 +155,7 @@ export function ClientsScreen() {
             <p className="text-base text-muted">Check your connection and try again.</p>
           </div>
           <button
-            className="text-base font-semibold text-ink underline underline-offset-4"
+            className={trainerQuiet}
             onClick={() => setAttempt((previous) => previous + 1)}
             type="button"
           >
@@ -286,7 +294,7 @@ function ClientRow({
             </p>
             <div className="flex gap-2">
               <button
-                className="rounded-sm border border-edge px-3 py-2 text-sm font-semibold text-danger disabled:text-muted"
+                className={trainerDanger}
                 disabled={saving}
                 onClick={() => void setActive(false)}
                 type="button"
@@ -294,7 +302,7 @@ function ClientRow({
                 {saving ? 'Deactivating' : 'Deactivate'}
               </button>
               <button
-                className="rounded-sm bg-accent px-3 py-2 text-sm font-semibold text-accent-ink hover:bg-accent-hover"
+                className={trainerPrimary}
                 onClick={() => {
                   setConfirming(false)
                   setError(null)
@@ -307,7 +315,7 @@ function ClientRow({
           </div>
         ) : (
           <button
-            className="rounded-sm border border-edge px-3 py-2 text-sm font-semibold text-ink disabled:text-muted"
+            className={trainerSecondary}
             disabled={saving}
             onClick={() => (active ? setConfirming(true) : void setActive(true))}
             type="button"
@@ -412,8 +420,14 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   const [displayName, setDisplayName] = useState('')
   const [timezone, setTimezone] = useState(browserTimezone)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Carries which field it is about, not just the words. Without that, "Enter their name" also
+  // marked the email input aria-invalid, so a screen reader announced the wrong field as the
+  // broken one — worse than no marking, because it sends someone to fix what is already right.
+  const [error, setError] = useState<{ message: string; field: 'name' | 'email' | null } | null>(null)
   const [addedName, setAddedName] = useState<string | null>(null)
+
+  const emailRef = useRef<HTMLInputElement | null>(null)
+  const nameRef = useRef<HTMLInputElement | null>(null)
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -421,140 +435,189 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
       return
     }
 
+    const address = email.trim()
+    const name = displayName.trim()
+
+    if (name === '') {
+      setError({ message: 'Enter their name.', field: 'name' })
+      setAddedName(null)
+      nameRef.current?.focus()
+      return
+    }
+
+    // #114: checked here rather than left to the browser. The form carries noValidate, so
+    // `type="email"` no longer blocks submission with a native bubble — which is what "failing
+    // silently" looked like, since the bubble is unstyled, inconsistent across browsers, and
+    // in some of them never appears for an off-screen field. This message is in the page and
+    // announced.
+    //
+    // The rule is looser than the server's on purpose (see lib/email.ts). Anything it lets
+    // through that the server refuses comes back as the server's own message below, which is
+    // why the two do not need to agree.
+    if (!looksLikeEmail(address)) {
+      // Deliberately the same sentence POST /api/clients answers with. The trainer should not
+      // be able to tell which layer refused the address, because the distinction is ours, not
+      // theirs: whether a typo is caught here or one round trip later is an implementation
+      // detail of where the rules happen to differ in strictness.
+      setError({ message: 'Please enter a valid email address.', field: 'email' })
+      setAddedName(null)
+      emailRef.current?.focus()
+      return
+    }
+
     setSubmitting(true)
     setError(null)
     try {
-      const created = await createClient({
-        email: email.trim(),
-        displayName: displayName.trim(),
-        timezone,
-      })
+      const created = await createClient({ email: address, displayName: name, timezone })
       onAdded(created)
-      setAddedName(created.displayName ?? email.trim())
+      setAddedName(created.displayName ?? address)
       setEmail('')
       setDisplayName('')
     } catch (caught) {
-      // The server's messages are written for a person (api.md), including the 409 for an
-      // address already in use, so they are shown rather than remapped per code.
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      // The server is the authority on what counts as an address, and its messages are written
+      // for a person (api.md) — including the 409 for an address already in use and the 400 for
+      // a format this screen let through. Shown as they are, rather than remapped per code, and
+      // nothing the trainer typed is cleared: the whole point is that they can fix it.
+      // Attributed to the email field: every rejection this endpoint issues that the trainer
+      // can act on is about the address (400 for a format the client rule let through, 409 for
+      // one already in use). A transport failure is nobody's field, so it marks none.
+      setError(
+        caught instanceof ApiError
+          ? { message: caught.message, field: 'email' }
+          : { message: 'Something went wrong. Try again.', field: null },
+      )
+      setAddedName(null)
     } finally {
       setSubmitting(false)
     }
   }
 
+  // #114 item 4: the form used to carry a "Done" button beside "Add client", which read as two
+  // ways to finish it. Removed rather than renamed to "Cancel", because after a successful add
+  // there is nothing to cancel — the client exists and the form is standing open for the next
+  // one, so "Cancel" would be a lie in exactly the state a trainer is most likely to be in.
+  //
+  // Closing is dismissal, not completion, so it does not belong in the form's footer at all.
+  // The disclosure that opened the form closes it, and says which it will do. One completion
+  // path in the form, one toggle outside it.
+  const toggle = (
+    <button
+      aria-expanded={open}
+      className={`mt-8 ${trainerSecondary}`}
+      onClick={() => {
+        setOpen((previous) => !previous)
+        setError(null)
+        setAddedName(null)
+      }}
+      type="button"
+    >
+      {open ? 'Close' : 'Add a client'}
+    </button>
+  )
+
   if (!open) {
-    return (
-      <button
-        className="mt-8 rounded-sm border border-edge px-3 py-2 text-sm font-semibold text-ink"
-        onClick={() => setOpen(true)}
-        type="button"
-      >
-        Add a client
-      </button>
-    )
+    return toggle
   }
 
   return (
-    <section className="mt-8 max-w-xl rounded-md border border-edge p-6">
-      <h2 className="text-lg font-semibold text-ink-bold">Add a client</h2>
+    <>
+      {toggle}
+      <section className="mt-8 max-w-xl rounded-md border border-edge p-6">
+        <h2 className="text-lg font-semibold text-ink-bold">Add a client</h2>
 
-      {/* api.md is explicit that POST /api/clients sends nothing: "invite = trainer tells them
-          to log in via magic link". So the screen says what did not happen, because a trainer
-          who assumes an invite went out is a client who never hears from anyone. */}
-      <p className="mt-1 text-sm text-muted">
-        No email is sent. Tell them to log in with this address and they&rsquo;ll get a link.
-      </p>
+        {/* api.md is explicit that POST /api/clients sends nothing: "invite = trainer tells them
+            to log in via magic link". So the screen says what did not happen, because a trainer
+            who assumes an invite went out is a client who never hears from anyone. */}
+        <p className="mt-1 text-sm text-muted">
+          No email is sent. Tell them to log in with this address and they&rsquo;ll get a link.
+        </p>
 
-      <form className="mt-6 grid gap-4" onSubmit={onSubmit}>
-        <div className="grid gap-2">
-          <label className="text-sm font-semibold text-ink" htmlFor="client-name">
-            Name
-          </label>
-          <input
-            className="rounded-sm border border-edge bg-surface px-3 py-2 text-base text-ink"
-            id="client-name"
-            name="displayName"
-            onChange={(event) => setDisplayName(event.target.value)}
-            required
-            value={displayName}
-          />
-        </div>
+        {/* noValidate: the browser's own bubble for type="email" is unstyled, worded differently
+            in every browser, and accepts things the server refuses (ada@b passes it). Turning it
+            off makes the message below the only one, which is the one that can be written, tested,
+            and announced. */}
+        <form className="mt-6 grid gap-4" noValidate onSubmit={onSubmit}>
+          <div className="grid gap-2">
+            <label className="text-sm font-semibold text-ink" htmlFor="client-name">
+              Name
+            </label>
+            <input
+              aria-describedby={error?.field === 'name' ? 'add-client-error' : undefined}
+              aria-invalid={error?.field === 'name'}
+              className={trainerField}
+              id="client-name"
+              name="displayName"
+              onChange={(event) => setDisplayName(event.target.value)}
+              ref={nameRef}
+              required
+              value={displayName}
+            />
+          </div>
 
-        <div className="grid gap-2">
-          <label className="text-sm font-semibold text-ink" htmlFor="client-email">
-            Email
-          </label>
-          <input
-            autoCapitalize="none"
-            className="rounded-sm border border-edge bg-surface px-3 py-2 text-base text-ink"
-            id="client-email"
-            name="email"
-            onChange={(event) => setEmail(event.target.value)}
-            required
-            spellCheck={false}
-            type="email"
-            value={email}
-          />
-        </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-semibold text-ink" htmlFor="client-email">
+              Email
+            </label>
+            <input
+              aria-describedby={error?.field === 'email' ? 'add-client-error' : undefined}
+              aria-invalid={error?.field === 'email'}
+              autoCapitalize="none"
+              className={trainerField}
+              id="client-email"
+              name="email"
+              onChange={(event) => setEmail(event.target.value)}
+              ref={emailRef}
+              required
+              spellCheck={false}
+              type="email"
+              value={email}
+            />
+          </div>
 
-        <div className="grid gap-2">
-          <label className="text-sm font-semibold text-ink" htmlFor="client-timezone">
-            Timezone
-          </label>
-          {/* A select over the platform's own IANA list, not a text field. The endpoint
-              validates against TimeZoneInfo and rejects anything it does not recognise, so a
-              typed "EST" is a round trip to be told no — and this value is what the reminder
-              scheduler sends against, so a wrong-but-valid zone is a client emailed at 4am.
-              Defaults to the trainer's own zone, which is the right guess for most rosters. */}
-          <select
-            className="rounded-sm border border-edge bg-surface px-3 py-2 text-base text-ink"
-            id="client-timezone"
-            name="timezone"
-            onChange={(event) => setTimezone(event.target.value)}
-            value={timezone}
-          >
-            {TIMEZONES.map((zone) => (
-              <option key={zone} value={zone}>
-                {zone}
-              </option>
-            ))}
-          </select>
-        </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-semibold text-ink" htmlFor="client-timezone">
+              Timezone
+            </label>
+            {/* A select over the platform's own IANA list, not a text field. The endpoint
+                validates against TimeZoneInfo and rejects anything it does not recognise, so a
+                typed "EST" is a round trip to be told no — and this value is what the reminder
+                scheduler sends against, so a wrong-but-valid zone is a client emailed at 4am.
+                Defaults to the trainer's own zone, which is the right guess for most rosters. */}
+            <select
+              className={trainerField}
+              id="client-timezone"
+              name="timezone"
+              onChange={(event) => setTimezone(event.target.value)}
+              value={timezone}
+            >
+              {TIMEZONES.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {error !== null && (
-          <p className="text-sm text-danger" role="alert">
-            {error}
-          </p>
-        )}
+          {error !== null && (
+            <p className="text-sm text-danger" id="add-client-error" role="alert">
+              {error.message}
+            </p>
+          )}
 
-        {addedName !== null && error === null && (
-          <p className="text-sm text-ink" role="status">
-            {addedName} added. Tell them to log in.
-          </p>
-        )}
+          {addedName !== null && error === null && (
+            <p className="text-sm text-ink" role="status">
+              {addedName} added. Tell them to log in.
+            </p>
+          )}
 
-        <div className="flex gap-2">
-          <button
-            className="rounded-sm bg-accent px-4 py-2 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
-            disabled={submitting}
-            type="submit"
-          >
+          {/* One button, because there is one way to finish this form. See `toggle` above for
+              why the second one is gone. */}
+          <button className={`justify-self-start ${trainerPrimary}`} disabled={submitting} type="submit">
             {submitting ? 'Adding' : 'Add client'}
           </button>
-          <button
-            className="rounded-sm border border-edge px-4 py-2 text-base font-semibold text-ink"
-            onClick={() => {
-              setOpen(false)
-              setError(null)
-              setAddedName(null)
-            }}
-            type="button"
-          >
-            Done
-          </button>
-        </div>
-      </form>
-    </section>
+        </form>
+      </section>
+    </>
   )
 }
 

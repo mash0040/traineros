@@ -245,7 +245,12 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         var ids = body.EnumerateArray().Select(e => e.GetProperty("id").GetGuid()).ToHashSet();
-        Assert.Equal([_app.ClientA1Id, _app.ClientA2Id], ids);
+        // Contains rather than set equality: the fixture is shared and every create test adds
+        // a client to trainer A, so an exact-set assertion is a claim about which tests ran
+        // first. What this test is actually for is the isolation line below it, and that is
+        // unaffected by how many of A's own clients exist.
+        Assert.Contains(_app.ClientA1Id, ids);
+        Assert.Contains(_app.ClientA2Id, ids);
         Assert.DoesNotContain(_app.ClientB1Id, ids);
 
         // AC: list "includes is_active" — belt-and-braces on the field name.
@@ -302,6 +307,97 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // #114: the bug this endpoint actually had. The old suite asserted one malformed address
+    // ("not-an-email", still covered above), which MailAddress.TryCreate already refused — so
+    // the check looked tested while every string below created a row. Each of these was
+    // verified to pass a bare TryCreate.
+    //
+    // The assertion that no row was written is the point. A 400 that still inserted would be
+    // the same silent failure wearing a different status code, and email is write-once: there
+    // is no field on PATCH /api/clients/:id to correct one with afterwards.
+    [Theory]
+    [InlineData("Ada <ada@example.com>")]
+    [InlineData("ada example@example.com")]
+    [InlineData("<ada@example.com>")]
+    [InlineData("ada@example.com, bob@example.com")]
+    [InlineData("ada@localhost")]
+    [InlineData("ada@example..com")]
+    [InlineData("ada@-example.com")]
+    public async Task Create_rejects_malformed_email_and_writes_nothing(string email)
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var before = _app.WithDb(db => db.ClientsForTrainer(_app.TrainerAId).Count());
+
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email,
+            displayName = "Malformed",
+            timezone = "America/Toronto",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+
+        // The exact sentence, because the SPA's own client-side check is worded to match it and
+        // no test can span both languages to prove they still agree. Pinning each side means a
+        // change to either one fails here or in ClientsScreen.test.tsx, rather than the two
+        // quietly drifting back apart.
+        Assert.Equal(
+            "Please enter a valid email address.",
+            body.GetProperty("error").GetProperty("message").GetString());
+
+        var after = _app.WithDb(db => db.ClientsForTrainer(_app.TrainerAId).Count());
+        Assert.Equal(before, after);
+        Assert.False(_app.WithDb(db => db.ClientsForTrainer(_app.TrainerAId).Any(u => u.Email == email)));
+    }
+
+    [Fact]
+    public async Task Create_stores_the_address_exactly_as_given()
+    {
+        // The other half of #114: validation that parsed the address but stored the raw string
+        // is how "Ada <ada@example.com>" ended up in users.email. Now that only bare addresses
+        // get past the check, stored and typed are the same string — which is what makes
+        // UserByEmail able to find the row a magic link is for.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        const string email = "round.trip@example.com";
+
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email,
+            displayName = "Round Trip",
+            timezone = "America/Toronto",
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ClientsForTrainer(_app.TrainerAId).AsNoTracking().Single(u => u.Email == email));
+        Assert.Equal(email, persisted.Email);
+        // The lookup every magic link depends on resolves it.
+        Assert.True(_app.WithDb(db => db.UserByEmail(email).Any()));
+    }
+
+    [Fact]
+    public async Task Patch_cannot_change_an_email_at_all()
+    {
+        // #114 asked whether PATCH has the same gap. It does not, because it has no email
+        // field — api.md's UpdateClientRequest is displayName/timezone/isActive. Pinned rather
+        // than left as an observation: the day someone adds email here, it needs the same
+        // validation, and this test failing is how they find that out.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Patch, $"/api/clients/{_app.ClientA1Id}", session, new
+        {
+            email = "Ada <ada@example.com>",
+        });
+
+        // api.md §Cross-cutting: unknown fields are rejected, not ignored.
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var persisted = _app.WithDb(db =>
+            db.ClientsForTrainer(_app.TrainerAId).AsNoTracking().Single(u => u.Id == _app.ClientA1Id));
+        Assert.Equal(ClientEndpointsTestApp.ClientA1Email, persisted.Email);
     }
 
     [Fact]

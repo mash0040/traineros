@@ -26,6 +26,18 @@ public static class TrainerSeeder
                 + "(or both unset to skip seeding). Refusing to start half-configured.");
         }
 
+        // #114: the same check the client roster does, for the same reason and one worse.
+        // A typo here seeds the account that owns every client, and the symptom is a login
+        // link that never arrives with nothing in the logs to say why. Failing at boot
+        // matches how Program.cs already treats a missing pause-token key: a misconfiguration
+        // should stop the app, not surface later as somebody's broken link.
+        if (!EmailAddresses.IsValid(email.Trim()))
+        {
+            throw new InvalidOperationException(
+                $"Seed:TrainerEmail ('{email}') is not a valid email address. The trainer account "
+                + "cannot receive a login link at an address that does not parse.");
+        }
+
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TrainerOsDbContext>();
         var clock = scope.ServiceProvider.GetRequiredService<TimeProvider>();
