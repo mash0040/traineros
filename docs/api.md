@@ -106,6 +106,8 @@ Revokes current session row.
 
 (Resolved in #40: the pause token is a stateless HMAC (schedule_id + expiry + untransmitted purpose label, all inside the MAC), 30-day lifetime, no server-side row. "Consumes" in the original wording is therefore inaccurate — POST is idempotent, and a replay within the lifetime re-pauses. The narrow consequence: if the trainer re-enables and an old link is replayed, reminders pause again. True single-use would require a consumed-token table and migration, which costs more than the bug. Statelessness is also what makes the scanner-safe GET free. Rate limiting reuses the policy still named MagicLinkIpPolicy, which now covers magic-link, login, and pause.)
 
+(Recorded in #49: success and already-paused are not distinguishable to the client. GET returns valid: true for a paused schedule, and POST reports success either way — which is what makes replay harmless. Distinguishing them would require returning the prior enabled value, handing a link-holder a read on a schedule they otherwise only write to. The terminal state is worded as a statement about the resulting state rather than a claim about what this request changed.)
+
 ## Cross-cutting
 
 - **Rate limiting:** only auth + pause endpoints in v1. Authenticated traffic from 4 users does not need throttling; adding it everywhere is ceremony.
