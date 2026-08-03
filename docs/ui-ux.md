@@ -33,6 +33,7 @@ This is deliberately the thinnest spec. The resume value of this project is back
 | Pause reminders | confirmation page + button | token flow per notifications.md |
 
 (Resolved in #43: "current day" was stale wording — nothing in the data model records which day is current, and #38 settled the same question for reminder emails by naming the program rather than a day. Today shows a day picker (rendered only when the program has more than one day), defaulting to the first by position, with Start workout carrying the chosen program_day_id. The client picks; the app doesn't guess. The sticky CTA is hidden when the selected day has no prescriptions.)
+(Also #48: a "History" link sits on the Today screen's header line. ui-ux.md specifies no navigation chrome, which was about not building a tab bar for five screens rather than leaving screens unreachable — one link is the minimum honest entry point. Its visual treatment is deliberately quiet; revisit if it needs to stand out more.)
 
 ### Trainer (4 screens)
 | Screen | Content |
