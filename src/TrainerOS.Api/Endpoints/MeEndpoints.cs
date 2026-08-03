@@ -28,6 +28,8 @@ public static class MeEndpoints
     // real not-found?" per endpoint.
     public sealed record MeProgramWrapper(MeProgramDetails? Program);
 
+    // DayView / PrescriptionView / ExerciseView moved to ProgramTreeViews.cs in #78, when the
+    // trainer's GET /api/programs/:id started returning the same tree. Shape unchanged.
     public sealed record MeProgramDetails(
         Guid Id,
         string Title,
@@ -35,20 +37,6 @@ public static class MeEndpoints
         DateOnly? StartsOn,
         string? Notes,
         List<DayView> Days);
-
-    public sealed record DayView(Guid Id, string Title, int Position, List<PrescriptionView> Prescriptions);
-
-    public sealed record PrescriptionView(
-        Guid Id,
-        int Position,
-        int TargetSets,
-        string TargetReps,
-        string? TargetLoad,
-        int? RestSeconds,
-        string? Note,
-        ExerciseView Exercise);
-
-    public sealed record ExerciseView(Guid Id, string Name, string? VideoUrl, string? Cues);
 
     public static RouteGroupBuilder MapMeEndpoints(this RouteGroupBuilder api)
     {

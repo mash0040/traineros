@@ -61,11 +61,13 @@ Revokes current session row.
 | GET/POST /api/exercises, PATCH /api/exercises/:id | exercise library | delete = PATCH is_active=false (soft-delete per database.md) |
 | GET/POST /api/programs | list/create (client_id in body on create) | create enforces one-active-per-client via partial unique index; 409 on conflict |
 (Recorded in #27: program status transitions are unrestricted — any of {draft, active, archived} → any other. Deliberate for v1 given single-trainer scale; the 409 active-conflict constraint is the only structural gate. Restrictive transitions become worthwhile if program history needs to be auditable — v2 concern.)
-| GET/PATCH /api/programs/:id | read/edit incl. status transitions | |
+| GET/PATCH /api/programs/:id | read/edit incl. status transitions | |read (returns the full tree: days → prescriptions → exercise, ordered by position) / edit incl. status transitions
 | POST /api/programs/:id/days, PATCH/DELETE /api/days/:id | manage days | |
 | POST /api/days/:id/exercises, PATCH/DELETE /api/day-exercises/:id | manage prescriptions | position handling: client sends full ordered id list on reorder (PATCH /api/days/:id/order), server rewrites positions in one transaction. (Rejected: fractional/gap positions — clever, unnecessary at this scale.) |
 | GET/POST /api/clients/:id/schedule, PATCH /api/schedules/:id | reminder schedule | one schedule per client in v1 |
 (Recorded in #29: schedules can be created and edited for deactivated clients. Sending is guarded at worker time per notifications.md, so schedule state and client activation state are independent concerns; deactivation still flips enabled=false in-transaction per #25. The soft/cycling model of client activation justifies keeping them separable. TimeOnly on the wire serializes as HH:mm:ss per framework default — see issue #79 for the HH:mm converter follow-up. One schedule per client is app-enforced (no partial unique index); race window is effectively zero at v1 scale, tracked as post-v1 hardening.)
+
+(Recorded in #78: GET /api/programs/:id returns ProgramDetailResponse — the program node plus its nested tree — while list/create/patch continue to return the flat ProgramResponse. A `days` field on the shared shape would make "not loaded" and "no days" indistinguishable. The tree records (DayView, PrescriptionView, ExerciseView) are shared with GET /api/me/program; only the program node differs, since the trainer view carries clientId and timestamps the client has no use for.)
 
 ## Client endpoints (role: client; all queries scoped by session user)
 

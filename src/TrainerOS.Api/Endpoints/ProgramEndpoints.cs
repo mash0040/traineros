@@ -40,6 +40,28 @@ public static class ProgramEndpoints
         DateTimeOffset CreatedAt,
         DateTimeOffset UpdatedAt);
 
+    /// <summary>
+    /// GET /api/programs/:id — the program with its days and their prescriptions (#78).
+    /// </summary>
+    // A separate record rather than a Days list bolted onto ProgramResponse. The list,
+    // create, and patch responses would then all have to answer with something for a field
+    // they do not populate, and an empty array that means "not loaded" is indistinguishable
+    // from one that means "this program has no days" — the builder would render a program as
+    // empty on the strength of a response that never claimed otherwise.
+    //
+    // Everything below the program node is DayView from ProgramTreeViews.cs, the same tree
+    // GET /api/me/program returns.
+    public sealed record ProgramDetailResponse(
+        Guid Id,
+        Guid ClientId,
+        string Title,
+        string Status,
+        DateOnly? StartsOn,
+        string? Notes,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset UpdatedAt,
+        List<DayView> Days);
+
     public static RouteGroupBuilder MapProgramEndpoints(this RouteGroupBuilder api)
     {
         var programs = api.MapGroup("/programs").RequireTrainer();
@@ -49,7 +71,7 @@ public static class ProgramEndpoints
             .Produces<ProgramResponse>(StatusCodes.Status201Created)
             .Produces<ApiError>(StatusCodes.Status409Conflict);
         programs.MapGet("/{id:guid}", GetProgram)
-            .Produces<ProgramResponse>();
+            .Produces<ProgramDetailResponse>();
         programs.MapPatch("/{id:guid}", UpdateProgram)
             .Produces<ProgramResponse>();
         return api;
@@ -136,21 +158,106 @@ public static class ProgramEndpoints
         return Results.Created($"/api/programs/{program.Id}", ToResponse(program));
     }
 
+    // #78: the read the program builder (epic #8) is built on. Days ordered by position, each
+    // with its prescriptions ordered by position, each prescription carrying the exercise it
+    // names — one request, because a builder that has to fan out per day to learn what is in it
+    // is a builder that renders in stages.
+    //
+    // Structured exactly like GET /api/me/program (#30), down to the two queries: a nested
+    // projection for the tree, then one batched fetch for the exercises it references. The
+    // alternative — resolving the exercise per prescription — is the N+1 that read was written
+    // to avoid, and this one has more rows to be wrong about, since the trainer sees a whole
+    // program rather than the client's active one.
     private static async Task<IResult> GetProgram(
         Guid id, HttpContext http, TrainerOsDbContext db, CancellationToken cancellationToken)
     {
         var trainer = http.GetCurrentUser()!;
 
+        // Scoped through ProgramsForTrainer, so another trainer's program id finds nothing and
+        // falls through to the same 404 a fabricated id gets. Ownership is in the WHERE clause;
+        // there is no load-then-check to forget.
         var program = await db.ProgramsForTrainer(trainer.Id)
             .Where(p => p.Id == id)
-            .Select(p => new ProgramResponse(
-                p.Id, p.ClientId, p.Title, p.Status, p.StartsOn, p.Notes, p.CreatedAt, p.UpdatedAt))
+            .Select(p => new
+            {
+                p.Id,
+                p.ClientId,
+                p.Title,
+                p.Status,
+                p.StartsOn,
+                p.Notes,
+                p.CreatedAt,
+                p.UpdatedAt,
+                Days = p.Days
+                    .OrderBy(d => d.Position)
+                    .Select(d => new
+                    {
+                        d.Id,
+                        d.Title,
+                        d.Position,
+                        Prescriptions = d.Exercises
+                            .OrderBy(pdx => pdx.Position)
+                            .Select(pdx => new
+                            {
+                                pdx.Id,
+                                pdx.Position,
+                                pdx.TargetSets,
+                                pdx.TargetReps,
+                                pdx.TargetLoad,
+                                pdx.RestSeconds,
+                                pdx.Note,
+                                pdx.ExerciseId,
+                            })
+                            .ToList(),
+                    })
+                    .ToList(),
+            })
             .AsNoTracking()
             .FirstOrDefaultAsync(cancellationToken);
 
-        return program is null
-            ? Results.NotFound(ApiError.Create("not_found", "Not Found"))
-            : Results.Ok(program);
+        if (program is null)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        var exerciseIds = program.Days
+            .SelectMany(d => d.Prescriptions)
+            .Select(p => p.ExerciseId)
+            .Distinct()
+            .ToList();
+
+        // Scoped by the session trainer, which is the program's trainer by construction —
+        // ProgramsForTrainer already put trainer_id in the WHERE clause above. (#30 reads this
+        // off the program row instead, because there the scope is the *client* and the
+        // program's trainer is not the caller.)
+        //
+        // is_active is deliberately not filtered. ExercisesForTrainer does not filter it
+        // either, and a prescription written against an exercise the trainer has since
+        // soft-deleted still has to render — showing the name is how they find the thing to
+        // replace. The writes side keeps this dictionary total: POST/PATCH of a prescription
+        // both validate exercise_id through ExercisesForTrainer, so a prescription can only
+        // ever name an exercise in this same library.
+        var exercises = exerciseIds.Count == 0
+            ? new Dictionary<Guid, ExerciseView>()
+            : await db.ExercisesForTrainer(trainer.Id)
+                .Where(e => exerciseIds.Contains(e.Id))
+                .Select(e => new ExerciseView(e.Id, e.Name, e.VideoUrl, e.Cues))
+                .AsNoTracking()
+                .ToDictionaryAsync(e => e.Id, cancellationToken);
+
+        var response = new ProgramDetailResponse(
+            program.Id, program.ClientId, program.Title, program.Status,
+            program.StartsOn, program.Notes, program.CreatedAt, program.UpdatedAt,
+            program.Days.Select(d => new DayView(
+                d.Id, d.Title, d.Position,
+                d.Prescriptions.Select(pdx => new PrescriptionView(
+                    pdx.Id, pdx.Position, pdx.TargetSets, pdx.TargetReps,
+                    pdx.TargetLoad, pdx.RestSeconds, pdx.Note,
+                    exercises[pdx.ExerciseId]
+                )).ToList()
+            )).ToList());
+
+        return Results.Ok(response);
     }
 
     private static async Task<IResult> UpdateProgram(

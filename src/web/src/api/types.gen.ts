@@ -241,6 +241,18 @@ export type ProgramDayResponse = {
     position?: number;
 };
 
+export type ProgramDetailResponse = {
+    id?: string;
+    clientId?: string;
+    title?: string | null;
+    status?: string | null;
+    startsOn?: string | null;
+    notes?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+    days?: Array<DayView> | null;
+};
+
 export type ProgramResponse = {
     id?: string;
     clientId?: string;
@@ -997,7 +1009,7 @@ export type GetApiProgramsByIdResponses = {
     /**
      * OK
      */
-    200: ProgramResponse;
+    200: ProgramDetailResponse;
 };
 
 export type GetApiProgramsByIdResponse = GetApiProgramsByIdResponses[keyof GetApiProgramsByIdResponses];

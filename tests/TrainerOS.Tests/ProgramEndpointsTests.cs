@@ -485,6 +485,188 @@ public class ProgramEndpointsTests : IClassFixture<ProgramEndpointsTestApp>
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // -- GET /api/programs/:id, the nested tree (#78) --
+
+    // Seeds two days and three prescriptions onto a program, all inserted in the wrong order
+    // so the endpoint's OrderBy is the only thing that can produce the right one. Insertion
+    // order is not sort order and SQLite is happy to hand rows back either way.
+    private (Guid DayOne, Guid DayTwo, Guid Squat, Guid Bench) SeedTree(Guid programId, Guid trainerId)
+    {
+        var dayOne = Guid.NewGuid();
+        var dayTwo = Guid.NewGuid();
+        var squat = Guid.NewGuid();
+        var bench = Guid.NewGuid();
+
+        _app.WithDb(db =>
+        {
+            db.Add(new Exercise
+            {
+                Id = squat, TrainerId = trainerId, Name = "Back Squat",
+                VideoUrl = "https://youtube.com/watch?v=squat", Cues = "Knees track over toes.",
+                IsActive = true, CreatedAt = FakeClock.BaseNow,
+            });
+            db.Add(new Exercise
+            {
+                Id = bench, TrainerId = trainerId, Name = "Bench Press",
+                IsActive = true, CreatedAt = FakeClock.BaseNow,
+            });
+
+            // Day 2 inserted first.
+            db.Add(new ProgramDay { Id = dayTwo, ProgramId = programId, Title = "Upper", Position = 2 });
+            db.Add(new ProgramDay { Id = dayOne, ProgramId = programId, Title = "Lower", Position = 1 });
+
+            // Position 2 inserted before position 1 within the same day.
+            db.Add(new ProgramDayExercise
+            {
+                Id = Guid.NewGuid(), ProgramDayId = dayOne, ExerciseId = bench, Position = 2,
+                TargetSets = 4, TargetReps = "5",
+            });
+            db.Add(new ProgramDayExercise
+            {
+                Id = Guid.NewGuid(), ProgramDayId = dayOne, ExerciseId = squat, Position = 1,
+                TargetSets = 3, TargetReps = "8-10", TargetLoad = "70 kg", RestSeconds = 90,
+                Note = "Brace before you unrack.",
+            });
+            db.Add(new ProgramDayExercise
+            {
+                Id = Guid.NewGuid(), ProgramDayId = dayTwo, ExerciseId = bench, Position = 1,
+                TargetSets = 5, TargetReps = "3",
+            });
+
+            db.SaveChanges();
+        });
+
+        return (dayOne, dayTwo, squat, bench);
+    }
+
+    [Fact]
+    public async Task Get_by_id_returns_days_and_prescriptions_ordered_by_position()
+    {
+        // The read the program builder (#52) is blocked on: one request, whole tree, in the
+        // order the trainer arranged it.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Tree");
+        var seeded = SeedTree(programId, _app.TrainerAId);
+
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/programs/{programId}", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // The program node still carries what it always did — this is an enrichment, not a
+        // replacement, and the builder reads client_id and status off the same response.
+        Assert.Equal(programId, body.GetProperty("id").GetGuid());
+        Assert.Equal(_app.ClientA2Id, body.GetProperty("clientId").GetGuid());
+        Assert.Equal("Tree", body.GetProperty("title").GetString());
+        Assert.Equal(ProgramStatuses.Draft, body.GetProperty("status").GetString());
+
+        var days = body.GetProperty("days").EnumerateArray().ToList();
+        Assert.Equal(2, days.Count);
+        Assert.Equal(seeded.DayOne, days[0].GetProperty("id").GetGuid());
+        Assert.Equal("Lower", days[0].GetProperty("title").GetString());
+        Assert.Equal(seeded.DayTwo, days[1].GetProperty("id").GetGuid());
+
+        var lower = days[0].GetProperty("prescriptions").EnumerateArray().ToList();
+        Assert.Equal(2, lower.Count);
+        Assert.Equal(1, lower[0].GetProperty("position").GetInt32());
+        Assert.Equal(2, lower[1].GetProperty("position").GetInt32());
+
+        // Every prescription carries the exercise it names, so the builder never fans out to
+        // resolve a name it is about to render.
+        var first = lower[0];
+        Assert.Equal(3, first.GetProperty("targetSets").GetInt32());
+        Assert.Equal("8-10", first.GetProperty("targetReps").GetString());
+        Assert.Equal("70 kg", first.GetProperty("targetLoad").GetString());
+        Assert.Equal(90, first.GetProperty("restSeconds").GetInt32());
+        Assert.Equal("Brace before you unrack.", first.GetProperty("note").GetString());
+
+        var exercise = first.GetProperty("exercise");
+        Assert.Equal(seeded.Squat, exercise.GetProperty("id").GetGuid());
+        Assert.Equal("Back Squat", exercise.GetProperty("name").GetString());
+        Assert.Equal("https://youtube.com/watch?v=squat", exercise.GetProperty("videoUrl").GetString());
+        Assert.Equal("Knees track over toes.", exercise.GetProperty("cues").GetString());
+
+        // A day's prescriptions are its own: the bench row on day 2 does not appear under day 1
+        // just because the same exercise is prescribed in both.
+        var upper = days[1].GetProperty("prescriptions").EnumerateArray().ToList();
+        Assert.Single(upper);
+        Assert.Equal(5, upper[0].GetProperty("targetSets").GetInt32());
+    }
+
+    [Fact]
+    public async Task Get_by_id_returns_an_empty_day_list_for_a_program_with_no_structure()
+    {
+        // A program the trainer has created and not filled in yet. Empty array, not null and
+        // not a 404 — the builder's empty state is an ordinary render, same as #30's.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Shell Only");
+
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/programs/{programId}", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(JsonValueKind.Array, body.GetProperty("days").ValueKind);
+        Assert.Empty(body.GetProperty("days").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Get_by_id_renders_a_prescription_whose_exercise_was_soft_deleted()
+    {
+        // api.md: deleting an exercise is PATCH is_active=false, and prescriptions written
+        // before that keep pointing at it. The exercise fetch deliberately does not filter
+        // is_active — if it did, the dictionary lookup building the response would throw and
+        // the whole program would 500 on the one screen the trainer needs to fix it from.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Retired Movement");
+        var dayId = Guid.NewGuid();
+        var retiredId = Guid.NewGuid();
+
+        _app.WithDb(db =>
+        {
+            db.Add(new Exercise
+            {
+                Id = retiredId, TrainerId = _app.TrainerAId, Name = "Sissy Squat",
+                IsActive = false, CreatedAt = FakeClock.BaseNow,
+            });
+            db.Add(new ProgramDay { Id = dayId, ProgramId = programId, Title = "Legs", Position = 1 });
+            db.Add(new ProgramDayExercise
+            {
+                Id = Guid.NewGuid(), ProgramDayId = dayId, ExerciseId = retiredId, Position = 1,
+                TargetSets = 3, TargetReps = "12",
+            });
+            db.SaveChanges();
+        });
+
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/programs/{programId}", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var prescription = body.GetProperty("days").EnumerateArray().Single()
+            .GetProperty("prescriptions").EnumerateArray().Single();
+        Assert.Equal("Sissy Squat", prescription.GetProperty("exercise").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task Get_by_id_does_not_expose_another_trainers_tree()
+    {
+        // conventions.md §Isolation, applied to the enriched payload rather than only to the
+        // shell it replaced: the days and prescriptions are new data on this route, so the
+        // 404 is re-proven with a tree actually present to leak.
+        SeedTree(_app.ProgramB_Active_Id, _app.TrainerBId);
+
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/programs/{_app.ProgramB_Active_Id}", session));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var payload = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("Back Squat", payload);
+        Assert.DoesNotContain("Lower", payload);
+    }
+
     [Fact]
     public async Task Get_nonexistent_id_is_404_indistinguishable_from_cross_tenant()
     {
