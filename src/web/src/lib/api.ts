@@ -9,6 +9,7 @@ import type {
   PostApiAuthVerifyData,
   PostApiMeSessionsByIdSetsData,
   PostApiMeSessionsData,
+  PostApiPauseData,
   SessionResponse,
   TokenValidityResponse,
 } from '../api/types.gen'
@@ -135,6 +136,30 @@ export async function checkMagicLink(token: string): Promise<boolean> {
 export async function consumeMagicLink(token: string): Promise<void> {
   const body: PostApiAuthVerifyData['body'] = { token }
   await request<unknown>('/api/auth/verify', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/**
+ * GET /api/pause. Validates the emailed token and mutates nothing (#40).
+ *
+ * The same shape as GET /api/auth/verify, and deliberately so: notifications.md resolved
+ * question 2 and api.md §GET /api/auth/verify are the same rule applied twice, so both token
+ * screens answer "is this link good?" with `{ valid }` and branch identically.
+ */
+export async function checkPauseLink(token: string): Promise<boolean> {
+  const body = await request<TokenValidityResponse>(`/api/pause?token=${encodeURIComponent(token)}`)
+  return body.valid === true
+}
+
+/**
+ * POST /api/pause. Consumes the token and sets notification_schedules.enabled = false.
+ *
+ * The only call in this app that pauses reminders, and it happens on a press. Every rejection
+ * (forged, expired, schedule since deleted) is one indistinguishable 401 invalid_token, so
+ * there is nothing here to branch on beyond the status.
+ */
+export async function pauseReminders(token: string): Promise<void> {
+  const body: PostApiPauseData['body'] = { token }
+  await request<unknown>('/api/pause', { method: 'POST', body: JSON.stringify(body) })
 }
 
 /**

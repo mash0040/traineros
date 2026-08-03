@@ -6,6 +6,7 @@ import { useClientSession } from './lib/session'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
+import { PauseScreen } from './screens/PauseScreen'
 import { TodayScreen } from './screens/TodayScreen'
 import { VerifyScreen } from './screens/VerifyScreen'
 
@@ -13,13 +14,17 @@ import { VerifyScreen } from './screens/VerifyScreen'
 // MemoryRouter in tests.
 //
 // Two of these routes are reached from an email, which is why they are real URLs with real
-// query strings rather than app state: /verify?token= is opened cold, in whatever browser the
-// mail app hands it to, often after a scanner has already touched it.
+// query strings rather than app state: /verify?token= and /pause?token= are opened cold, in
+// whatever browser the mail app hands them to, often after a scanner has already touched them.
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginScreen />} />
       <Route path="/verify" element={<VerifyScreen />} />
+      {/* Outside the gate, deliberately (#49). The signed token is the whole authorization,
+          and the client most likely to follow this link is one who has not opened the app in
+          weeks — sending her to a login screen first is how a pause link stops working. */}
+      <Route path="/pause" element={<PauseScreen />} />
 
       {/* Everything a signed-in client can reach sits under one gate, so the session is
           resolved once per navigation and every later screen (#44 onward) inherits it. */}
