@@ -220,17 +220,36 @@ export function updateSessionComment(sessionId: string, comment: string | null):
   })
 }
 
+/** api.md's cursor page: `before` is the loggedAt of the previous page's last item, never an offset. */
+export type HistoryQuery = {
+  limit: number
+  before?: string | null
+  exerciseId?: string | null
+}
+
 /**
- * GET /api/me/history. Used by the log screen to rebuild a session it is resuming.
+ * GET /api/me/history. Two callers, one endpoint.
  *
- * There is no GET for a single session, so "what have I already logged into this row" is
- * answered by reading recent sets and filtering on session id. That matters more than it
- * sounds: logged_sets has no unique constraint on (session_id, exercise_id, set_number), so a
- * resume that forgot the saved sets would restart numbering at 1 and write duplicates the
- * database would happily accept.
+ * The log screen reads one large page to rebuild a session it is resuming. There is no GET for
+ * a single session, so "what have I already logged into this row" is answered by reading recent
+ * sets and filtering on session id. That matters more than it sounds: logged_sets has no unique
+ * constraint on (session_id, exercise_id, set_number), so a resume that forgot the saved sets
+ * would restart numbering at 1 and write duplicates the database would happily accept.
+ *
+ * The history screen (#48) pages through the same feed with `before` and filters it with
+ * `exercise_id`. Query params here are snake_case while JSON bodies elsewhere are camelCase;
+ * that split is api.md #33's, not a slip.
  */
-export function fetchHistory(limit: number): Promise<HistoryResponse> {
-  return request<HistoryResponse>(`/api/me/history?limit=${limit}`)
+export function fetchHistory({ limit, before, exerciseId }: HistoryQuery): Promise<HistoryResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (before !== null && before !== undefined) {
+    params.set('before', before)
+  }
+  if (exerciseId !== null && exerciseId !== undefined) {
+    params.set('exercise_id', exerciseId)
+  }
+
+  return request<HistoryResponse>(`/api/me/history?${params.toString()}`)
 }
 
 /**

@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
+import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
 import { TodayScreen } from './screens/TodayScreen'
@@ -25,6 +26,9 @@ export default function App() {
       <Route element={<RequireClientSession />}>
         <Route path="/" element={<TodayRoute />} />
         <Route path="/workout" element={<LogWorkoutRoute />} />
+        {/* No wrapper: History reads everything it shows from GET /api/me/history, so it needs
+            nothing from the session beyond being inside the gate. */}
+        <Route path="/history" element={<HistoryScreen />} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login

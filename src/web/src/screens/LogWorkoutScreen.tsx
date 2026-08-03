@@ -145,7 +145,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
         // Non-fatal on its own. If there turns out to be no session, nothing was lost; if there
         // is one, ensureSession's read-back still catches it at the first save. The mount-time
         // restore is an optimisation over that path, not a replacement for it.
-        fetchHistory(HISTORY_PAGE).catch(() => null),
+        fetchHistory({ limit: HISTORY_PAGE }).catch(() => null),
       ])
 
       const draft = readDraft(performedOn, dayId)
@@ -335,7 +335,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
         return { id: session.id, restored: null }
       }
 
-      const history = await fetchHistory(HISTORY_PAGE)
+      const history = await fetchHistory({ limit: HISTORY_PAGE })
       const restored = rebuildBlocks(history.items ?? [], session.id, programRef.current, dayId)
 
       setBlocks((previous) => {

@@ -55,7 +55,18 @@ export function TodayScreen({ me }: { me: MeResponse }) {
   return (
     <main className="flex min-h-dvh flex-col px-6 pt-10">
       <div className="mx-auto flex w-full max-w-lg flex-1 flex-col">
-        <p className="text-sm font-semibold tracking-wide text-muted">{me.displayName ?? 'TrainerOS'}</p>
+        {/* The only way into History (#48). ui-ux.md specifies no navigation chrome and five
+            client screens do not earn a tab bar, so the entry point is a link on the screen the
+            client lands on. */}
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-sm font-semibold tracking-wide text-muted">{me.displayName ?? 'TrainerOS'}</p>
+          <Link
+            className="inline-flex min-h-[var(--tap-min)] items-center text-sm font-semibold text-ink"
+            to="/history"
+          >
+            <span className="underline underline-offset-4">History</span>
+          </Link>
+        </div>
 
         <h1 className="mt-8 text-xl font-semibold text-ink-bold">Today</h1>
         {program !== null && <p className="mt-1 text-sm text-muted">{program.title}</p>}
