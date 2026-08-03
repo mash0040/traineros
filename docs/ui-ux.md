@@ -43,6 +43,8 @@ This is deliberately the thinnest spec. The resume value of this project is back
 | Program builder | days → prescriptions; add exercise from library; drag-or-buttons reorder (buttons acceptable in v1; drag is polish) |
 | Exercise library | list/add/edit: name, video URL, cues; soft-delete |
 
+(Recorded in #50: trainer screens sit at root-level paths, not behind a /trainer prefix — a session is a trainer's or a client's and never both, so the path sets can't collide. RequireTrainerSession mirrors RequireClientSession; "trainer" is inferred from a valid cookie plus a 404 from /api/me, since no endpoint returns trainer identity. Desktop-first means a wider container (max-w-5xl vs the client screens' max-w-lg) and a relaxed --tap-min per DESIGN.md's carve-out; everything else in DESIGN.md still applies. Only Clients and Exercise library are top-level destinations — client detail hangs off a client, the program builder off that — so the nav bar renders only once there is more than one place to go.)
+
 Nine screens total. If a tenth appears during build, it goes through PRODUCT.md scope review, not straight into the sprint.
 
 ## Stack & visual decisions
