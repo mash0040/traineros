@@ -115,7 +115,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
 
   const [finishing, setFinishing] = useState(false)
   const [finishError, setFinishError] = useState<string | null>(null)
-  const [finishBlocked, setFinishBlocked] = useState(false)
+  const [discardAsked, setDiscardAsked] = useState(false)
 
   const performedOn = useMemo(() => todayIn(me.timezone), [me.timezone])
 
@@ -377,9 +377,9 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
   // silently at Finish.
   //
   // Derived every render rather than captured when Finish was tapped. Stored, the message
-  // outlived the condition: she saved the row it named and the warning stayed on screen,
-  // which reads as "Finish is still refusing" when the next tap would have worked. It also
-  // went stale in the other direction, still naming both exercises after one was resolved.
+  // outlived the condition: she saved the row it named and the prompt stayed on screen naming
+  // a set that is now safely on the server. It also went stale in the other direction, still
+  // naming both exercises after one was resolved.
   // `dirty` is what keeps a pre-filled row out of this list; see Pending.
   const unsavedNames = prescriptions
     .filter((prescription) => {
@@ -388,10 +388,20 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     })
     .map((prescription) => prescription.exercise?.name ?? 'an exercise')
 
-  const problem =
-    finishBlocked && unsavedNames.length > 0
-      ? `Save or clear the set you started on ${listNames(unsavedNames)} first.`
-      : finishError
+  // Two parts, and both have to hold: she asked the question, and the reason for asking it is
+  // still true. Saving or clearing the row while the prompt is up takes it down by itself,
+  // which is the same staleness argument as above applied to a control rather than a message.
+  const confirmingDiscard = discardAsked && unsavedNames.length > 0
+
+  // The prompt replaces the button that raised it, so without this focus drops to the body and
+  // a keyboard or switch user has to walk the screen again to answer a question they just
+  // asked. It lands on Cancel, which is also the harmless place for a reflex keypress to go.
+  const cancelRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (confirmingDiscard) {
+      cancelRef.current?.focus()
+    }
+  }, [confirmingDiscard])
 
   function updatePending(prescriptionId: string, patch: Partial<Pending>) {
     setBlocks((previous) => {
@@ -505,13 +515,26 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     }
 
     // Nothing is written implicitly at Finish. A typed-but-unsaved row is the one place this
-    // screen could still lose a set silently, so it blocks and says which exercise instead.
+    // screen could still lose a set silently, so it asks before walking away from one.
+    //
+    // #45 refused instead, and told her to save or clear the row herself. The protection was
+    // right and the cost was wrong: every saved set leaves a pre-filled row behind, so the row
+    // that trips this is usually a stray tap on a field that already had numbers in it, and
+    // the fix demanded was to delete digits she never typed. Asking keeps the guarantee —
+    // nothing is dropped without her saying so — and spends one tap instead of a cleanup.
     if (unsavedNames.length > 0) {
-      setFinishBlocked(true)
+      setDiscardAsked(true)
       return
     }
 
-    setFinishBlocked(false)
+    await finishSession()
+  }
+
+  // Everything past the guard. The discard path enters here directly: reaching it means the
+  // question this screen asks about unsaved work has been asked and answered, and re-checking
+  // would only re-raise the prompt she just dismissed.
+  async function finishSession() {
+    setDiscardAsked(false)
     setFinishing(true)
     setFinishError(null)
 
@@ -545,6 +568,8 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
       clearDraft()
       navigate('/', { replace: true })
     } catch (caught) {
+      // She is still on the screen and the row is still unsaved, so the next Finish asks again
+      // rather than carrying over an answer given to an attempt that never landed.
       setFinishError(classify(caught).message)
       setFinishing(false)
     }
@@ -629,20 +654,52 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
 
       <div className="sticky bottom-0 -mx-6 mt-10 border-t border-edge bg-surface px-6 pb-8 pt-4 shadow-[var(--shadow-sticky)]">
         <div className="mx-auto grid w-full max-w-lg gap-2">
-          {problem !== null && (
+          {finishError !== null && (
             <p className="text-sm text-danger" id="finish-error" role="alert">
-              {problem}
+              {finishError}
             </p>
           )}
-          <button
-            aria-describedby={problem === null ? undefined : 'finish-error'}
-            className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
-            disabled={finishing}
-            onClick={() => void onFinish()}
-            type="button"
-          >
-            {finishing ? 'Saving' : 'Finish workout'}
-          </button>
+          {/* Inline, in the bar the tap came from, rather than a dialog over the screen —
+              DESIGN.md bans the modal as the first answer and #105 settled the same question
+              for removing a set. The two choices replace the button that raised them, so there
+              is never a Finish control on screen that does something other than what it says. */}
+          {confirmingDiscard ? (
+            <div aria-labelledby="discard-prompt" className="grid gap-2" role="group">
+              <p className="text-base text-ink-bold" id="discard-prompt" role="alert">
+                {discardPrompt(unsavedNames)}
+              </p>
+              {/* Cancel takes the bottom slot, where the thumb already is: Finish is the most
+                  tapped control on this screen and a second tap out of habit has to land on
+                  the harmless answer. Same reason the Remove control sits below its row. It
+                  carries the accent for the same reason — amber is what to tap, and after this
+                  question the safe answer is the one to reach for. */}
+              <button
+                className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md border border-edge px-4 text-base font-semibold text-danger"
+                onClick={() => void finishSession()}
+                type="button"
+              >
+                Discard
+              </button>
+              <button
+                className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover"
+                onClick={() => setDiscardAsked(false)}
+                ref={cancelRef}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              aria-describedby={finishError === null ? undefined : 'finish-error'}
+              className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
+              disabled={finishing}
+              onClick={() => void onFinish()}
+              type="button"
+            >
+              {finishing ? 'Saving' : 'Finish workout'}
+            </button>
+          )}
         </div>
       </div>
     </Shell>
@@ -1142,6 +1199,18 @@ function classify(caught: unknown): Failure {
   }
 
   return { kind: 'rejected', message: 'Something went wrong. Try again.' }
+}
+
+/**
+ * "Unsaved set on Back Squat. Discard and finish?"
+ *
+ * The exercise is named because not knowing which row holds the stray numbers is the whole
+ * reason this is a question rather than a refusal — the answer changes if it turns out to be
+ * the set she actually did.
+ */
+function discardPrompt(names: string[]): string {
+  const subject = names.length === 1 ? 'Unsaved set on' : 'Unsaved sets on'
+  return `${subject} ${listNames(names)}. Discard and finish?`
 }
 
 function listNames(names: string[]): string {
