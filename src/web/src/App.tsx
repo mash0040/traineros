@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
+import { ClientDetailScreen } from './screens/ClientDetailScreen'
 import { ClientsScreen } from './screens/ClientsScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
@@ -43,6 +44,9 @@ export default function App() {
           only job is to distinguish them from screens that account can never open. */}
       <Route element={<RequireTrainerSession />}>
         <Route path="/clients" element={<ClientsScreen />} />
+        {/* Nested under the roster path rather than a flat /client/:id, because that is what it
+            is: one row of the list, opened. #52's builder hangs off a program the same way. */}
+        <Route path="/clients/:clientId" element={<ClientDetailScreen />} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login

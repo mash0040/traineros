@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import type { ClientResponse } from '../api/types.gen'
 import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
@@ -9,6 +10,7 @@ import { TrainerShell } from './TrainerShell'
 import {
   trainerDanger,
   trainerField,
+  trainerLink,
   trainerPrimary,
   trainerQuiet,
   trainerSecondary,
@@ -269,7 +271,15 @@ function ClientRow({
   return (
     <tr className="border-b border-edge align-top">
       <td className="py-3 pr-4">
-        <span className="block text-base font-semibold text-ink-bold">{name}</span>
+        {/* The way into the client detail screen (#51). The name is the link because it is what
+            the trainer is already looking for when they scan the column; a separate "View"
+            control would be a second thing in the row that goes where the first one points. */}
+        <Link
+          className={`block text-base font-semibold text-ink-bold underline underline-offset-4 ${trainerLink}`}
+          to={`/clients/${client.id}`}
+        >
+          {name}
+        </Link>
         <span className="block text-sm text-muted">{client.email}</span>
       </td>
 
