@@ -2,13 +2,17 @@ import type {
   ClientResponse,
   ClientSessionResponse,
   HistoryResponse,
+  ProgramResponse,
+  ScheduleResponse,
   LastResponse,
   LoggedSetResponse,
   MeProgramWrapper,
   MeResponse,
   PatchApiClientsByIdData,
   PatchApiMeSessionsByIdData,
+  PatchApiSchedulesByIdData,
   PostApiAuthMagicLinkData,
+  PostApiClientsByIdScheduleData,
   PostApiClientsData,
   PostApiAuthVerifyData,
   PostApiMeSessionsByIdSetsData,
@@ -193,6 +197,75 @@ export function fetchClientSessions(clientId: string): Promise<ClientSessionResp
   return request<ClientSessionResponse[]>(
     `/api/clients/${encodeURIComponent(clientId)}/sessions`,
   )
+}
+
+/**
+ * GET /api/programs. Every program this trainer owns, across all their clients.
+ *
+ * There is no per-client programs route, so the client detail screen filters this by
+ * `clientId`. At v1 scale (one trainer, a handful of clients, a few programs each) that is a
+ * smaller response than a dedicated endpoint would be worth.
+ */
+export function fetchPrograms(): Promise<ProgramResponse[]> {
+  return request<ProgramResponse[]>('/api/programs')
+}
+
+/**
+ * GET /api/clients/:id/schedule, with "no schedule yet" as null rather than a thrown 404.
+ *
+ * #29 returns 404 for both "this client has no schedule" and "not your client", deliberately —
+ * the scoped query cannot tell them apart and the roster is where ownership is learned. The
+ * caller here has already found the client in its own roster, so for this screen the 404 can
+ * only mean the first, and it is an ordinary empty state rather than an error.
+ *
+ * Contrast GET /api/me/program, which expresses the same idea as `{ program: null }` with a
+ * 200. The two endpoints disagree; this function is where that disagreement stops.
+ */
+export async function fetchClientSchedule(clientId: string): Promise<ScheduleResponse | null> {
+  try {
+    return await request<ScheduleResponse>(
+      `/api/clients/${encodeURIComponent(clientId)}/schedule`,
+    )
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null
+    }
+    throw error
+  }
+}
+
+/**
+ * POST /api/clients/:id/schedule. One schedule per client in v1, so this is create-only —
+ * a second call answers 409 schedule_exists rather than replacing the first.
+ *
+ * `sendTime` must be HH:mm:ss: the server binds it to a TimeOnly and an HH:mm string is a 400
+ * (#29). See lib/scheduleTime.ts, which is the only place that conversion happens.
+ */
+export function createClientSchedule(
+  clientId: string,
+  body: PostApiClientsByIdScheduleData['body'],
+): Promise<ScheduleResponse> {
+  return request<ScheduleResponse>(`/api/clients/${encodeURIComponent(clientId)}/schedule`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/schedules/:id. Time, days, and the enabled switch.
+ *
+ * The enabled switch is the one #25 turns off on deactivation and never turns back on, so this
+ * call is the only way a paused client's reminders resume — whether they paused themselves
+ * from an emailed link (#40) or the trainer deactivated and later reactivated them (#50).
+ */
+export function updateSchedule(
+  scheduleId: string,
+  body: PatchApiSchedulesByIdData['body'],
+): Promise<ScheduleResponse> {
+  return request<ScheduleResponse>(`/api/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 }
 
 /**
