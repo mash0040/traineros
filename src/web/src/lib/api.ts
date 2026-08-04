@@ -2,6 +2,9 @@ import type {
   ClientResponse,
   ClientSessionResponse,
   HistoryResponse,
+  PrescriptionResponse,
+  ProgramDayResponse,
+  ProgramDetailResponse,
   ProgramResponse,
   ScheduleResponse,
   LastResponse,
@@ -9,11 +12,16 @@ import type {
   MeProgramWrapper,
   MeResponse,
   PatchApiClientsByIdData,
+  PatchApiDayExercisesByIdData,
+  PatchApiDaysByIdData,
   PatchApiMeSessionsByIdData,
+  PatchApiProgramsByIdData,
   PatchApiSchedulesByIdData,
   PostApiAuthMagicLinkData,
   PostApiClientsByIdScheduleData,
   PostApiClientsData,
+  PostApiProgramsByIdDaysData,
+  PostApiProgramsData,
   PostApiAuthVerifyData,
   PostApiMeSessionsByIdSetsData,
   PostApiMeSessionsData,
@@ -208,6 +216,103 @@ export function fetchClientSessions(clientId: string): Promise<ClientSessionResp
  */
 export function fetchPrograms(): Promise<ProgramResponse[]> {
   return request<ProgramResponse[]>('/api/programs')
+}
+
+// -- Program builder (#28 writes, tree read from #78) -------------------------------------
+
+/**
+ * GET /api/programs/:id. The program with its days, their prescriptions, and each
+ * prescription's exercise, in one request.
+ *
+ * The builder reads the whole tree once and then keeps its own copy in step from what the
+ * write endpoints return, rather than re-reading after every save. A refetch per keystroke-save
+ * would be correct and would also throw away focus and scroll position on a screen whose whole
+ * job is a long sequence of small edits.
+ */
+export function fetchProgram(programId: string): Promise<ProgramDetailResponse> {
+  return request<ProgramDetailResponse>(`/api/programs/${encodeURIComponent(programId)}`)
+}
+
+/** POST /api/programs. `clientId` is required; status defaults to draft server-side. */
+export function createProgram(body: PostApiProgramsData['body']): Promise<ProgramResponse> {
+  return request<ProgramResponse>('/api/programs', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/**
+ * PATCH /api/programs/:id. Title, notes, dates, and the status transition.
+ *
+ * Status is unrestricted between draft/active/archived (#27) with one structural gate: a client
+ * may have only one active program, enforced by a partial unique index, so activating a second
+ * is a 409 program_active_conflict rather than a silent swap.
+ */
+export function updateProgram(
+  programId: string,
+  body: PatchApiProgramsByIdData['body'],
+): Promise<ProgramResponse> {
+  return request<ProgramResponse>(`/api/programs/${encodeURIComponent(programId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/** POST /api/programs/:id/days. Position is server-assigned to the end; reordering is #54. */
+export function createDay(
+  programId: string,
+  body: PostApiProgramsByIdDaysData['body'],
+): Promise<ProgramDayResponse> {
+  return request<ProgramDayResponse>(`/api/programs/${encodeURIComponent(programId)}/days`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** PATCH /api/days/:id. Title here; `position` belongs to the reorder flow (#54). */
+export function updateDay(
+  dayId: string,
+  body: PatchApiDaysByIdData['body'],
+): Promise<ProgramDayResponse> {
+  return request<ProgramDayResponse>(`/api/days/${encodeURIComponent(dayId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * DELETE /api/days/:id. 204.
+ *
+ * The day's prescriptions go with it (ON DELETE CASCADE), but the client's logged history does
+ * not: workout_sessions.program_day_id and logged_sets.program_day_exercise_id are both
+ * ON DELETE SET NULL (#17, database.md principle 4), so past sessions and sets survive with
+ * their references cleared. The screen says so before asking.
+ */
+export async function deleteDay(dayId: string): Promise<void> {
+  await request<null>(`/api/days/${encodeURIComponent(dayId)}`, { method: 'DELETE' })
+}
+
+/**
+ * PATCH /api/day-exercises/:id.
+ *
+ * Blank string clears a nullable text field to NULL; omitting it leaves the field alone. That
+ * convention is #28's and it is why the edit form sends every field it owns on every save.
+ */
+export function updatePrescription(
+  prescriptionId: string,
+  body: PatchApiDayExercisesByIdData['body'],
+): Promise<PrescriptionResponse> {
+  return request<PrescriptionResponse>(`/api/day-exercises/${encodeURIComponent(prescriptionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * DELETE /api/day-exercises/:id. 204.
+ *
+ * logged_sets.program_day_exercise_id is ON DELETE SET NULL, so a set the client already
+ * logged survives, keyed by its always-set exercise_id.
+ */
+export async function deletePrescription(prescriptionId: string): Promise<void> {
+  await request<null>(`/api/day-exercises/${encodeURIComponent(prescriptionId)}`, { method: 'DELETE' })
 }
 
 /**

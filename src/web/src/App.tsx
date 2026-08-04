@@ -8,7 +8,9 @@ import { ClientsScreen } from './screens/ClientsScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
+import { NewProgramScreen } from './screens/NewProgramScreen'
 import { PauseScreen } from './screens/PauseScreen'
+import { ProgramBuilderScreen } from './screens/ProgramBuilderScreen'
 import { TodayScreen } from './screens/TodayScreen'
 import { VerifyScreen } from './screens/VerifyScreen'
 
@@ -47,6 +49,12 @@ export default function App() {
         {/* Nested under the roster path rather than a flat /client/:id, because that is what it
             is: one row of the list, opened. #52's builder hangs off a program the same way. */}
         <Route path="/clients/:clientId" element={<ClientDetailScreen />} />
+
+        {/* The two paths #51 already links to, now that #53 has something behind them. `new`
+            is declared first for readability; React Router ranks static segments above dynamic
+            ones regardless, so /programs/new can never be read as a program id. */}
+        <Route path="/programs/new" element={<NewProgramScreen />} />
+        <Route path="/programs/:programId" element={<ProgramBuilderScreen />} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login

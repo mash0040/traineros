@@ -250,8 +250,16 @@ function ReminderSchedule({
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
-  function toggleDay(day: number) {
+  // Both notes describe the last save attempt, so both go the moment a field moves. Without the
+  // error clear, "Pick at least one day." survived picking a day — the same staleness #46 named
+  // and the program builder's status control had.
+  function edited() {
     setSaved(false)
+    setError(null)
+  }
+
+  function toggleDay(day: number) {
+    edited()
     setDays((previous) =>
       previous.includes(day) ? previous.filter((candidate) => candidate !== day) : [...previous, day],
     )
@@ -346,7 +354,7 @@ function ReminderSchedule({
             name="sendTime"
             onChange={(event) => {
               setSendTime(event.target.value)
-              setSaved(false)
+              edited()
             }}
             type="time"
             value={sendTime}
@@ -382,7 +390,7 @@ function ReminderSchedule({
             name="enabled"
             onChange={(event) => {
               setEnabled(event.target.checked)
-              setSaved(false)
+              edited()
             }}
             type="checkbox"
           />
