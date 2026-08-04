@@ -306,6 +306,36 @@ describe('ClientDetailScreen', () => {
     expect(callsOfMethod(fetchMock, 'POST')).toHaveLength(0)
   })
 
+  it('clears the day complaint as soon as a day is picked', async () => {
+    // #46's staleness rule: a message must not outlive the condition it describes. This one
+    // named an empty day list and stayed put while the list stopped being empty.
+    mockApi({ clients: [ada], schedule: null })
+    renderAt('client-ada')
+
+    await userEvent.type(await screen.findByLabelText('Send at'), '06:00')
+    await userEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pick at least one day.')
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Mon' }))
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('clears the time complaint as soon as a time is picked', async () => {
+    // The same defect one field over, fixed with the same call rather than left for the next
+    // bug report.
+    mockApi({ clients: [ada], schedule: null })
+    renderAt('client-ada')
+
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Mon' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pick a time to send the reminder.')
+
+    await userEvent.type(screen.getByLabelText('Send at'), '06:00')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('surfaces the server’s rejection and keeps the form as typed', async () => {
     mockApi({
       clients: [ada],
