@@ -533,7 +533,9 @@ describe('ProgramBuilderScreen', () => {
 
   it('surfaces a rejection for an exercise retired since the screen loaded', async () => {
     // The picker only offers active exercises, but the trainer may have retired one in another
-    // tab. #28 answers 400 unknown_exercise and the message is shown as-is.
+    // tab. #28 answers 400 unknown_exercise, and this is the canonical case for SPA-owned copy:
+    // the server cannot know a stale picker offered the id, so it can only say the id is
+    // unknown. The SPA drew that list, so it is the layer that can say the library moved on.
     mockApi({
       onPost: () => ({
         ok: false,
@@ -548,7 +550,9 @@ describe('ProgramBuilderScreen', () => {
     await userEvent.type(within(upper).getByLabelText('Reps'), '5')
     await userEvent.click(within(upper).getByRole('button', { name: 'Add exercise' }))
 
-    expect(await within(upper).findByRole('alert')).toHaveTextContent('Unknown exercise_id.')
+    expect(await within(upper).findByRole('alert')).toHaveTextContent(
+      'That exercise was retired, so it cannot be added. Reload to see the current library.',
+    )
   })
 
   // -- Reorder (#54) --

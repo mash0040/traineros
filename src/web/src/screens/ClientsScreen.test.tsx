@@ -238,8 +238,15 @@ describe('ClientsScreen', () => {
     await userEvent.type(screen.getByLabelText('Email'), 'ada@example.com')
     await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('A user with this email already exists.')
+    // The SPA's copy for email_taken, not the server's "A user with this email already exists."
+    // The server's sentence is true and unhelpful: it describes a row, when what the trainer
+    // needs is the next move, which is to go and look at their own roster.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That email is already in use. Check whether they are already on your roster.',
+    )
     expect(screen.getByLabelText('Email')).toHaveValue('ada@example.com')
+    // Still attributed to the email field, because this rejection genuinely is about it.
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'true')
   })
 
   it('confirms before deactivating, and names the side effect the trainer would not predict', async () => {

@@ -40,13 +40,17 @@ Deliberately rejected:
 | `--accent-ink` | `oklch(99% 0.010 80)` | Text on `--accent` |
 | `--danger` | `oklch(58% 0.19 25)` | Destructive action surface (deactivate, cancel unsaved) |
 | `--danger-ink` | `oklch(99% 0.010 25)` | Text on `--danger` |
+| `--accent-surface` | `oklch(64% 0.17 65 / 0.10)` | Tinted panel behind a confirmation message |
+| `--accent-edge` | `oklch(64% 0.17 65 / 0.32)` | 1px border on a confirmation message |
+| `--danger-surface` | `oklch(58% 0.19 25 / 0.07)` | Tinted panel behind a failure message |
+| `--danger-edge` | `oklch(58% 0.19 25 / 0.28)` | 1px border on a failure message |
 
 **Why these choices, in one line each:**
 
 - Neutrals tint at hue 250 (cool blue), chroma 0.006–0.014. Enough to lift them off `#fff/#000` without reading as "blue," honest under white LED gym lighting, consistent with the "never `#000/#fff`" shared law.
 - Amber (hue 65) is the only chromatic color in the palette; it *is* the primary-action signal. Users learn "amber means the thing to tap" within one session.
 - Amber deliberately dodges category reflexes: not fitness-green, not neon-yellow, not wellness-apricot. Its warmth against cool neutrals gives chromatic uniqueness, not raw luminance contrast — hence the paper-on-amber contrast direction called out above.
-- No success-green. Confirmations are amber (the "committed" color) or a check mark in `--ink`. Fewer colors, clearer meaning.
+- No success-green. Confirmations are amber (the "committed" color) or a check mark in `--ink`. Fewer colors, clearer meaning. See §Messages for how that is actually rendered — the four `-surface`/`-edge` tokens are alpha over `--accent`/`--danger`, not new hues, so the palette is still one warm accent plus one red.
 
 **Semantic naming is deliberate. Do not rename to literal color names (`--white`, `--black`, `--amber-500`).** The point of `--surface` / `--ink` / `--edge` / `--accent` is that adding a dark mode post-v1 becomes a values change under the same names, not a codebase-wide refactor. If a future contributor "simplifies" `--ink` to `--gray-900`, they have destroyed the token's purpose. Reject the PR.
 
@@ -121,6 +125,55 @@ Known tradeoff: only the last row holds inputs, so as sets are logged the inputs
 - Bolding the `×` glyph or the `Last` header to "balance" the row. The numbers balance it.
 - Repeating the `Last` label per row. It names a column, and the column is named once.
 
+## Messages: errors, validation failures, confirmations
+
+**Scope: trainer screens.** Surfaced by the #53/#54 desktop passes. Client screens are single-purpose (one form, one outcome, one screen) and their few messages are the whole content of the view they appear in; trainer screens stack six or eight write surfaces on one page, which is where an undifferentiated message stops working.
+
+**The defect.** Every message rendered as `--text-sm` in one of two text colors, at weight 400, in the same slot under the control that produced it. A save confirmation and a rejected write were separable only by *reading* them, which is precisely what someone does not do when they glance back at a form after clicking Save. Colour alone was carrying the entire signal, and it was carrying it at 14px in a paragraph the eye has no reason to stop on.
+
+**Two tones. Failures keep `--danger`; confirmations take the amber accent, which already means "committed" in this palette (see §Color). Separation comes from treatment, not from a third semantic colour** — this system does not get a success-green, a warning-orange, or an info-blue.
+
+| | Failure | Confirmation |
+|---|---|---|
+| Panel | `--danger-surface` | `--accent-surface` |
+| Border | 1px `--danger-edge`, full (never a side stripe) | 1px `--accent-edge`, full |
+| Text | `--ink-bold`, weight 600 | `--ink`, weight 400 |
+| Leading glyph | `!` in `--danger` | `✓` in `--ink` |
+| ARIA role | `alert` | `status` |
+| Size | `--text-sm` | `--text-sm` |
+
+**Colour is the axis that carries least, deliberately.** Amber (hue 65) and red (hue 25) are ~40° apart and are the textbook deuteranopia confusion pair; a red-vs-amber tint at 7–10% alpha is close to no signal at all for a red-green colourblind trainer, and none for anyone reading a greyscale screenshot in a bug report. So the tint is the *ambient* cue and the glyph plus the weight are the *actual* one. All three are required. A message that keeps the tint and drops the glyph has quietly reverted to colour-only.
+
+**Why weight, and why it goes on the failure.** Two weights exist in this system (400/600) and 600 is defined as value-emphasis. A failure is the message that must interrupt; a confirmation is the message that must be *available* without interrupting, because the trainer already knows they clicked Save. Bolding both would flatten them again in the opposite direction.
+
+**Size stays at `--text-sm` for both.** The temptation is to enlarge failures. Rejected: these messages sit inside form clusters, and a message that changes size changes the height of the block it appears in, which moves the controls under it at the moment the trainer is reaching for them.
+
+**Loading and progress text is neither tone.** "Loading your clients" is not an outcome; it stays plain `--muted` body text with `role="status"` and gets no panel. Panels mean *something happened*.
+
+### Does the single-accent rule need an explicit carve-out?
+
+**No — and recording one would be wrong.** `--tap-min` needed a carve-out because trainer screens genuinely violate it: 44px controls sized for a thumb are the wrong size for a pointer, so the rule is suspended. Nothing here is suspended. Amber for confirmations is not an exception to §Color, it is §Color: "Confirmations are amber (the 'committed' color)" has been in that section since v1 and the trainer screens simply were not doing it.
+
+**What does need recording is a boundary, and it is this:**
+
+> Solid `--accent` remains reserved for the primary action. A message panel may only ever use `--accent-surface` (≤12% alpha). Amber as a *ground* means "tap this"; amber as a *tint* means "this committed". A confirmation rendered on solid amber would be the first non-clickable thing in the product wearing the CTA's own surface, and one screen after that "amber means the thing to tap" is no longer true.
+
+That boundary also settles the ≤10%-of-pixels budget in §Color: that budget counts saturated accent — solid `--accent` surfaces — and a 10%-alpha tint over near-paper is not that. A confirmation panel does not spend the button's budget.
+
+**Ban restated locally, because message panels are where it always gets broken:** no coloured `border-left` stripe. Full 1px border or nothing (see §Absolute bans).
+
+### Copy is the SPA's, not the API's
+
+A treatment fix does not help if the sentence inside it was written for a developer. Trainer-facing error text was the API's `message` field rendered verbatim, and those strings were written across a dozen endpoint tickets as developer explanations: `Unknown exercise_id.`, `Not Found`, `ordered_ids contains duplicates.` reach the trainer exactly like that.
+
+**Rule: the SPA owns trainer-facing error copy, keyed on the error `code`, falling back to the server's `message` for codes it has not mapped.** The code is the stable contract (api.md); the message is prose that may be reworded by any API ticket without warning.
+
+The fallback is not a concession — it is load-bearing. `bad_request` covers ~27 distinct validation failures under one code, so a single rewrite of it would say *less* than the string it replaced. Those are left to the server, which is the only layer that knows which field it rejected. Splitting `bad_request` into per-field codes is an API change, not a web one.
+
+**The SPA maps a code when it knows something the API cannot.** That is the test for whether an entry belongs in the map. A retired exercise coming back as `unknown_exercise` is the canonical case: the server knows the id is not selectable, but only the SPA knows the trainer is looking at a picker populated before the exercise was retired, so only the SPA can say *reload to see the current library*. Where the SPA knows nothing extra, the server's sentence stands.
+
+Copy in the map obeys §Absolute bans like any other string: **no em dashes**, including in the reload-prompt pattern above.
+
 ## Elevation & borders
 
 **Border-first.** `1px solid var(--edge)` is the default separator. Cards, inputs, and dividers all use it. Elevation via shadow is reserved for the sticky bottom CTA (implies floating over scroll content) and toast notifications.
@@ -185,6 +238,13 @@ Tokens live in `src/web/src/index.css` under `@theme`, so they surface as utilit
   --color-accent-ink:    oklch(99% 0.010 80);
   --color-danger:        oklch(58% 0.19 25);
   --color-danger-ink:    oklch(99% 0.010 25);
+
+  /* §Messages. Alpha over the two chromatic tokens above, declared as tokens rather than
+     written as bg-accent/10 at each call site so dark mode stays a values change. */
+  --color-accent-surface: oklch(64% 0.17 65 / 0.10);
+  --color-accent-edge:    oklch(64% 0.17 65 / 0.32);
+  --color-danger-surface: oklch(58% 0.19 25 / 0.07);
+  --color-danger-edge:    oklch(58% 0.19 25 / 0.28);
 
   --radius-sm: 4px;
   --radius-md: 6px;

@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom'
 
 import type { ClientResponse } from '../api/types.gen'
 import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
+import { messageFor } from '../lib/apiMessages'
 import { looksLikeEmail } from '../lib/email'
 import { formatSessionDate } from '../lib/history'
 import { todayIn } from '../lib/workoutDraft'
+import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import {
   trainerDanger,
@@ -262,7 +264,7 @@ function ClientRow({
       onUpdated(await updateClient(client.id, { isActive }))
       setConfirming(false)
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'client'))
     } finally {
       setSaving(false)
     }
@@ -335,9 +337,9 @@ function ClientRow({
         )}
 
         {error !== null && (
-          <p className="mt-2 text-sm text-danger" role="alert">
+          <TrainerMessage className="mt-2" tone="failure">
             {error}
-          </p>
+          </TrainerMessage>
         )}
 
         {/* Reactivation is offered because the API has it and a one-way control would make a
@@ -484,18 +486,21 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
       setEmail('')
       setDisplayName('')
     } catch (caught) {
-      // The server is the authority on what counts as an address, and its messages are written
-      // for a person (api.md) — including the 409 for an address already in use and the 400 for
-      // a format this screen let through. Shown as they are, rather than remapped per code, and
-      // nothing the trainer typed is cleared: the whole point is that they can fix it.
-      // Attributed to the email field: every rejection this endpoint issues that the trainer
-      // can act on is about the address (400 for a format the client rule let through, 409 for
-      // one already in use). A transport failure is nobody's field, so it marks none.
-      setError(
-        caught instanceof ApiError
-          ? { message: caught.message, field: 'email' }
-          : { message: 'Something went wrong. Try again.', field: null },
-      )
+      // Nothing the trainer typed is cleared: the whole point is that they can fix it.
+      //
+      // Attributed to the email field only when the rejection is actually about the address —
+      // 400 for a format the looser client rule let through (#114), 409 for one already in use.
+      // Marking the input aria-invalid for a dropped connection or an expired session would
+      // send a screen reader user to fix an address that is perfectly fine, which is the same
+      // defect #114 found when one error string marked every field.
+      const aboutTheAddress =
+        caught instanceof ApiError &&
+        (caught.code === 'bad_request' || caught.code === 'email_taken')
+
+      setError({
+        message: messageFor(caught, 'client'),
+        field: aboutTheAddress ? 'email' : null,
+      })
       setAddedName(null)
     } finally {
       setSubmitting(false)
@@ -609,15 +614,15 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
           </div>
 
           {error !== null && (
-            <p className="text-sm text-danger" id="add-client-error" role="alert">
+            <TrainerMessage id="add-client-error" tone="failure">
               {error.message}
-            </p>
+            </TrainerMessage>
           )}
 
           {addedName !== null && error === null && (
-            <p className="text-sm text-ink" role="status">
+            <TrainerMessage tone="confirmation">
               {addedName} added. Tell them to log in.
-            </p>
+            </TrainerMessage>
           )}
 
           {/* One button, because there is one way to finish this form. See `toggle` above for

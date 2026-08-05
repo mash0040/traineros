@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 
 import type { ExerciseResponse } from '../api/types.gen'
-import { ApiError, createExercise, fetchExercises, updateExercise } from '../lib/api'
+import { createExercise, fetchExercises, updateExercise } from '../lib/api'
+import { messageFor } from '../lib/apiMessages'
+import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import {
   trainerDanger,
@@ -172,7 +174,7 @@ function Exercise({
       onUpdated(await updateExercise(exercise.id, { isActive }))
       setConfirming(false)
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'exercise'))
     } finally {
       setSaving(false)
     }
@@ -278,9 +280,9 @@ function Exercise({
       )}
 
       {error !== null && (
-        <p className="mt-3 text-sm text-danger" role="alert">
+        <TrainerMessage className="mt-3" tone="failure">
           {error}
-        </p>
+        </TrainerMessage>
       )}
     </li>
   )
@@ -364,10 +366,7 @@ function EditExercise({
         }),
       )
     } catch (caught) {
-      setError({
-        message: caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.',
-        field: null,
-      })
+      setError({ message: messageFor(caught, 'exercise'), field: null })
     } finally {
       setSaving(false)
     }
@@ -396,9 +395,9 @@ function EditExercise({
       />
 
       {error !== null && (
-        <p className="text-sm text-danger" id={`exercise-${exercise.id}-error`} role="alert">
+        <TrainerMessage id={`exercise-${exercise.id}-error`} tone="failure">
           {error.message}
-        </p>
+        </TrainerMessage>
       )}
 
       <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
@@ -450,10 +449,7 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
       setVideoUrl('')
       setCues('')
     } catch (caught) {
-      setError({
-        message: caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.',
-        field: null,
-      })
+      setError({ message: messageFor(caught, 'exercise'), field: null })
       setAddedName(null)
     } finally {
       setSaving(false)
@@ -513,15 +509,15 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
           />
 
           {error !== null && (
-            <p className="text-sm text-danger" id="new-exercise-error" role="alert">
+            <TrainerMessage id="new-exercise-error" tone="failure">
               {error.message}
-            </p>
+            </TrainerMessage>
           )}
 
           {addedName !== null && error === null && (
-            <p className="text-sm text-ink" role="status">
+            <TrainerMessage tone="confirmation">
               {addedName} added. You can prescribe it now.
-            </p>
+            </TrainerMessage>
           )}
 
           <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
