@@ -914,13 +914,17 @@ function AddPrescription({
   }
 
   if (library.length === 0) {
-    // Nothing to pick. There is no exercise library screen yet to link to, so this says where
-    // exercises come from rather than pointing at a route that does not exist.
+    // Nothing to pick, and now somewhere to send them: #55 built the library screen this used to
+    // only be able to describe. A dead end on the one screen where a trainer discovers they have
+    // no exercises is the worst place to leave one.
     return (
       <div className="mt-6 border-t border-edge pt-4">
         <p className="text-sm text-muted">
-          Your exercise library is empty, so there is nothing to add yet. Exercises are created
-          in the library and then prescribed here.
+          Your exercise library is empty, so there is nothing to add yet.{' '}
+          <Link className={trainerQuiet} to="/exercises">
+            Add an exercise
+          </Link>{' '}
+          and then prescribe it here.
         </p>
       </div>
     )

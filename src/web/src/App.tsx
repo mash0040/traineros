@@ -5,6 +5,7 @@ import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
 import { ClientDetailScreen } from './screens/ClientDetailScreen'
 import { ClientsScreen } from './screens/ClientsScreen'
+import { ExercisesScreen } from './screens/ExercisesScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
@@ -49,6 +50,10 @@ export default function App() {
         {/* Nested under the roster path rather than a flat /client/:id, because that is what it
             is: one row of the list, opened. #52's builder hangs off a program the same way. */}
         <Route path="/clients/:clientId" element={<ClientDetailScreen />} />
+
+        {/* The other top-level trainer destination (#55), and the reason the shell's nav bar
+            renders at all from here on. */}
+        <Route path="/exercises" element={<ExercisesScreen />} />
 
         {/* The two paths #51 already links to, now that #53 has something behind them. `new`
             is declared first for readability; React Router ranks static segments above dynamic

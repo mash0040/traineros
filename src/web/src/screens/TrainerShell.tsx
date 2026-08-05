@@ -22,16 +22,20 @@ import { trainerLink } from './trainerControls'
 // Clients and Exercise library. Client detail hangs off a client, and the program builder off
 // that — both are reached by going through something, not by picking from a bar.
 //
-// So the nav is a two-item list, and today it holds one item because one screen exists. It
-// renders only when there is somewhere else to go: a nav bar whose single link is the page you
-// are already on is furniture. #53 adds the Exercise library line to NAV and the bar appears
-// on its own.
+// So the nav is a two-item list. It renders only when there is somewhere else to go — a nav bar
+// whose single link is the page you are already on is furniture — which is why it was invisible
+// while Clients was the only screen that existed. #55 built the Exercise library, so the second
+// line is here and the bar appeared on its own, with no change to this component beyond the
+// entry below.
 //
 // Rejected: a sidebar. Two destinations do not need a persistent column, and the trainer is on
 // this app occasionally rather than living in it.
-// Rejected: building the bar now with links to unbuilt screens. A nav that 404s is worse than
+// Rejected: building the bar early with links to unbuilt screens. A nav that 404s is worse than
 // a nav that is not there yet.
-const NAV: { to: string; label: string }[] = [{ to: '/clients', label: 'Clients' }]
+const NAV: { to: string; label: string }[] = [
+  { to: '/clients', label: 'Clients' },
+  { to: '/exercises', label: 'Exercise library' },
+]
 
 export function TrainerShell({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation()
