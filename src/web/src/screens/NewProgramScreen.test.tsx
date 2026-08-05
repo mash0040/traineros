@@ -80,7 +80,12 @@ describe('NewProgramScreen', () => {
     await userEvent.type(screen.getByLabelText('Name'), 'Winter Block')
     await userEvent.click(screen.getByRole('button', { name: 'Create program' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Unknown client_id.')
+    // "Unknown client_id." is a sentence about a foreign key. The trainer arrived here from a
+    // client's page, so from where they sit the id is not unknown at all; what changed is the
+    // roster.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That client is no longer on your roster. Reload to see who is.',
+    )
     expect(screen.getByLabelText('Name')).toHaveValue('Winter Block')
   })
 })

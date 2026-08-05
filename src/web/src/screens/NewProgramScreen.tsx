@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ApiError, createProgram } from '../lib/api'
+import { messageFor } from '../lib/apiMessages'
+import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import { trainerField, trainerPrimary, trainerQuiet } from './trainerControls'
 
@@ -46,7 +48,7 @@ export function NewProgramScreen() {
       // would create a second program if it were submitted again.
       navigate(`/programs/${created.id}`, { replace: true })
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'program'))
       setSaving(false)
     }
   }
@@ -102,9 +104,9 @@ export function NewProgramScreen() {
         </div>
 
         {error !== null && (
-          <p className="text-sm text-danger" id="new-program-error" role="alert">
+          <TrainerMessage id="new-program-error" tone="failure">
             {error}
-          </p>
+          </TrainerMessage>
         )}
 
         <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">

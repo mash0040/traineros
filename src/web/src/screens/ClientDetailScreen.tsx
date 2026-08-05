@@ -3,7 +3,6 @@ import { Link, useParams } from 'react-router-dom'
 
 import type { ClientResponse, ClientSessionResponse, ProgramResponse, ScheduleResponse } from '../api/types.gen'
 import {
-  ApiError,
   createClientSchedule,
   fetchClientSchedule,
   fetchClientSessions,
@@ -11,8 +10,10 @@ import {
   fetchPrograms,
   updateSchedule,
 } from '../lib/api'
+import { messageFor } from '../lib/apiMessages'
 import { formatSessionDate } from '../lib/history'
 import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
+import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import { trainerField, trainerPrimary, trainerQuiet, trainerSecondary } from './trainerControls'
 
@@ -307,7 +308,10 @@ function ReminderSchedule({
       setEnabled(result.enabled ?? enabled)
       setSaved(true)
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      // 'schedule' rather than 'client': this form writes to the schedule, so a 404 here means
+      // the schedule vanished (deleted from another tab), not that the client did. The roster
+      // read above is what would catch a missing client.
+      setError(messageFor(caught, 'schedule'))
     } finally {
       setSaving(false)
     }
@@ -397,16 +401,12 @@ function ReminderSchedule({
           Send these reminders
         </label>
 
-        {error !== null && (
-          <p className="text-sm text-danger" role="alert">
-            {error}
-          </p>
-        )}
+        {error !== null && <TrainerMessage tone="failure">{error}</TrainerMessage>}
 
         {saved && error === null && (
-          <p className="text-sm text-ink" role="status">
+          <TrainerMessage tone="confirmation">
             Saved. {enabled ? `Sending ${describeDays(days)}.` : 'Reminders are off.'}
-          </p>
+          </TrainerMessage>
         )}
 
         <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">

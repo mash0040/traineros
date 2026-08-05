@@ -17,6 +17,15 @@
   --color-danger:        oklch(58% 0.19 25);
   --color-danger-ink:    oklch(99% 0.010 25);
 
+  /* DESIGN.md §Messages. Alpha over the two chromatic tokens above, so the palette is still
+     one warm accent plus one red. Declared as tokens rather than written as bg-accent/10 at
+     each call site, for the same reason every other colour here is a token: dark mode is a
+     values change under these names, not a hunt for scattered opacity modifiers. */
+  --color-accent-surface: oklch(64% 0.17 65 / 0.10);
+  --color-accent-edge:    oklch(64% 0.17 65 / 0.32);
+  --color-danger-surface: oklch(58% 0.19 25 / 0.07);
+  --color-danger-edge:    oklch(58% 0.19 25 / 0.28);
+
   --radius-sm: 4px;
   --radius-md: 6px;
 

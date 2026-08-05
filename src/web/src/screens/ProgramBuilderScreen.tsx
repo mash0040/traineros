@@ -20,6 +20,8 @@ import {
   updatePrescription,
   updateProgram,
 } from '../lib/api'
+import { messageFor } from '../lib/apiMessages'
+import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import { trainerDanger, trainerField, trainerPrimary, trainerQuiet, trainerSecondary } from './trainerControls'
 
@@ -262,17 +264,11 @@ function ProgramStatus({
     try {
       onChanged(await updateProgram(programId, { status: next }))
     } catch (caught) {
-      // The server's message names the conflict; this adds the part the trainer has to do
-      // about it, which the API has no business knowing.
-      setAttempt({
-        status: next,
-        message:
-          caught instanceof ApiError && caught.code === 'program_active_conflict'
-            ? `${caught.message} Archive that one first, then activate this.`
-            : caught instanceof ApiError
-              ? caught.message
-              : 'Something went wrong. Try again.',
-      })
+      // This used to concatenate an instruction onto the server's own sentence, which meant the
+      // trainer read one sentence written for them and one written for a developer, joined. The
+      // whole message for program_active_conflict now lives in the copy map, so rewording the
+      // API's string cannot change what a trainer sees here.
+      setAttempt({ status: next, message: messageFor(caught, 'program') })
     } finally {
       setSaving(null)
     }
@@ -299,9 +295,9 @@ function ProgramStatus({
       </div>
 
       {conflict !== null && (
-        <p className="mt-2 text-sm text-danger" role="alert">
+        <TrainerMessage className="mt-2" tone="failure">
           {conflict}
-        </p>
+        </TrainerMessage>
       )}
     </div>
   )
@@ -372,7 +368,9 @@ function Day({
         prescriptions: reordered.map((prescription, position) => ({ ...prescription, position: position + 1 })),
       })
     } catch (caught) {
-      setReorderError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      // 'day': the reorder is a write to the day, so a 404 means the day is gone rather than
+      // any one exercise. A rejected id inside the list comes back as its own code.
+      setReorderError(messageFor(caught, 'day'))
     } finally {
       setReordering(false)
     }
@@ -397,7 +395,7 @@ function Day({
       const updated = await updateDay(day.id, { title: title.trim() })
       onChanged({ ...day, title: updated.title })
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'day'))
     } finally {
       setSaving(false)
     }
@@ -414,7 +412,7 @@ function Day({
       await deleteDay(day.id)
       onDeleted()
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'day'))
       setDeleting(false)
     }
   }
@@ -446,9 +444,9 @@ function Day({
       </form>
 
       {error !== null && (
-        <p className="mt-2 text-sm text-danger" role="alert">
+        <TrainerMessage className="mt-2" tone="failure">
           {error}
-        </p>
+        </TrainerMessage>
       )}
 
       <ul className="mt-6 grid gap-4">
@@ -484,9 +482,9 @@ function Day({
       </ul>
 
       {reorderError !== null && (
-        <p className="mt-2 text-sm text-danger" role="alert">
+        <TrainerMessage className="mt-2" tone="failure">
           {reorderError}
-        </p>
+        </TrainerMessage>
       )}
 
       <AddPrescription
@@ -634,7 +632,7 @@ function Prescription({
       })
       setSaved(true)
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'prescription'))
     } finally {
       setSaving(false)
     }
@@ -651,7 +649,7 @@ function Prescription({
       await deletePrescription(prescription.id)
       onDeleted()
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      setError(messageFor(caught, 'prescription'))
       setDeleting(false)
     }
   }
@@ -775,14 +773,10 @@ function Prescription({
         </Field>
 
         {error !== null && (
-          <p className="text-sm text-danger" role="alert">
-            {error}
-          </p>
+          <TrainerMessage tone="failure">{error}</TrainerMessage>
         )}
         {saved && error === null && (
-          <p className="text-sm text-ink" role="status">
-            Saved.
-          </p>
+          <TrainerMessage tone="confirmation">Saved.</TrainerMessage>
         )}
 
         <div className="flex gap-2">
@@ -905,9 +899,11 @@ function AddPrescription({
       setTargetSets('3')
     } catch (caught) {
       // 400 unknown_exercise is reachable even though the picker only offers active exercises:
-      // the trainer may have retired one in another tab since this screen loaded. The server's
-      // message is shown as-is, and a reload repopulates the list.
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      // the trainer may have retired one in another tab since this screen loaded. This is the
+      // case the copy map exists for. The server can only say "Unknown exercise_id." because it
+      // has no idea a stale picker offered it; the SPA drew that list, so the SPA is the layer
+      // that can say the library moved on and a reload will show it.
+      setError(messageFor(caught, 'prescription'))
     } finally {
       setSaving(false)
     }
@@ -1001,9 +997,9 @@ function AddPrescription({
       </button>
 
       {error !== null && (
-        <p className="w-full text-sm text-danger" role="alert">
+        <TrainerMessage className="w-full" tone="failure">
           {error}
-        </p>
+        </TrainerMessage>
       )}
     </form>
   )
@@ -1037,7 +1033,8 @@ function AddDay({
       onAdded(await createDay(programId, { title: title.trim() }))
       setTitle('')
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+      // 'program': the day does not exist yet, so a 404 is about the program being written to.
+      setError(messageFor(caught, 'program'))
     } finally {
       setSaving(false)
     }
@@ -1065,9 +1062,9 @@ function AddDay({
         {saving ? 'Adding' : 'Add day'}
       </button>
       {error !== null && (
-        <p className="w-full text-sm text-danger" role="alert">
+        <TrainerMessage className="w-full" tone="failure">
           {error}
-        </p>
+        </TrainerMessage>
       )}
     </form>
   )
