@@ -3,8 +3,16 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { ProgramDetailResponse } from '../api/types.gen'
+import type { ExerciseResponse, ProgramDetailResponse } from '../api/types.gen'
 import { ProgramBuilderScreen } from './ProgramBuilderScreen'
+
+// #26 soft-deletes, so GET /api/exercises returns retired rows alongside live ones. The picker
+// has to tell them apart on its own.
+const library: ExerciseResponse[] = [
+  { id: 'ex-1', name: 'Back Squat', videoUrl: null, cues: null, isActive: true, createdAt: '2026-01-01T00:00:00Z' },
+  { id: 'ex-2', name: 'Bench Press', videoUrl: null, cues: null, isActive: true, createdAt: '2026-01-01T00:00:00Z' },
+  { id: 'ex-3', name: 'Sissy Squat', videoUrl: null, cues: null, isActive: false, createdAt: '2026-01-01T00:00:00Z' },
+]
 
 const program: ProgramDetailResponse = {
   id: 'program-1',
@@ -46,6 +54,7 @@ describe('ProgramBuilderScreen', () => {
   function mockApi(options: {
     tree?: ProgramDetailResponse
     treeStatus?: number
+    library?: ExerciseResponse[]
     onPost?: (url: string, body: unknown) => Partial<Response>
     onPatch?: (url: string, body: unknown) => Partial<Response>
     onDelete?: (url: string) => Partial<Response>
@@ -69,6 +78,10 @@ describe('ProgramBuilderScreen', () => {
       }
       if (init?.method === 'DELETE') {
         return Promise.resolve({ ok: true, status: 204, json: async () => null, ...options.onDelete?.(url) })
+      }
+
+      if (url === '/api/exercises') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => options.library ?? library })
       }
 
       const status = options.treeStatus ?? 200
@@ -103,6 +116,22 @@ describe('ProgramBuilderScreen', () => {
     return JSON.parse(String((call[1] as RequestInit).body))
   }
 
+  /**
+   * One prescription's editor, scoped by the exercise it names.
+   *
+   * Needed since #54: every day now carries an add form with its own Exercise/Sets/Reps
+   * labels, so an unscoped getByLabelText('Reps') matches both the row being edited and the
+   * form for adding the next one.
+   */
+  function prescriptionRow(name: string) {
+    return screen.getByRole('heading', { level: 3, name }).closest('li')!
+  }
+
+  /** One day's card, scoped by its name field. */
+  function dayCard(title: string) {
+    return screen.getByDisplayValue(title).closest('li')!
+  }
+
   it('renders the tree: days, their prescriptions, and each prescription’s exercise', async () => {
     mockApi({})
     renderScreen()
@@ -122,17 +151,20 @@ describe('ProgramBuilderScreen', () => {
     mockApi({})
     renderScreen()
 
-    const reps = await screen.findByLabelText('Reps')
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const reps = row.getByLabelText('Reps')
     expect(reps).toHaveValue('8–10')
     expect(reps).toHaveAttribute('type', 'text')
 
-    const load = screen.getByLabelText('Load')
+    const load = row.getByLabelText('Load')
     expect(load).toHaveValue('70 kg')
     expect(load).toHaveAttribute('type', 'text')
 
     // Sets and rest genuinely are integers.
-    expect(screen.getByLabelText('Sets')).toHaveAttribute('type', 'number')
-    expect(screen.getByLabelText('Rest (seconds)')).toHaveAttribute('type', 'number')
+    expect(row.getByLabelText('Sets')).toHaveAttribute('type', 'number')
+    expect(row.getByLabelText('Rest (seconds)')).toHaveAttribute('type', 'number')
   })
 
   it('saves a prescription with a non-numeric rep scheme intact', async () => {
@@ -141,10 +173,13 @@ describe('ProgramBuilderScreen', () => {
     })
     renderScreen()
 
-    const reps = await screen.findByLabelText('Reps')
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const reps = row.getByLabelText('Reps')
     await userEvent.clear(reps)
     await userEvent.type(reps, 'AMRAP')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
 
     await screen.findByRole('status')
     const patches = callsOf(fetchMock, 'PATCH')
@@ -167,9 +202,12 @@ describe('ProgramBuilderScreen', () => {
     })
     renderScreen()
 
-    await userEvent.clear(await screen.findByLabelText('Load'))
-    await userEvent.clear(screen.getByLabelText('Rest (seconds)'))
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    await userEvent.clear(row.getByLabelText('Load'))
+    await userEvent.clear(row.getByLabelText('Rest (seconds)'))
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
 
     await screen.findByRole('status')
     expect(bodyOf(callsOf(fetchMock, 'PATCH')[0])).toMatchObject({ targetLoad: '', restSeconds: null })
@@ -397,10 +435,13 @@ describe('ProgramBuilderScreen', () => {
     mockApi({})
     renderScreen()
 
-    const sets = await screen.findByLabelText('Sets')
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const sets = row.getByLabelText('Sets')
     await userEvent.clear(sets)
     await userEvent.type(sets, '0')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Sets must be a whole number above zero.')
 
     await userEvent.clear(sets)
@@ -409,17 +450,191 @@ describe('ProgramBuilderScreen', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('marks the exercise picker and reorder as not built yet, rather than half-building them', async () => {
-    // #54 owns both. A disabled control that says what it is waiting for beats a screen that
-    // silently offers no way to add an exercise.
+  // -- The picker (#54) --
+
+  it('offers the library’s active exercises and hides the retired ones', async () => {
+    // #26 soft-deletes and the library route returns retired rows so the library screen can
+    // bring one back. But #28 refuses a retired exercise on a new prescription with 400
+    // unknown_exercise, so offering one would be offering a choice the server has already
+    // decided against.
     mockApi({})
     renderScreen()
 
-    const add = await screen.findAllByRole('button', { name: 'Add exercise' })
-    expect(add[0]).toBeDisabled()
-    expect(
-      screen.getAllByText(/Picking an exercise and reordering this list arrive with/)[0],
-    ).toBeInTheDocument()
+    await screen.findByDisplayValue('Lower')
+    const picker = within(dayCard('Lower')).getByLabelText('Exercise')
+    const options = within(picker).getAllByRole('option').map((option) => option.textContent)
+
+    expect(options).toEqual(['Choose one', 'Back Squat', 'Bench Press'])
+    expect(options).not.toContain('Sissy Squat')
+  })
+
+  it('adds an exercise to a day and shows the row without a reload', async () => {
+    const fetchMock = mockApi({
+      onPost: () => ({
+        json: async () => ({
+          id: 'presc-new',
+          programDayId: 'day-2',
+          exerciseId: 'ex-2',
+          position: 1,
+          targetSets: 4,
+          targetReps: '5',
+          targetLoad: null,
+          restSeconds: null,
+          note: null,
+        }),
+      }),
+    })
+    renderScreen()
+
+    // The empty day, so the new row is unambiguous.
+    const upper = (await screen.findByDisplayValue('Upper')).closest('li')!
+    await userEvent.selectOptions(within(upper).getByLabelText('Exercise'), 'ex-2')
+    const sets = within(upper).getByLabelText('Sets')
+    await userEvent.clear(sets)
+    await userEvent.type(sets, '4')
+    await userEvent.type(within(upper).getByLabelText('Reps'), '5')
+    await userEvent.click(within(upper).getByRole('button', { name: 'Add exercise' }))
+
+    // The create response carries exercise_id but not the exercise, so the name is filled in
+    // from the library rather than left blank until a reload.
+    expect(await within(upper).findByRole('heading', { name: 'Bench Press', level: 3 })).toBeInTheDocument()
+
+    const posts = callsOf(fetchMock, 'POST')
+    expect(posts).toHaveLength(1)
+    expect(posts[0][0]).toBe('/api/days/day-2/exercises')
+    expect(bodyOf(posts[0])).toEqual({ exerciseId: 'ex-2', targetSets: 4, targetReps: '5' })
+  })
+
+  it('refuses to add without an exercise chosen, and without asking the server', async () => {
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    const upper = (await screen.findByDisplayValue('Upper')).closest('li')!
+    await userEvent.type(within(upper).getByLabelText('Reps'), '5')
+    await userEvent.click(within(upper).getByRole('button', { name: 'Add exercise' }))
+
+    expect(await within(upper).findByRole('alert')).toHaveTextContent('Pick an exercise.')
+    expect(callsOf(fetchMock, 'POST')).toHaveLength(0)
+  })
+
+  it('says where exercises come from when the library is empty', async () => {
+    // Nothing to pick, and no exercise library screen to link to yet.
+    mockApi({ library: [] })
+    renderScreen()
+
+    expect(await screen.findAllByText(/Your exercise library is empty/)).not.toHaveLength(0)
+    expect(screen.queryByLabelText('Exercise')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a rejection for an exercise retired since the screen loaded', async () => {
+    // The picker only offers active exercises, but the trainer may have retired one in another
+    // tab. #28 answers 400 unknown_exercise and the message is shown as-is.
+    mockApi({
+      onPost: () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { code: 'unknown_exercise', message: 'Unknown exercise_id.' } }),
+      }),
+    })
+    renderScreen()
+
+    const upper = (await screen.findByDisplayValue('Upper')).closest('li')!
+    await userEvent.selectOptions(within(upper).getByLabelText('Exercise'), 'ex-1')
+    await userEvent.type(within(upper).getByLabelText('Reps'), '5')
+    await userEvent.click(within(upper).getByRole('button', { name: 'Add exercise' }))
+
+    expect(await within(upper).findByRole('alert')).toHaveTextContent('Unknown exercise_id.')
+  })
+
+  // -- Reorder (#54) --
+
+  /** A day with three prescriptions, so a middle row has somewhere to go in both directions. */
+  const threeUp: ProgramDetailResponse = {
+    ...program,
+    days: [
+      {
+        id: 'day-1',
+        title: 'Lower',
+        position: 1,
+        prescriptions: [
+          { id: 'p1', position: 1, targetSets: 3, targetReps: '5', targetLoad: null, restSeconds: null, note: null, exercise: { id: 'ex-1', name: 'Back Squat', videoUrl: null, cues: null } },
+          { id: 'p2', position: 2, targetSets: 3, targetReps: '8', targetLoad: null, restSeconds: null, note: null, exercise: { id: 'ex-2', name: 'Bench Press', videoUrl: null, cues: null } },
+          { id: 'p3', position: 3, targetSets: 3, targetReps: '10', targetLoad: null, restSeconds: null, note: null, exercise: { id: 'ex-4', name: 'Row', videoUrl: null, cues: null } },
+        ],
+      },
+    ],
+  }
+
+  function exerciseOrder() {
+    return screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)
+  }
+
+  it('sends the day’s complete ordered list to move one row', async () => {
+    // The invariant #28 is built on: it rewrites positions 1..N in one transaction and rejects
+    // anything partial, so "move up" is the whole order restated rather than a request about
+    // one row. Sending only the pair that swapped would be a 400.
+    const fetchMock = mockApi({ tree: threeUp })
+    renderScreen()
+
+    expect(await screen.findByDisplayValue('Lower')).toBeInTheDocument()
+    expect(exerciseOrder()).toEqual(['Back Squat', 'Bench Press', 'Row'])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Move Row up' }))
+
+    const patches = callsOf(fetchMock, 'PATCH')
+    expect(patches).toHaveLength(1)
+    expect(patches[0][0]).toBe('/api/days/day-1/order')
+    expect(bodyOf(patches[0])).toEqual({ orderedIds: ['p1', 'p3', 'p2'] })
+    await vi.waitFor(() => expect(exerciseOrder()).toEqual(['Back Squat', 'Row', 'Bench Press']))
+  })
+
+  it('moves a row down with the same full-list request', async () => {
+    const fetchMock = mockApi({ tree: threeUp })
+    renderScreen()
+
+    expect(await screen.findByDisplayValue('Lower')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Move Back Squat down' }))
+
+    expect(bodyOf(callsOf(fetchMock, 'PATCH')[0])).toEqual({ orderedIds: ['p2', 'p1', 'p3'] })
+    await vi.waitFor(() => expect(exerciseOrder()).toEqual(['Bench Press', 'Back Squat', 'Row']))
+  })
+
+  it('does not offer a move off either end of the list', async () => {
+    mockApi({ tree: threeUp })
+    renderScreen()
+
+    expect(await screen.findByDisplayValue('Lower')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Move Back Squat up' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Move Row down' })).toBeDisabled()
+    // And the ones with somewhere to go are live.
+    expect(screen.getByRole('button', { name: 'Move Back Squat down' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Move Row up' })).toBeEnabled()
+  })
+
+  it('leaves the order alone when the reorder is rejected', async () => {
+    // Sent before the list moves, so there is no optimistic state to roll back. A reorder that
+    // appears to work and silently did not is the failure worth avoiding on a screen whose
+    // output another person trains from.
+    mockApi({
+      tree: threeUp,
+      onPatch: (url) =>
+        url.endsWith('/order')
+          ? {
+              ok: false,
+              status: 400,
+              json: async () => ({
+                error: { code: 'bad_request', message: 'ordered_ids must be exactly the day’s prescriptions.' },
+              }),
+            }
+          : { json: async () => ({}) },
+    })
+    renderScreen()
+
+    expect(await screen.findByDisplayValue('Lower')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Move Row up' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ordered_ids must be exactly')
+    expect(exerciseOrder()).toEqual(['Back Squat', 'Bench Press', 'Row'])
   })
 
   it('treats another trainer’s program id as not found', async () => {
@@ -455,10 +670,13 @@ describe('ProgramBuilderScreen', () => {
     const fetchMock = mockApi({})
     renderScreen()
 
-    const sets = await screen.findByLabelText('Sets')
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const sets = row.getByLabelText('Sets')
     await userEvent.clear(sets)
     await userEvent.type(sets, '0')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Sets must be a whole number above zero.')
     expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)

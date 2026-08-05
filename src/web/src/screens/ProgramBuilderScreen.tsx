@@ -1,13 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import type { DayView, PrescriptionView, ProgramDetailResponse } from '../api/types.gen'
+import type {
+  DayView,
+  ExerciseResponse,
+  PrescriptionView,
+  ProgramDetailResponse,
+} from '../api/types.gen'
 import {
   ApiError,
   createDay,
+  createPrescription,
   deleteDay,
   deletePrescription,
+  fetchExercises,
   fetchProgram,
+  reorderDayExercises,
   updateDay,
   updatePrescription,
   updateProgram,
@@ -20,8 +28,19 @@ type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
 const STATUSES = ['draft', 'active', 'archived']
 
 // ui-ux.md §Trainer screens, Program builder: "days → prescriptions; add exercise from library;
-// drag-or-buttons reorder". #53 builds the day and prescription editing; the exercise picker and
-// the reordering are #54 and are marked below rather than half-built.
+// drag-or-buttons reorder". #53 built the day and prescription editing; #54 filled in the two
+// controls it left disabled — the picker and the reorder buttons.
+//
+// ── Reordering days is deliberately not here ───────────────────────────────────────────────
+// Prescriptions reorder through PATCH /api/days/:id/order, which takes the complete list and
+// rewrites positions 1..N in one transaction. Days have no equivalent: they carry a position
+// and PATCH /api/days/:id accepts it one row at a time. Reordering four days would be four
+// requests with no transaction around them, and a failure in the middle leaves two days
+// claiming the same position — which every reader of this tree then orders arbitrarily,
+// including the client's Today screen. api.md rejected fractional positions to avoid exactly
+// that class of drift; doing it by hand here would reintroduce it in the client's view of
+// their own week. The fix is an endpoint that mirrors the prescription one, which is API work
+// and not this ticket.
 //
 // ── One read, then local state ─────────────────────────────────────────────────────────────
 // GET /api/programs/:id returns the whole tree — days, their prescriptions, each prescription's
@@ -40,16 +59,21 @@ export function ProgramBuilderScreen() {
 
   const [load, setLoad] = useState<Load>('loading')
   const [program, setProgram] = useState<ProgramDetailResponse | null>(null)
+  const [library, setLibrary] = useState<ExerciseResponse[]>([])
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     setLoad('loading')
 
-    fetchProgram(programId)
-      .then((tree) => {
+    // The library is fetched once for the screen rather than per day: it is the same list
+    // whichever day is being filled in, and one request beats one per day on a program with
+    // five of them.
+    Promise.all([fetchProgram(programId), fetchExercises()])
+      .then(([tree, exercises]) => {
         if (!cancelled) {
           setProgram(tree)
+          setLibrary(exercises)
           setLoad('ready')
         }
       })
@@ -67,6 +91,20 @@ export function ProgramBuilderScreen() {
       cancelled = true
     }
   }, [programId, attempt])
+
+  /**
+   * What the picker may offer: the trainer's library minus anything retired.
+   *
+   * #26 soft-deletes, and GET /api/exercises deliberately returns inactive rows too so the
+   * library screen can bring one back. But #28 refuses a retired exercise on a new
+   * prescription with 400 unknown_exercise, so listing one here would be offering a choice the
+   * server has already made. Filtered once, at the top, rather than in each day's form.
+   *
+   * Prescriptions that already name a retired exercise are a separate question and keep
+   * rendering — the tree read carries the exercise whether or not it is active, which is what
+   * lets a trainer see the thing they need to replace.
+   */
+  const selectable = library.filter((exercise) => exercise.isActive !== false)
 
   function replaceDays(days: DayView[]) {
     setProgram((previous) => (previous === null ? previous : { ...previous, days }))
@@ -143,6 +181,7 @@ export function ProgramBuilderScreen() {
               <Day
                 day={day}
                 key={day.id}
+                library={selectable}
                 onChanged={(next) =>
                   replaceDays(days.map((candidate) => (candidate.id === next.id ? next : candidate)))
                 }
@@ -270,10 +309,12 @@ function ProgramStatus({
 
 function Day({
   day,
+  library,
   onChanged,
   onDeleted,
 }: {
   day: DayView
+  library: ExerciseResponse[]
   onChanged: (day: DayView) => void
   onDeleted: () => void
 }) {
@@ -282,8 +323,60 @@ function Day({
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reordering, setReordering] = useState(false)
+  const [reorderError, setReorderError] = useState<string | null>(null)
 
   const prescriptions = day.prescriptions ?? []
+
+  /**
+   * Move one row one place, by sending the whole list.
+   *
+   * #28 takes the day's complete prescription id list and rewrites positions 1..N in one
+   * transaction; anything partial — a subset, a duplicate, an id from another day — is a 400
+   * as a whole. So "move up" is not a request about one row, it is the entire order restated
+   * with two entries swapped. That is the trade api.md made when it rejected fractional
+   * positions: every reorder is a bigger request, and no reorder can leave the day in a state
+   * where two prescriptions claim the same slot.
+   *
+   * Sent before the list moves on screen, rather than moved optimistically and rolled back.
+   * There is no revert path to get wrong, and a reorder that appears to work and silently
+   * did not is the failure worth avoiding on a screen whose output another person trains from.
+   */
+  async function move(index: number, direction: -1 | 1) {
+    const target = index + direction
+    if (reordering || day.id === undefined || target < 0 || target >= prescriptions.length) {
+      return
+    }
+
+    const reordered = [...prescriptions]
+    const [moved] = reordered.splice(index, 1)
+    reordered.splice(target, 0, moved)
+
+    const orderedIds = reordered
+      .map((prescription) => prescription.id)
+      .filter((id): id is string => id !== undefined)
+    if (orderedIds.length !== reordered.length) {
+      // A row with no id cannot be named in the list, and a list missing one is a 400. Nothing
+      // sensible to send, so nothing is sent.
+      return
+    }
+
+    setReordering(true)
+    setReorderError(null)
+    try {
+      await reorderDayExercises(day.id, orderedIds)
+      // 204, so the new positions are applied here. Renumbered 1..N to match what the server
+      // just wrote, rather than carrying the old numbers into a new order.
+      onChanged({
+        ...day,
+        prescriptions: reordered.map((prescription, position) => ({ ...prescription, position: position + 1 })),
+      })
+    } catch (caught) {
+      setReorderError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+    } finally {
+      setReordering(false)
+    }
+  }
 
   async function rename(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -362,8 +455,10 @@ function Day({
         {prescriptions.length === 0 ? (
           <p className="text-base text-muted">Nothing prescribed on this day yet.</p>
         ) : (
-          prescriptions.map((prescription) => (
+          prescriptions.map((prescription, index) => (
             <Prescription
+              canMoveDown={index < prescriptions.length - 1}
+              canMoveUp={index > 0}
               key={prescription.id}
               onChanged={(next) =>
                 onChanged({
@@ -379,29 +474,34 @@ function Day({
                   prescriptions: prescriptions.filter((candidate) => candidate.id !== prescription.id),
                 })
               }
+              onMoveDown={() => void move(index, 1)}
+              onMoveUp={() => void move(index, -1)}
               prescription={prescription}
+              reordering={reordering}
             />
           ))
         )}
       </ul>
 
-      {/* ── #54 lands here ────────────────────────────────────────────────────────────────
-          Adding a prescription needs an exercise_id, and choosing one from the trainer's
-          library is the picker this ticket is told not to build. So the control is present,
-          disabled, and says what it is waiting for — rather than a half-picker that would have
-          to be thrown away, or nothing at all, which would read as a screen that forgot to let
-          you add exercises.
-
-          Reordering (#54 as well) attaches to the same seam: PATCH /api/days/:id/order takes
-          the full ordered id list, which is a control over this list, not inside a row. */}
-      <div className="mt-6 border-t border-edge pt-4">
-        <button className={trainerSecondary} disabled title="The exercise picker arrives in #54" type="button">
-          Add exercise
-        </button>
-        <p className="mt-2 text-xs text-muted">
-          Picking an exercise and reordering this list arrive with the exercise library work.
+      {reorderError !== null && (
+        <p className="mt-2 text-sm text-danger" role="alert">
+          {reorderError}
         </p>
-      </div>
+      )}
+
+      <AddPrescription
+        dayId={day.id ?? ''}
+        library={library}
+        onAdded={(created) =>
+          onChanged({
+            ...day,
+            // Appended, because #28 assigns the new prescription the position after the current
+            // maximum. Putting it anywhere else here would disagree with the server until the
+            // next read.
+            prescriptions: [...prescriptions, created],
+          })
+        }
+      />
 
       <div className="mt-6 border-t border-edge pt-4">
         {confirming ? (
@@ -445,13 +545,23 @@ function Day({
 // convention is that a null on the wire leaves a field alone and a blank string clears it to
 // NULL, so sending the whole set is what makes clearing a load or a note possible at all.
 function Prescription({
+  canMoveDown,
+  canMoveUp,
   onChanged,
   onDeleted,
+  onMoveDown,
+  onMoveUp,
   prescription,
+  reordering,
 }: {
+  canMoveDown: boolean
+  canMoveUp: boolean
   onChanged: (prescription: PrescriptionView) => void
   onDeleted: () => void
+  onMoveDown: () => void
+  onMoveUp: () => void
   prescription: PrescriptionView
+  reordering: boolean
 }) {
   const [targetSets, setTargetSets] = useState(String(prescription.targetSets ?? ''))
   const [targetReps, setTargetReps] = useState(prescription.targetReps ?? '')
@@ -548,7 +658,37 @@ function Prescription({
 
   return (
     <li className="rounded-sm border border-edge bg-surface-sunk p-4">
-      <h3 className="text-base font-semibold text-ink-bold">{name}</h3>
+      <div className="flex items-baseline justify-between gap-4">
+        <h3 className="text-base font-semibold text-ink-bold">{name}</h3>
+
+        {/* Buttons, not drag. ui-ux.md calls buttons acceptable in v1 and drag polish, and the
+            trade is real: a keyboard user gets the same two controls a mouse user does, and
+            neither depends on a pointer gesture that has to be re-implemented for touch.
+
+            The labels name the exercise because a day of five rows otherwise offers ten
+            controls all called "Move up", and a screen reader moving through them has no way
+            to tell which row it is on. */}
+        <div className="flex shrink-0 gap-1">
+          <button
+            aria-label={`Move ${name} up`}
+            className={trainerSecondary}
+            disabled={!canMoveUp || reordering}
+            onClick={onMoveUp}
+            type="button"
+          >
+            <span aria-hidden="true">↑</span>
+          </button>
+          <button
+            aria-label={`Move ${name} down`}
+            className={trainerSecondary}
+            disabled={!canMoveDown || reordering}
+            onClick={onMoveDown}
+            type="button"
+          >
+            <span aria-hidden="true">↓</span>
+          </button>
+        </div>
+      </div>
 
       <form className="mt-3 grid gap-3" noValidate onSubmit={save}>
         <div className="flex flex-wrap gap-3">
@@ -676,6 +816,192 @@ function Prescription({
         )}
       </form>
     </li>
+  )
+}
+
+/**
+ * The picker (#54), and the smallest form that satisfies POST /api/days/:id/exercises.
+ *
+ * Three fields, because three is what the endpoint requires: exercise_id, target_sets, and
+ * target_reps. Load, rest and note are optional there and are left to the row editor rather
+ * than duplicated here — the row appears directly below with every field on it, so a second
+ * copy of that form would be two places to keep in step for no gain.
+ */
+function AddPrescription({
+  dayId,
+  library,
+  onAdded,
+}: {
+  dayId: string
+  library: ExerciseResponse[]
+  onAdded: (prescription: PrescriptionView) => void
+}) {
+  const [exerciseId, setExerciseId] = useState('')
+  // Three is the overwhelmingly common answer and the field is required, so defaulting it
+  // saves typing the same digit on every row. It is a starting value, not a policy.
+  const [targetSets, setTargetSets] = useState('3')
+  const [targetReps, setTargetReps] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function edited() {
+    setError(null)
+  }
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saving) {
+      return
+    }
+
+    if (exerciseId === '') {
+      setError('Pick an exercise.')
+      return
+    }
+
+    const sets = Number.parseInt(targetSets.trim(), 10)
+    if (!Number.isInteger(sets) || sets <= 0) {
+      setError('Sets must be a whole number above zero.')
+      return
+    }
+
+    if (targetReps.trim() === '') {
+      setError('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+    try {
+      const created = await createPrescription(dayId, {
+        exerciseId,
+        targetSets: sets,
+        targetReps: targetReps.trim(),
+      })
+
+      // The create response is a PrescriptionResponse — it carries exercise_id but not the
+      // exercise itself, while the tree the screen is holding carries the whole thing. The
+      // name is filled in from the library rather than left blank until a reload, since the
+      // library is the same list the choice was just made from.
+      const exercise = library.find((candidate) => candidate.id === exerciseId)
+      onAdded({
+        id: created.id,
+        position: created.position,
+        targetSets: created.targetSets,
+        targetReps: created.targetReps,
+        targetLoad: created.targetLoad,
+        restSeconds: created.restSeconds,
+        note: created.note,
+        exercise: {
+          id: exerciseId,
+          name: exercise?.name ?? 'Exercise',
+          videoUrl: exercise?.videoUrl ?? null,
+          cues: exercise?.cues ?? null,
+        },
+      })
+
+      setExerciseId('')
+      setTargetReps('')
+      setTargetSets('3')
+    } catch (caught) {
+      // 400 unknown_exercise is reachable even though the picker only offers active exercises:
+      // the trainer may have retired one in another tab since this screen loaded. The server's
+      // message is shown as-is, and a reload repopulates the list.
+      setError(caught instanceof ApiError ? caught.message : 'Something went wrong. Try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (library.length === 0) {
+    // Nothing to pick. There is no exercise library screen yet to link to, so this says where
+    // exercises come from rather than pointing at a route that does not exist.
+    return (
+      <div className="mt-6 border-t border-edge pt-4">
+        <p className="text-sm text-muted">
+          Your exercise library is empty, so there is nothing to add yet. Exercises are created
+          in the library and then prescribed here.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <form className="mt-6 flex flex-wrap items-end gap-3 border-t border-edge pt-4" noValidate onSubmit={onSubmit}>
+      <div className="grid gap-1">
+        <label className="text-xs text-muted" htmlFor={`add-exercise-${dayId}`}>
+          Exercise
+        </label>
+        {/* Only active exercises are options. #26 soft-deletes and the library route returns
+            retired rows too, but #28 refuses one on a new prescription — an option that is
+            always a 400 is not a choice, it is a trap. */}
+        <select
+          className={trainerField}
+          id={`add-exercise-${dayId}`}
+          name="exerciseId"
+          onChange={(event) => {
+            setExerciseId(event.target.value)
+            edited()
+          }}
+          value={exerciseId}
+        >
+          <option value="">Choose one</option>
+          {library.map((exercise) => (
+            <option key={exercise.id} value={exercise.id}>
+              {exercise.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid gap-1">
+        <label className="text-xs text-muted" htmlFor={`add-sets-${dayId}`}>
+          Sets
+        </label>
+        <input
+          className={`w-20 ${trainerField}`}
+          id={`add-sets-${dayId}`}
+          inputMode="numeric"
+          min={1}
+          name="targetSets"
+          onChange={(event) => {
+            setTargetSets(event.target.value)
+            edited()
+          }}
+          type="number"
+          value={targetSets}
+        />
+      </div>
+
+      {/* Text, for the same reason the row editor's is (database.md). */}
+      <div className="grid gap-1">
+        <label className="text-xs text-muted" htmlFor={`add-reps-${dayId}`}>
+          Reps
+        </label>
+        <input
+          className={`w-32 ${trainerField}`}
+          id={`add-reps-${dayId}`}
+          name="targetReps"
+          onChange={(event) => {
+            setTargetReps(event.target.value)
+            edited()
+          }}
+          placeholder="8–10"
+          type="text"
+          value={targetReps}
+        />
+      </div>
+
+      <button className={trainerPrimary} disabled={saving} type="submit">
+        {saving ? 'Adding' : 'Add exercise'}
+      </button>
+
+      {error !== null && (
+        <p className="w-full text-sm text-danger" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   )
 }
 

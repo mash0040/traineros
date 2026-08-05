@@ -1,6 +1,7 @@
 import type {
   ClientResponse,
   ClientSessionResponse,
+  ExerciseResponse,
   HistoryResponse,
   PrescriptionResponse,
   ProgramDayResponse,
@@ -20,6 +21,7 @@ import type {
   PostApiAuthMagicLinkData,
   PostApiClientsByIdScheduleData,
   PostApiClientsData,
+  PostApiDaysByIdExercisesData,
   PostApiProgramsByIdDaysData,
   PostApiProgramsData,
   PostApiAuthVerifyData,
@@ -287,6 +289,51 @@ export function updateDay(
  */
 export async function deleteDay(dayId: string): Promise<void> {
   await request<null>(`/api/days/${encodeURIComponent(dayId)}`, { method: 'DELETE' })
+}
+
+/**
+ * GET /api/exercises. The trainer's whole library, active and retired alike.
+ *
+ * #26 soft-deletes rather than removing, and the list deliberately returns both so a trainer
+ * can bring one back. The picker filters to active on its own, because #28 refuses a retired
+ * exercise on a new prescription with 400 unknown_exercise — offering one would be offering a
+ * choice the server has already decided against.
+ */
+export function fetchExercises(): Promise<ExerciseResponse[]> {
+  return request<ExerciseResponse[]>('/api/exercises')
+}
+
+/**
+ * POST /api/days/:id/exercises. Adds one prescription to the end of a day.
+ *
+ * exercise_id, target_sets and target_reps are required; load, rest and note are not, and are
+ * left to the row editor rather than crowded into the add form.
+ */
+export function createPrescription(
+  dayId: string,
+  body: PostApiDaysByIdExercisesData['body'],
+): Promise<PrescriptionResponse> {
+  return request<PrescriptionResponse>(`/api/days/${encodeURIComponent(dayId)}/exercises`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/days/:id/order. 204.
+ *
+ * Takes the day's complete prescription id list in the order wanted, and the server rewrites
+ * positions 1..N in one transaction. Anything less than complete is a 400: duplicates, missing
+ * ids, and ids from another day are all rejected as a whole, because a partial reorder is how
+ * positions drift into gaps and ties (api.md rejects fractional positions for the same reason).
+ *
+ * So callers send every id every time, even to move one row one place.
+ */
+export async function reorderDayExercises(dayId: string, orderedIds: string[]): Promise<void> {
+  await request<null>(`/api/days/${encodeURIComponent(dayId)}/order`, {
+    method: 'PATCH',
+    body: JSON.stringify({ orderedIds }),
+  })
 }
 
 /**
