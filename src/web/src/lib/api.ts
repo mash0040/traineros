@@ -14,6 +14,7 @@ import type {
   MeResponse,
   PatchApiClientsByIdData,
   PatchApiDayExercisesByIdData,
+  PatchApiExercisesByIdData,
   PatchApiDaysByIdData,
   PatchApiMeSessionsByIdData,
   PatchApiProgramsByIdData,
@@ -22,6 +23,7 @@ import type {
   PostApiClientsByIdScheduleData,
   PostApiClientsData,
   PostApiDaysByIdExercisesData,
+  PostApiExercisesData,
   PostApiProgramsByIdDaysData,
   PostApiProgramsData,
   PostApiAuthVerifyData,
@@ -301,6 +303,36 @@ export async function deleteDay(dayId: string): Promise<void> {
  */
 export function fetchExercises(): Promise<ExerciseResponse[]> {
   return request<ExerciseResponse[]>('/api/exercises')
+}
+
+/** POST /api/exercises. 201. Name is required; the video URL and cues are not. */
+export function createExercise(body: PostApiExercisesData['body']): Promise<ExerciseResponse> {
+  return request<ExerciseResponse>('/api/exercises', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/exercises/:id. Also the delete route: there is no DELETE.
+ *
+ * #26's convention, and the reason callers must be deliberate about what they put in the body:
+ * a field that is absent is left alone, and a field sent as "" is cleared to NULL. Since
+ * JSON.stringify drops `undefined` keys, "absent" is what an omitted property produces — so
+ * `{ isActive: false }` retires an exercise without touching its video URL or cues, while
+ * `{ isActive: false, videoUrl: '' }` would retire it *and* wipe the link.
+ *
+ * The two callers therefore send different bodies on purpose: the edit form sends every text
+ * field it owns (so emptying one clears it), and the retire/restore control sends only isActive.
+ */
+export function updateExercise(
+  exerciseId: string,
+  body: PatchApiExercisesByIdData['body'],
+): Promise<ExerciseResponse> {
+  return request<ExerciseResponse>(`/api/exercises/${encodeURIComponent(exerciseId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 }
 
 /**

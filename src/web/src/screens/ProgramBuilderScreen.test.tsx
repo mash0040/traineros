@@ -517,13 +517,18 @@ describe('ProgramBuilderScreen', () => {
     expect(callsOf(fetchMock, 'POST')).toHaveLength(0)
   })
 
-  it('says where exercises come from when the library is empty', async () => {
-    // Nothing to pick, and no exercise library screen to link to yet.
+  it('sends the trainer to the library when there is nothing to pick', async () => {
+    // Nothing to prescribe, so the picker is replaced by the way out of the situation. Since
+    // #55 that is a real route rather than a sentence describing one.
     mockApi({ library: [] })
     renderScreen()
 
     expect(await screen.findAllByText(/Your exercise library is empty/)).not.toHaveLength(0)
     expect(screen.queryByLabelText('Exercise')).not.toBeInTheDocument()
+
+    const links = screen.getAllByRole('link', { name: 'Add an exercise' })
+    expect(links).not.toHaveLength(0)
+    expect(links[0]).toHaveAttribute('href', '/exercises')
   })
 
   it('surfaces a rejection for an exercise retired since the screen loaded', async () => {
