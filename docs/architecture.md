@@ -43,7 +43,7 @@ Secrets: App Service/Functions configuration + managed identity where supported 
 
 **Honest cost statement:** ~$28 USD/mo (B1 + burstable PG) once live. $0 during development. If that's unacceptable, the Neon + Container Apps combo gets near-zero but trades away simplicity and the always-warm API. Recorded so future-you knows it was a choice.
 
-**Cost-ladder decision (2026-07-11, backlog phase):** start on the free rungs — App Service **F1** + **Neon free Postgres** — and promote to B1 / Azure PG Flexible only if the free tiers bite. The ~$28/mo figure above is the promoted rung, not the starting point. Early provisioning (resource group, Storage account + queues, App Insights — all free) happens up front to surface subscription/quota errors; App Service and database are provisioned only when the deploy pipeline needs a target.
+**Cost-ladder decision (2026-07-11, backlog phase):** start on the free rungs — App Service **F1** + **Neon free Postgres** — and promote to B1 / Azure PG Flexible only if the free tiers bite. The ~$28/mo figure above is the promoted rung, not the starting point. Early provisioning (resource group, Storage account + queues, App Insights — Storage is pay-as-you-go from the first byte (no free tier) at roughly $0.05/mo at v1 volume; the resource group, Log Analytics workspace, and App Insights component are free to exist, with ingestion inside the 5 GB/month grant.) happens up front to surface subscription/quota errors; App Service and database are provisioned only when the deploy pipeline needs a target.
 
 ## Repo layout (merging the .claude convention with the C# solution)
 
