@@ -1,0 +1,213 @@
+# Deploys the product — API + built SPA — to the one App Service that serves both
+# (architecture.md §Deployment shape). The Functions host deploys from its own workflow (#58):
+# it changes on a different cadence, and a scheduler redeploy has no business waiting on a CSS
+# change.
+#
+# The job graph is build → migrate → deploy, in that order and not collapsed into one job:
+#
+#   * migrations are a pipeline step, never on startup. Startup migrations race across
+#     instances, and F1 scaling to two instances would be the first time anyone found out.
+#   * migrate gates deploy. Migration 002 adds a unique index that can fail on existing
+#     rows (#98); production has no data yet, so today it cannot fail — but the failure mode
+#     to design for is a bad migration followed by a happy green deploy of code that assumes
+#     it applied. A failed efbundle exits non-zero, the job fails, and deploy never runs.
+#   * schema first, then code. New code against old schema is the break that takes the app
+#     down; old code against new schema survives the ~2 minutes in between.
+name: Deploy app (API + SPA)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Two pushes in quick succession must not apply migrations concurrently, and the second must
+# not deploy under the first one's schema. Queue them; never cancel a run mid-migration.
+#
+# This group only serializes THIS workflow. The Functions pipeline (#58) fires on the same
+# push to main, so the cross-workflow rule is ownership, not locking: **this workflow is the
+# only one that applies migrations.** #58 builds and deploys the Function App and touches the
+# schema never. EF Core 8 takes no migration lock (that arrived in EF 9), so two efbundle runs
+# against one database would both read __EFMigrationsHistory, both decide the same migration
+# is pending, and one would die mid-DDL — a red pipeline whose message points at the schema
+# rather than at the pipeline that raced.
+#
+# Deliberately NOT solved by sharing one concurrency group with #58: GitHub keeps a single
+# pending run per group and cancels the older one, so a queued Functions deploy would be
+# silently dropped by the next push here. The residual window — Functions deploying while
+# this workflow is still migrating — is absorbed by the queue: the worker throws, the message
+# is retried, and maxDequeueCount 5 gives it four more chances after the schema lands.
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
+env:
+  # Globally unique (*.azurewebsites.net) — see docs/deploy-config.md §App Service.
+  AZURE_WEBAPP_NAME: app-traineros
+  # Pinned here because the repo has no global.json (docs/deploy-config.md §Application).
+  DOTNET_VERSION: '8.0.x'
+  NODE_VERSION: '22.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
+
+      - name: Restore
+        run: |
+          dotnet restore
+          dotnet tool restore
+
+      - name: Restore client
+        working-directory: src/web
+        run: npm ci
+
+      - name: Build API
+        run: dotnet build --no-restore -c Release
+
+      # Both suites run offline: the .NET tests use SQLite in-memory, the client tests jsdom.
+      # Nothing here needs Postgres or Azurite, which is why this gate is cheap enough to keep
+      # in the deploy path rather than trusting that someone ran it locally.
+      - name: Test API
+        run: dotnet test --no-build -c Release
+
+      - name: Test client
+        working-directory: src/web
+        run: npm test
+
+      - name: Build SPA
+        working-directory: src/web
+        run: npm run build
+
+      - name: Publish API
+        run: dotnet publish src/TrainerOS.Api --no-build -c Release -o publish
+
+      # Same-origin is this copy. The SPA is not a separate host, an SWA, or a CDN origin —
+      # it is static content inside the API's own wwwroot, which is what lets the session
+      # cookie stay first-party with zero CORS configuration.
+      - name: Copy SPA into wwwroot
+        run: |
+          mkdir -p publish/wwwroot
+          cp -r src/web/dist/. publish/wwwroot/
+          test -f publish/wwwroot/index.html   # a silently empty wwwroot deploys a blank app
+
+      # The bundle is a self-contained executable of the migrations, which is why the migrate
+      # job below needs no .NET SDK at all. Built here so a broken migration fails the build
+      # rather than the deploy.
+      #
+      # No connection string is needed to build it: TrainerOsDbContextFactory (#17) supplies
+      # the design-time context, so this never constructs the API host. That same factory
+      # hardcodes the docker-compose dev database, which is exactly why the apply step must
+      # pass --connection explicitly — without it, migrations report success against nothing.
+      - name: Build migration bundle
+        run: |
+          dotnet dotnet-ef migrations bundle \
+            --project src/TrainerOS.Domain \
+            --startup-project src/TrainerOS.Api \
+            --configuration Release \
+            --self-contained --target-runtime linux-x64 \
+            --output efbundle --force
+
+      - name: Upload app package
+        uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: publish
+
+      - name: Upload migration bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: efbundle
+          path: efbundle
+
+  migrate:
+    name: Apply migrations
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: efbundle
+
+      # --connection is mandatory, not defensive: the design-time factory would otherwise
+      # migrate localhost and exit 0. The secret holds Neon's DIRECT (non-pooler) string in
+      # Npgsql key-value format — the pooled endpoint does not handle all DDL cleanly, and a
+      # URI-format string fails inside Npgsql with a KeyNotFoundException that reads like a
+      # code bug (docs/deploy-config.md §Known gotchas).
+      #
+      # Artifacts do not preserve the executable bit.
+      - name: Apply migration bundle
+        env:
+          POSTGRES_CONNECTION_STRING: ${{ secrets.POSTGRES_CONNECTION_STRING }}
+        run: |
+          chmod +x ./efbundle
+          ./efbundle --connection "$POSTGRES_CONNECTION_STRING"
+
+  deploy:
+    name: Deploy to App Service
+    needs: migrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: publish
+
+      - name: Deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: publish
+
+      # /api/health, not /health — the API mounts every route under /api, and a probe on the
+      # wrong path gets the SPA shell with a cheerful 200 (docs/deploy-config.md).
+      #
+      # F1 has no Always On, so the first request after a deploy cold-starts the site; the
+      # retries are that, not flakiness tolerance. The endpoint returns 503 when Postgres is
+      # unreachable, so `curl --fail` here also catches a deploy that came up pointed at
+      # nothing — the failure mode a naked "did it return 200" check would miss.
+      - name: Smoke check
+        run: |
+          site="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
+
+          for attempt in $(seq 1 10); do
+            if body=$(curl --fail --silent --show-error --max-time 30 "$site/api/health"); then
+              echo "$body"
+              case "$body" in
+                *connected*) healthy=1; break ;;
+                *) echo "::error::/api/health answered, but not connected: $body"; exit 1 ;;
+              esac
+            fi
+            echo "Attempt $attempt: no healthy response yet; retrying in 15s."
+            sleep 15
+          done
+          if [ "${healthy:-}" != 1 ]; then
+            echo "::error::/api/health never returned healthy after the deploy."
+            exit 1
+          fi
+
+          # The other half of same-origin: the site root has to be the SPA shell out of
+          # wwwroot. A deploy that lost the client answers here with the API's JSON 404 and
+          # is otherwise perfectly healthy.
+          type=$(curl --fail --silent --show-error --max-time 30 -o /dev/null -w '%{content_type}' "$site/")
+          case "$type" in
+            text/html*) echo "SPA shell served at /." ;;
+            *) echo "::error::Site root returned '$type', not the SPA shell."; exit 1 ;;
+          esac

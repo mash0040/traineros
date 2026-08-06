@@ -6,6 +6,13 @@
 
   <ItemGroup>
     <PackageReference Include="Isopoh.Cryptography.Argon2" Version="2.0.0" />
+    <!-- Design-time only, and only here because EF's tooling resolves it from the startup
+         project: `dotnet ef migrations bundle` (#57's deploy step) fails to load it out of
+         Domain, where PrivateAssets keeps it from flowing. Version tracks Domain's. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Npgsql.DependencyInjection" Version="8.0.6" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>

@@ -52,6 +52,9 @@ if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSen
 await TrainerSeeder.SeedAsync(app.Services, app.Configuration);
 
 app.UseApiErrorHandling();
+// Before the rate limiter and session auth: serving a hashed JS bundle should not cost a
+// token bucket or a database session lookup.
+app.UseSpaHosting();
 // Before session auth: rate-limited requests shouldn't cost a session lookup.
 app.UseRateLimiter();
 app.UseMiddleware<SessionAuthMiddleware>();

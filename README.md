@@ -85,3 +85,9 @@ npm run dev
 Vite serves the client on http://localhost:5173 and proxies `/api` to the API on port 5216.
 
 After any endpoint or DTO change, run `npm run generate:types` (from `src/web`) — it builds the API, exports `openapi.json`, and regenerates `src/web/src/api/types.gen.ts`.
+
+## Deployment
+
+Push to `main` runs [`.github/workflows/deploy-app.yml`](.github/workflows/deploy-app.yml): it builds and tests both halves, copies the Vite output into the API's `wwwroot`, applies EF migrations as a bundle, and only then deploys to App Service. Migrations gate the deploy — a failed migration stops the pipeline rather than shipping code that assumes it applied.
+
+Resources, app settings, the GitHub secrets it needs, and what the free App Service tier will not do are in [docs/deploy-config.md](docs/deploy-config.md). Nothing deploys until that target is provisioned; the workflow file is ahead of it on purpose.
