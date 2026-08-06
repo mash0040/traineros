@@ -11,11 +11,12 @@
 
 ## Function App
 - ConnectionStrings:Postgres
-- Resend:ApiKey / Resend:From
+- Resend:ApiKey / noreply@traineros.me
 - Notifications:PauseTokenKey  (same value as App Service)
-- App:BaseUrl
+- App:https://traineros.me
 - Queue Storage connection string
 - host.json pins maxDequeueCount: 5
+- Renewal date: 2027-08-05
 
 ## Known gotchas
 - Core Tools forces AZURE_FUNCTIONS_ENVIRONMENT=Development locally, so the
