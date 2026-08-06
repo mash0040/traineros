@@ -1,3 +1,8 @@
+// @vitest-environment node
+//
+// Pure functions, no DOM. Building a jsdom environment for these costs ~5s per file and
+// buys nothing; the DOM-touching suites are the ones that need it.
+
 import { describe, expect, it } from 'vitest'
 
 import { ApiError } from './api'

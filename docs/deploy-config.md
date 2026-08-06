@@ -156,14 +156,151 @@ ticket is approximately true and not literally true:
 Total realistic run rate for #56's resources: **well under $1/month**, and $0 of it is App
 Service or Postgres, which is the entire point of deferring those to #57.
 
+## App Service and database (#57)
+
+The deploy target, provisioned at the point the pipeline needs one. Same method as §Azure
+resources: clickops, and the commands are a record of what was created.
+
+### Status
+
+| | |
+|---|---|
+| Provisioned | **No.** The pipeline (`.github/workflows/deploy-app.yml`) is written; nothing it deploys to exists yet. |
+| Owner | The human. Create the plan, the web app, and the Neon project; add the two GitHub secrets; set the app settings in §App Service (API). |
+| First run | The workflow only fires on push to `main` (or manual dispatch), so nothing deploys until the target exists. |
+
+### Resources
+
+| Resource | Name | Region | SKU / tier | Why |
+|---|---|---|---|---|
+| App Service plan | `plan-traineros` | `canadacentral` | **F1**, Linux | First rung of the cost ladder. Must match #56's region or every queue call from the API crosses a region boundary. |
+| Web app | `app-traineros` *(globally unique — see note)* | `canadacentral` | `DOTNETCORE:8.0` | Serves the API and the SPA out of one wwwroot (architecture.md §Deployment shape). |
+| Postgres | Neon project `traineros` | closest Neon region to Toronto | Free | Second rung. Not an Azure resource — deliberately, per the ladder. |
+
+**The web app name is globally unique** (`<name>.azurewebsites.net`), like the storage account.
+`app-traineros` is the preferred name and `AZURE_WEBAPP_NAME` in the workflow; if it is taken,
+pick another, change it in **both** places, and record it here:
+
+- Web app actually created: `<fill in>`
+
+```bash
+LOC=canadacentral
+RG=rg-traineros
+
+# --is-linux is not optional: Windows plans are the default and cost more for the same app.
+az appservice plan create -n plan-traineros -g $RG -l $LOC --sku F1 --is-linux
+
+az webapp create -n app-traineros -g $RG -p plan-traineros --runtime "DOTNETCORE:8.0"
+
+# The pipeline authenticates with a publish profile, which is SCM basic auth. It is off by
+# default on new web apps, and the deploy fails with a 401 that reads like a bad secret.
+az resource update -g $RG --namespace Microsoft.Web --resource-type basicPublishingCredentialsPolicies 
+  --name scm --parent sites/app-traineros --set properties.allow=true
+```
+
+Postgres is created in the Neon console (no CLI here — it is not an Azure resource): one
+project, one database, free tier, region chosen for proximity to Toronto. Neon hands back URI
+strings; both consumers need the key-value conversion in §Known gotchas, and the two strings
+are not interchangeable — the **direct** string goes in the `POSTGRES_CONNECTION_STRING` GitHub
+secret that the migration bundle uses, the **pooled** one in the `ConnectionStrings:Postgres`
+app setting on both hosts.
+
+### What F1 does not do
+
+Free is a real tier with real holes, and three of them touch decisions already recorded
+elsewhere. None is a reason not to start here; all three are reasons to know why something
+looks broken.
+
+- **No custom domain.** F1 serves `*.azurewebsites.net` only. `App:BaseUrl` in the settings
+  below reads `https://traineros.me`, which cannot be live until the plan is promoted to B1
+  (or Shared). Until then `App:BaseUrl` must be `https://app-traineros.azurewebsites.net`, or
+  every magic link and every reminder footer points at a host the app is not served from —
+  the links resolve to nothing and v1's Definition of Shipped fails on the first email.
+- **No Health check feature.** App Service's health-check probe requires Basic or higher, so
+  the `/api/health` path below is configuration that F1 will ignore. The pipeline's post-deploy
+  smoke check hits the same endpoint, so a deploy that comes up unable to reach Postgres still
+  fails loudly; what F1 cannot do is restart an unhealthy instance on its own.
+- **No Always On, and 60 CPU-minutes a day.** The site unloads when idle, so the first request
+  after a quiet period cold-starts it. That is why the smoke check retries rather than asserting
+  on the first response. Neon's free tier also autosuspends, so the first *database* query pays
+  its own wake-up.
+- Watch for spam-folder delivery; if it happens consistently that's the B1 promotion trigger, ahead of cold starts.
+
+
+### GitHub secrets the pipeline needs
+
+Repository settings → Secrets and variables → Actions. Both are secrets; neither goes in the
+repo (architecture.md: "No secrets in repo").
+
+| Secret | Value | Read it with |
+|---|---|---|
+| `AZURE_WEBAPP_PUBLISH_PROFILE` | The whole XML file, pasted | `az webapp deployment list-publishing-profiles -n app-traineros -g rg-traineros --xml` |
+| `POSTGRES_CONNECTION_STRING` | Neon **direct** (non-pooler) string, Npgsql key-value format | Neon console, then convert per §Known gotchas |
+
+Publish profile rather than a service principal with OIDC: it is the clickops-shaped option for
+one environment, and it is a credential to rotate rather than an identity to federate. #59 owns
+managed identity where it is supported; a GitHub runner deploying into App Service is not one of
+those places.
+
+### Pipeline shape
+
+`.github/workflows/deploy-app.yml`, on push to `main`. Three jobs, and the split is the point:
+
+1. **build** — .NET tests and client tests, then `npm run build`, then `dotnet publish`, then
+   Vite's `dist/` copied into `publish/wwwroot`. That copy is what "same-origin" means in
+   practice. Then `dotnet ef migrations bundle` produces a self-contained `efbundle`.
+2. **migrate** — runs `efbundle --connection "$POSTGRES_CONNECTION_STRING"`. Migrations are a
+   pipeline step and never on startup: startup migrations across multiple instances race, and
+   F1 scaling out would be the first time anyone found out.
+3. **deploy** — `needs: migrate`, so a failed migration stops the deploy dead. `efbundle` exits
+   non-zero on any migration error, which is the whole mechanism. Migration 002 adds a unique
+   index that can fail on pre-existing rows (#98); production has no data today, so it cannot
+   fail today — the ordering exists so that the day it can fail, the answer is a red pipeline
+   and not a green deploy of code that assumes the index is there.
+
+Schema goes first, code second: new code against old schema is the combination that takes the
+site down, and old code against new schema survives the two minutes in between. `concurrency`
+queues runs rather than cancelling them, so two pushes never apply migrations at the same time.
+
+The SDK is pinned in the workflow (`8.0.x`) rather than by a `global.json`, per §Application
+below.
+
+### One migrator, and why it is a rule rather than a lock
+
+**`deploy-app.yml` is the only workflow that applies migrations.** #58's Functions pipeline
+fires on the same push to `main`; it builds and deploys the Function App and touches the schema
+never. Neither host migrates on startup either — there is no `Migrate()` or `EnsureCreated()`
+anywhere in `src/`, only in tests.
+
+The rule matters because EF Core 8 takes no database lock while migrating (`IMigrationsDatabaseLock`
+arrived in EF Core 9). Two `efbundle` runs against one database would both read
+`__EFMigrationsHistory`, both conclude the same migration is pending, and both start applying
+it. The loser dies mid-DDL with something like `relation already exists` — loud, but pointing
+at the schema instead of at the pipeline that raced it.
+
+Sharing one `concurrency` group between the two workflows looks like the fix and is not: GitHub
+keeps exactly one *pending* run per group and cancels the older one when a newer arrives. Two
+quick pushes here would silently cancel a queued Functions deploy, and a Functions change that
+never deployed is a worse failure than the one being prevented — it fails by being absent.
+
+What the rule leaves on the table is a window where the Function App deploys while this
+pipeline is still migrating, so the worker briefly runs new code against the old schema. The
+queue already covers that: the worker throws, the message goes back, and `maxDequeueCount: 5`
+gives it four more attempts after the schema lands. A reminder is late by minutes; nothing is
+lost, which is the same property notifications.md leans on everywhere else.
+
+If #58 ever does need to apply migrations, the two workflows must move to a shared concurrency
+group and accept the cancelled-pending-run trade-off — that is the point at which it becomes
+the lesser problem.
+
 ## App Service (API)
 - ConnectionStrings:Postgres
 - Resend:ApiKey
 - Resend:From  (noreply@traineros.me)
 - Notifications:PauseTokenKey  (must be IDENTICAL to the Function App's value)
-- App:BaseUrl = (https://traineros.me)
+- App:BaseUrl = (https://traineros.me)  — **on F1 this must be https://app-traineros.azurewebsites.net**; F1 serves no custom domain, and a BaseUrl the app is not reachable at breaks every magic link and reminder footer. See §What F1 does not do.
 - Seed__TrainerEmail / Seed__TrainerPassword  (first boot only; seeds the trainer)
-- Health check path is /api/health, NOT /health
+- Health check path is /api/health, NOT /health  (the App Service feature needs Basic+; on F1 the pipeline's post-deploy smoke check is what covers it)
 - APPLICATIONINSIGHTS_CONNECTION_STRING — fetch with:
   az monitor app-insights component show --app appi-traineros --resource-group rg-traineros --query connectionString -o tsv
 
@@ -186,6 +323,10 @@ Service or Postgres, which is the entire point of deferring those to #57.
 - Queue creates use default key auth, not `--auth-mode login`. Subscription Owner does not grant data-plane access; queues need Storage Queue Data Contributor separately, so `--auth-mode login` fails with AuthorizationPermissionMismatch.- `SubscriptionNotFound` from a data-plane command on a fresh subscription usually means the resource provider is unregistered, not that the subscription is missing. Fix: `az provider register --namespace Microsoft.Storage` (and Microsoft.Web, Microsoft.OperationalInsights, Microsoft.Insights).
 - `az monitor app-insights component create` without `--workspace` silently creates the classic resource kind, retired Feb 2024. It does not error.
 - Queue creates use default key auth, not `--auth-mode login`. Subscription Owner does not grant data-plane access; queues need Storage Queue Data Contributor separately, so `--auth-mode login` fails with AuthorizationPermissionMismatch.
+
+- Neon connection strings are URI format (postgresql://user:pass@host/db?sslmode=require). Npgsql needs key-value: Host=...;Database=...;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true. Convert both the pooled and direct strings. A URI passed to Npgsql fails with KeyNotFoundException, which reads like a code bug rather than a format problem.
+- `dotnet ef database update` ignores ConnectionStrings__Postgres — the design-time factory (#17) hardcodes the docker-compose dev connection, so a migration step without an explicit `--connection` reports success against the wrong database. The pipeline must pass it explicitly.
+- Use the direct (non-pooler) string for migrations, the pooled one for the app. Pooled connections don't handle some DDL cleanly.
 
 ### Provisioning (#56)
 - **`reminders-poison` is a derived name, not a chosen one.** The Functions host moves a message
@@ -211,5 +352,21 @@ Service or Postgres, which is the entire point of deferring those to #57.
   Resend value is missing, the Function App will fail to start — that's the
   guard working.
 - Swashbuckle package and CLI are pinned as a pair at 6.6.2. Bump together or not at all.
-- No global.json — SDK version is unpinned; CI should pin it.
+- No global.json — SDK version is unpinned; CI pins it (`DOTNET_VERSION: 8.0.x` in
+  `.github/workflows/deploy-app.yml`). A local `dotnet build` still uses whatever SDK is
+  installed, so "works here" and "builds in CI" are still two different claims.
 - EF migrations run as a pipeline step, never on startup.
+- `dotnet ef migrations bundle` resolves Microsoft.EntityFrameworkCore.Design from the
+  **startup** project, where PrivateAssets stops Domain's reference from reaching. Without a
+  direct reference in TrainerOS.Api it fails with `Could not load file or assembly
+  'Microsoft.EntityFrameworkCore.Design'` — which reads as a corrupt install, not a missing
+  reference. Added in #57; the two versions must stay in step.
+- The bundle is built `--self-contained --target-runtime linux-x64`, which is what lets the
+  migrate job run it with no .NET installed. It also means the bundle is a Linux binary: it
+  cannot be run from a Windows dev box to check a migration by hand (build a `win-x64` one for
+  that), and the executable bit does not survive an upload/download artifact round trip.
+- The SPA is served by the API's own static-file middleware with a `/api` carve-out
+  (`SpaHosting.cs`): unmatched non-API paths return index.html so pasted `/verify?token=` links
+  work, while unmatched `/api` paths keep the JSON error envelope. An empty `wwwroot` — the
+  state of any source checkout — makes the app answer every client route with a JSON 404,
+  which is also what a deploy that lost the SPA looks like.
