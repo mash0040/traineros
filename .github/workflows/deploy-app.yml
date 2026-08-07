@@ -6,7 +6,7 @@
 # The job graph is build → migrate → deploy, in that order and not collapsed into one job:
 #
 #   * migrations are a pipeline step, never on startup. Startup migrations race across
-#     instances, and F1 scaling to two instances would be the first time anyone found out.
+#     instances, and the day this plan scales to two would be the first time anyone found out.
 #   * migrate gates deploy. Migration 002 adds a unique index that can fail on existing
 #     rows (#98); production has no data yet, so today it cannot fail — but the failure mode
 #     to design for is a bad migration followed by a happy green deploy of code that assumes
@@ -179,10 +179,10 @@ jobs:
       # /api/health, not /health — the API mounts every route under /api, and a probe on the
       # wrong path gets the SPA shell with a cheerful 200 (docs/deploy-config.md).
       #
-      # F1 has no Always On, so the first request after a deploy cold-starts the site; the
-      # retries are that, not flakiness tolerance. The endpoint returns 503 when Postgres is
-      # unreachable, so `curl --fail` here also catches a deploy that came up pointed at
-      # nothing — the failure mode a naked "did it return 200" check would miss.
+      # The first request after a deploy cold-starts the site, and Neon's free tier autosuspends
+      # on top of that; the retries are those two, not flakiness tolerance. The endpoint returns
+      # 503 when Postgres is unreachable, so `curl --fail` here also catches a deploy that came
+      # up pointed at nothing — the failure mode a naked "did it return 200" check would miss.
       - name: Smoke check
         run: |
           site="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"

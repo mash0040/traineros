@@ -165,15 +165,16 @@ resources: clickops, and the commands are a record of what was created.
 
 | | |
 |---|---|
-| Provisioned | **No.** The pipeline (`.github/workflows/deploy-app.yml`) is written; nothing it deploys to exists yet. |
-| Owner | The human. Create the plan, the web app, and the Neon project; add the two GitHub secrets; set the app settings in §App Service (API). |
-| First run | The workflow only fires on push to `main` (or manual dispatch), so nothing deploys until the target exists. |
+| Provisioned | **Yes.** Plan, web app, Neon project and Function App exist and have been deployed to manually (#57/#58). Date: `<fill in>`. |
+| Plan SKU | Started at **F1**, now **B1** — the free tier's daily CPU quota ran out during setup, before any real traffic. See §Known gotchas → Deploying. |
+| Custom domain | **Not bound.** The app is served at `https://app-traineros.azurewebsites.net`; `traineros.me` binding is still to do, and `App:BaseUrl` must not change before it. |
+| Owner | The human. The `az` commands below are the record of what was created. |
 
 ### Resources
 
 | Resource | Name | Region | SKU / tier | Why |
 |---|---|---|---|---|
-| App Service plan | `plan-traineros` | `canadacentral` | **F1**, Linux | First rung of the cost ladder. Must match #56's region or every queue call from the API crosses a region boundary. |
+| App Service plan | `plan-traineros` | `canadacentral` | **B1**, Linux (created as F1) | Started on the ladder's first rung; F1's 60 CPU-minutes/day ran out during setup, so it is B1 now — the ladder working as designed, not a surprise. Must match #56's region or every queue call from the API crosses a region boundary. |
 | Web app | `app-traineros` *(globally unique — see note)* | `canadacentral` | `DOTNETCORE:8.0` | Serves the API and the SPA out of one wwwroot (architecture.md §Deployment shape). |
 | Postgres | Neon project `traineros` | closest Neon region to Toronto | Free | Second rung. Not an Azure resource — deliberately, per the ladder. |
 
@@ -181,7 +182,7 @@ resources: clickops, and the commands are a record of what was created.
 `app-traineros` is the preferred name and `AZURE_WEBAPP_NAME` in the workflow; if it is taken,
 pick another, change it in **both** places, and record it here:
 
-- Web app actually created: `<fill in>`
+- Web app actually created: `app-traineros`
 
 ```bash
 LOC=canadacentral
@@ -196,6 +197,10 @@ az webapp create -n app-traineros -g $RG -p plan-traineros --runtime "DOTNETCORE
 # default on new web apps, and the deploy fails with a 401 that reads like a bad secret.
 az resource update -g $RG --namespace Microsoft.Web --resource-type basicPublishingCredentialsPolicies 
   --name scm --parent sites/app-traineros --set properties.allow=true
+
+# Promotion, run after F1's daily CPU quota was exhausted during setup. ~$13/mo, and the point
+# at which the honest-cost figure in architecture.md starts applying.
+az appservice plan update -n plan-traineros -g $RG --sku B1
 ```
 
 Postgres is created in the Neon console (no CLI here — it is not an Azure resource): one
@@ -205,25 +210,26 @@ are not interchangeable — the **direct** string goes in the `POSTGRES_CONNECTI
 secret that the migration bundle uses, the **pooled** one in the `ConnectionStrings:Postgres`
 app setting on both hosts.
 
-### What F1 does not do
+### What F1 did not do, and why the plan is B1
 
-Free is a real tier with real holes, and three of them touch decisions already recorded
-elsewhere. None is a reason not to start here; all three are reasons to know why something
-looks broken.
+Kept as the record of the promotion: the ladder said "start free, climb if the free tier bites",
+and it bit within the first day. What each hole cost, and where it stands now:
 
-- **No custom domain.** F1 serves `*.azurewebsites.net` only. `App:BaseUrl` in the settings
-  below reads `https://traineros.me`, which cannot be live until the plan is promoted to B1
-  (or Shared). Until then `App:BaseUrl` must be `https://app-traineros.azurewebsites.net`, or
-  every magic link and every reminder footer points at a host the app is not served from —
-  the links resolve to nothing and v1's Definition of Shipped fails on the first email.
-- **No Health check feature.** App Service's health-check probe requires Basic or higher, so
-  the `/api/health` path below is configuration that F1 will ignore. The pipeline's post-deploy
-  smoke check hits the same endpoint, so a deploy that comes up unable to reach Postgres still
-  fails loudly; what F1 cannot do is restart an unhealthy instance on its own.
-- **No Always On, and 60 CPU-minutes a day.** The site unloads when idle, so the first request
-  after a quiet period cold-starts it. That is why the smoke check retries rather than asserting
-  on the first response. Neon's free tier also autosuspends, so the first *database* query pays
-  its own wake-up.
+- **60 CPU-minutes a day — the one that forced the promotion.** Exhausted during setup, before
+  a single real request. It presents as 503s everywhere and a 403 "Site Disabled" log stream,
+  which reads like a crashed app; the tell is `usageState: Exceeded`, not the application logs.
+  Gone on B1.
+- **No custom domain.** F1 served `*.azurewebsites.net` only. B1 can bind `traineros.me` —
+  **it has not been bound yet**, so `App:BaseUrl` is still the `azurewebsites.net` host. Bind
+  first, change the setting second, on both hosts together.
+- **No Health check feature.** Requires Basic or higher, so on F1 the `/api/health` path was
+  configuration the platform ignored. Available now on B1; enabling it is a portal toggle, and
+  the path is `/api/health`, not `/health`. Either way the pipeline's post-deploy smoke check
+  hits the same endpoint, so a deploy that comes up unable to reach Postgres still fails loudly.
+- **No Always On.** The site unloaded when idle and the first request paid the cold start,
+  which is why the smoke check retries rather than asserting on the first response. B1 supports
+  Always On. Neon's free tier still autosuspends regardless, so the first *database* query
+  after a quiet period pays its own wake-up — keep the retries.
 - Watch for spam-folder delivery; if it happens consistently that's the B1 promotion trigger, ahead of cold starts.
 
 
@@ -298,7 +304,11 @@ the lesser problem.
 - Resend:ApiKey
 - Resend:From  (noreply@traineros.me)
 - Notifications:PauseTokenKey  (must be IDENTICAL to the Function App's value)
-- App:BaseUrl = (https://traineros.me)  — **on F1 this must be https://app-traineros.azurewebsites.net**; F1 serves no custom domain, and a BaseUrl the app is not reachable at breaks every magic link and reminder footer. See §What F1 does not do.
+- App:BaseUrl — **currently `https://app-traineros.azurewebsites.net`.** The custom domain
+  `traineros.me` is **not bound yet**; binding it is what has to happen *first*, and only then
+  does this value change. Flip it early and every magic link and reminder footer points at a
+  host the app is not served from — the links resolve to nothing and v1's Definition of Shipped
+  fails on the first email. The Function App's copy changes at the same moment, not separately.
 - Seed__TrainerEmail / Seed__TrainerPassword  (first boot only; seeds the trainer)
 - Health check path is /api/health, NOT /health  (the App Service feature needs Basic+; on F1 the pipeline's post-deploy smoke check is what covers it)
 - APPLICATIONINSIGHTS_CONNECTION_STRING — fetch with:
@@ -309,7 +319,7 @@ the lesser problem.
 - Resend:ApiKey 
 - Resend:From (noreply@traineros.me)
 - Notifications:PauseTokenKey  (same value as App Service)
-- App: BaseUrl = https://traineros.me
+- App:BaseUrl — same value as the App Service, currently `https://app-traineros.azurewebsites.net`. The two must never disagree: this host mints the pause links the API validates.
 - Queue Storage connection string
 - host.json pins maxDequeueCount: 5
 - APPLICATIONINSIGHTS_CONNECTION_STRING — fetch with:
@@ -327,6 +337,32 @@ the lesser problem.
 - Neon connection strings are URI format (postgresql://user:pass@host/db?sslmode=require). Npgsql needs key-value: Host=...;Database=...;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true. Convert both the pooled and direct strings. A URI passed to Npgsql fails with KeyNotFoundException, which reads like a code bug rather than a format problem.
 - `dotnet ef database update` ignores ConnectionStrings__Postgres — the design-time factory (#17) hardcodes the docker-compose dev connection, so a migration step without an explicit `--connection` reports success against the wrong database. The pipeline must pass it explicitly.
 - Use the direct (non-pooler) string for migrations, the pooled one for the app. Pooled connections don't handle some DDL cleanly.
+
+### Deploying (#57, #58)
+
+Found during the first manual deploy. Each one presents as a different failure than it is,
+which is the reason they are written down rather than remembered.
+
+- **`Compress-Archive` produces a zip Kudu cannot unpack.** PowerShell writes Windows
+  backslashes as the path separator inside the zip entries; Kudu's rsync on the Linux side
+  reads the backslash as part of the filename, so every non-root file fails with
+  `Invalid argument (22)` and the deploy returns an opaque 400. Use
+  `tar -a -c -f deploy.zip -C publish *` instead.
+- **`Copy-Item src/web/dist/* publish/wwwroot/ -Recurse` flattens the folder structure.** The
+  contents of `assets/` land directly in `wwwroot/`, so the SPA 404s on its own bundles — the
+  shell loads and nothing else does. Drop the wildcard:
+  `Copy-Item src/web/dist publish/wwwroot -Recurse`.
+- **F1's 60 CPU-minutes/day quota was exhausted during setup**, before any real traffic. The
+  symptom is 503 on every request and 403 "Site Disabled" on the log stream, which reads like a
+  crashed app and sends you into the application logs. It is not the app: check
+  `usageState` for `Exceeded`. Resolved by promoting the plan to B1.
+- **Linux Function Apps: `az functionapp deploy --type zip` triggers an Oryx build** that fails
+  on an already-published .NET package, with an empty build log to explain it. Setting
+  `SCM_DO_BUILD_DURING_DEPLOYMENT=false` and `ENABLE_ORYX_BUILD=false` did **not** stop it. The
+  working path is `WEBSITE_RUN_FROM_PACKAGE=1` plus `az functionapp deployment source config-zip`.
+- **After a Functions deploy, the functions do not appear in `az functionapp function list`
+  until the app is restarted.** An empty list is not necessarily a failed deploy. Restart, then
+  list again before believing it.
 
 ### Provisioning (#56)
 - **`reminders-poison` is a derived name, not a chosen one.** The Functions host moves a message

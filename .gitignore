@@ -34,3 +34,6 @@ local.settings.json
 *.swp
 .DS_Store
 Thumbs.db
+
+*.zip
+publish-func/
