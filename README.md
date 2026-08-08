@@ -90,4 +90,4 @@ After any endpoint or DTO change, run `npm run generate:types` (from `src/web`) 
 
 Push to `main` runs [`.github/workflows/deploy-app.yml`](.github/workflows/deploy-app.yml): it builds and tests both halves, copies the Vite output into the API's `wwwroot`, applies EF migrations as a bundle, and only then deploys to App Service. Migrations gate the deploy — a failed migration stops the pipeline rather than shipping code that assumes it applied.
 
-Resources, app settings, the GitHub secrets it needs, and what the free App Service tier will not do are in [docs/deploy-config.md](docs/deploy-config.md). Nothing deploys until that target is provisioned; the workflow file is ahead of it on purpose.
+The environment is live at [traineros.me](https://traineros.me): one App Service (B1, `canadacentral`) serving the API and the SPA, a Function App for the reminder pipeline, and Neon Postgres. Resources, app settings, the GitHub secrets the pipeline needs, and the deploy gotchas worth reading before touching any of it are in [docs/deploy-config.md](docs/deploy-config.md).

@@ -3,9 +3,9 @@
 ## Azure resources (#56)
 
 Early scope, per the cost-ladder decision in architecture.md §Deployment shape: provision the
-substrate now so subscription and quota problems surface here rather than at deploy week.
-App Service and the database are deliberately absent — they arrive in #57, when the pipeline
-needs a target.
+substrate first so subscription and quota problems surface here rather than at deploy week.
+App Service and the database were deliberately absent from this round — they arrived in #57,
+when the pipeline needed a target.
 
 Method is clickops, per the PRODUCT.md non-goal on IaC. The `az` commands below are a **record
 of what was created**, not a deployment mechanism: there is no state file, nothing re-runs them,
@@ -16,16 +16,17 @@ because "documented config" at one environment means someone can reproduce it by
 
 | | |
 |---|---|
-| Provisioned | **No.** Nothing in this section has been created yet. |
-| Blocker | Azure CLI is not installed on the dev machine, and `az login` is interactive. |
-| Owner | The human. Run §Preflight, then §Create, then fill in the two `<fill in>` values below. |
-| CLI | `winget install Microsoft.AzureCLI`, then `az login`. Or do the whole thing in the portal — the commands below are a record, not a requirement. |
+| Provisioned | **Yes.** All of it, in `canadacentral`: resource group `rg-traineros`, storage `sttraineros` with both queues, Log Analytics `log-traineros`, App Insights `appi-traineros`. |
+| Also live | The #57/#58 half: App Service plan `plan-traineros` (created F1, promoted to B1), web app `app-traineros`, Function App `func-traineros` — see §App Service and database (#57). |
+| Custom domain | `traineros.me` bound at the root, A record → `52.237.22.139`, App Service managed certificate, SNI SSL. |
+| Preflight | Ran clean before anything was created — no quota, policy, or provider block on this subscription. The six checks below are kept as method, not as an open task. |
 
 ### Preflight: can this subscription provision at all?
 
 The ticket's first item, and the reason it is first: quota and policy failures on this account
 are a known risk, and the expensive version of finding out is at deploy week with a pipeline
-half-written. Run all six before creating anything. Each answers a different failure mode.
+half-written. All six were run before anything was created, and none of them blocked; they are
+kept because the next environment — or the next subscription — gets checked the same way.
 
 ```bash
 # 1. Is there a usable subscription, and is it Enabled (not Warned/PastDue/Disabled)?
@@ -79,7 +80,7 @@ only, no hyphens — which is why this one breaks the `st-` convention the other
 `sttraineros` is the preferred name; if preflight 5 says it is taken, append digits and record
 the result here:
 
-- Storage account actually created: `<fill in>`
+- Storage account actually created: `sttraineros` — the preferred name was available.
 
 **Redundancy: LRS, deliberately.** Not a cost reflex. notifications.md is explicit that the
 database is the source of truth and the queue is only a delivery mechanism: "if the queue
@@ -135,7 +136,7 @@ that they exist and which setting consumes them.
 | Storage connection string | `az storage account show-connection-string -n $ST -g $RG` | Function App setting `AzureWebJobsStorage`, and the scheduler's queue client (#57) |
 | App Insights connection string | `az monitor app-insights component show -a appi-traineros -g $RG --query connectionString` | Both hosts, as `APPLICATIONINSIGHTS_CONNECTION_STRING` |
 
-- App Insights connection string recorded in App Service / Function App config: `<fill in: date>`
+- App Insights connection string recorded in App Service / Function App config: `both hosts are configured`
 
 Use the **connection string**, not the instrumentation key. Key-only configuration is deprecated
 and the newer SDKs ignore it.
@@ -156,6 +157,11 @@ ticket is approximately true and not literally true:
 Total realistic run rate for #56's resources: **well under $1/month**, and $0 of it is App
 Service or Postgres, which is the entire point of deferring those to #57.
 
+**All-in, now that #57's half is live:** the B1 plan is ~$13/month and Neon's free tier is $0,
+so the whole environment runs at roughly **$13–14/month**. That is the promoted rung of the
+ladder, reached on day one rather than never — architecture.md's ~$28 figure assumed B1 *plus*
+Azure Postgres Flexible, and Neon is what keeps the second half of that off the bill.
+
 ## App Service and database (#57)
 
 The deploy target, provisioned at the point the pipeline needs one. Same method as §Azure
@@ -167,7 +173,7 @@ resources: clickops, and the commands are a record of what was created.
 |---|---|
 | Provisioned | **Yes.** Plan, web app, Neon project and Function App exist and have been deployed to manually (#57/#58). Date: `<fill in>`. |
 | Plan SKU | Started at **F1**, now **B1** — the free tier's daily CPU quota ran out during setup, before any real traffic. See §Known gotchas → Deploying. |
-| Custom domain | **Not bound.** The app is served at `https://app-traineros.azurewebsites.net`; `traineros.me` binding is still to do, and `App:BaseUrl` must not change before it. |
+| Custom domain | **Bound.** `traineros.me` at the root, A record → `52.237.22.139`, managed certificate, SNI SSL. `App:BaseUrl` is `https://traineros.me` on both hosts. |
 | Owner | The human. The `az` commands below are the record of what was created. |
 
 ### Resources
@@ -176,6 +182,7 @@ resources: clickops, and the commands are a record of what was created.
 |---|---|---|---|---|
 | App Service plan | `plan-traineros` | `canadacentral` | **B1**, Linux (created as F1) | Started on the ladder's first rung; F1's 60 CPU-minutes/day ran out during setup, so it is B1 now — the ladder working as designed, not a surprise. Must match #56's region or every queue call from the API crosses a region boundary. |
 | Web app | `app-traineros` *(globally unique — see note)* | `canadacentral` | `DOTNETCORE:8.0` | Serves the API and the SPA out of one wwwroot (architecture.md §Deployment shape). |
+| Function App | `func-traineros` | `canadacentral` | Linux | Scheduler and worker (#58). Deploys from its own workflow and never touches the schema — see §One migrator. |
 | Postgres | Neon project `traineros` | closest Neon region to Toronto | Free | Second rung. Not an Azure resource — deliberately, per the ladder. |
 
 **The web app name is globally unique** (`<name>.azurewebsites.net`), like the storage account.
@@ -210,6 +217,27 @@ are not interchangeable — the **direct** string goes in the `POSTGRES_CONNECTI
 secret that the migration bundle uses, the **pooled** one in the `ConnectionStrings:Postgres`
 app setting on both hosts.
 
+### Custom domain
+
+`traineros.me` is bound at the **root** (apex), which is what forces the shape of the DNS:
+
+| | |
+|---|---|
+| Record | `A` → `52.237.22.139` (the web app's inbound IP) |
+| Verification | App Service will not accept an apex binding on an A record without the `asuid.<domain>` TXT record carrying the custom-domain verification ID |
+| Certificate | App Service **managed certificate** — free, auto-renewing, and enough for one apex host |
+| TLS binding | **SNI SSL** (not IP-based, which costs an IP and buys nothing here) |
+
+Root domains cannot be CNAMEs, so the binding pins a literal IP. That IP is stable for the life
+of the web app but is **not** guaranteed across a delete-and-recreate: if `app-traineros` is
+ever rebuilt, re-read the inbound IP and update the A record, or the domain resolves to a site
+that no longer exists. The `azurewebsites.net` hostname keeps working alongside it, which is why
+the pipeline's smoke check still targets it — one less thing depending on DNS.
+
+The managed certificate renews itself, so the dated risk here is the **domain registration**, not
+the cert: `traineros.me` renews 2027-08-05, and if it lapses every magic link and reminder email
+stops resolving (§Known gotchas).
+
 ### What F1 did not do, and why the plan is B1
 
 Kept as the record of the promotion: the ladder said "start free, climb if the free tier bites",
@@ -219,9 +247,9 @@ and it bit within the first day. What each hole cost, and where it stands now:
   a single real request. It presents as 503s everywhere and a 403 "Site Disabled" log stream,
   which reads like a crashed app; the tell is `usageState: Exceeded`, not the application logs.
   Gone on B1.
-- **No custom domain.** F1 served `*.azurewebsites.net` only. B1 can bind `traineros.me` —
-  **it has not been bound yet**, so `App:BaseUrl` is still the `azurewebsites.net` host. Bind
-  first, change the setting second, on both hosts together.
+- **No custom domain.** F1 served `*.azurewebsites.net` only. Resolved by the promotion and
+  then done: `traineros.me` is bound (§Custom domain) and `App:BaseUrl` is that host on both
+  hosts.
 - **No Health check feature.** Requires Basic or higher, so on F1 the `/api/health` path was
   configuration the platform ignored. Available now on B1; enabling it is a portal toggle, and
   the path is `/api/health`, not `/health`. Either way the pipeline's post-deploy smoke check
@@ -230,7 +258,9 @@ and it bit within the first day. What each hole cost, and where it stands now:
   which is why the smoke check retries rather than asserting on the first response. B1 supports
   Always On. Neon's free tier still autosuspends regardless, so the first *database* query
   after a quiet period pays its own wake-up — keep the retries.
-- Watch for spam-folder delivery; if it happens consistently that's the B1 promotion trigger, ahead of cold starts.
+- Watch for spam-folder delivery. It was written down as the likely first reason to climb off
+  F1; the CPU quota got there first, so this is now purely a deliverability question — the lever
+  is the verified from-domain in Resend, not the App Service tier.
 
 
 ### GitHub secrets the pipeline needs
@@ -257,12 +287,13 @@ those places.
    practice. Then `dotnet ef migrations bundle` produces a self-contained `efbundle`.
 2. **migrate** — runs `efbundle --connection "$POSTGRES_CONNECTION_STRING"`. Migrations are a
    pipeline step and never on startup: startup migrations across multiple instances race, and
-   F1 scaling out would be the first time anyone found out.
+   the day this plan scales out would be the first time anyone found out.
 3. **deploy** — `needs: migrate`, so a failed migration stops the deploy dead. `efbundle` exits
    non-zero on any migration error, which is the whole mechanism. Migration 002 adds a unique
-   index that can fail on pre-existing rows (#98); production has no data today, so it cannot
-   fail today — the ordering exists so that the day it can fail, the answer is a red pipeline
-   and not a green deploy of code that assumes the index is there.
+   index that can fail on pre-existing rows (#98). That was harmless while production was empty;
+   it stopped being empty the moment the app went live, which is the case the ordering was put
+   here for — the day a migration can fail on real rows, the answer is a red pipeline and not a
+   green deploy of code that assumes the index is there.
 
 Schema goes first, code second: new code against old schema is the combination that takes the
 site down, and old code against new schema survives the two minutes in between. `concurrency`
@@ -304,13 +335,9 @@ the lesser problem.
 - Resend:ApiKey
 - Resend:From  (noreply@traineros.me)
 - Notifications:PauseTokenKey  (must be IDENTICAL to the Function App's value)
-- App:BaseUrl — **currently `https://app-traineros.azurewebsites.net`.** The custom domain
-  `traineros.me` is **not bound yet**; binding it is what has to happen *first*, and only then
-  does this value change. Flip it early and every magic link and reminder footer points at a
-  host the app is not served from — the links resolve to nothing and v1's Definition of Shipped
-  fails on the first email. The Function App's copy changes at the same moment, not separately.
+- App:BaseUrl = https://traineros.me  (the domain is bound — §Custom domain. Must stay identical to the Function App's copy: every magic link and reminder footer is built from it)
 - Seed__TrainerEmail / Seed__TrainerPassword  (first boot only; seeds the trainer)
-- Health check path is /api/health, NOT /health  (the App Service feature needs Basic+; on F1 the pipeline's post-deploy smoke check is what covers it)
+- Health check path is /api/health, NOT /health  (available on B1; the pipeline's post-deploy smoke check hits the same endpoint either way)
 - APPLICATIONINSIGHTS_CONNECTION_STRING — fetch with:
   az monitor app-insights component show --app appi-traineros --resource-group rg-traineros --query connectionString -o tsv
 
@@ -319,7 +346,7 @@ the lesser problem.
 - Resend:ApiKey 
 - Resend:From (noreply@traineros.me)
 - Notifications:PauseTokenKey  (same value as App Service)
-- App:BaseUrl — same value as the App Service, currently `https://app-traineros.azurewebsites.net`. The two must never disagree: this host mints the pause links the API validates.
+- App:BaseUrl = https://traineros.me  (same value as the App Service — the two must never disagree: this host mints the pause links the API validates)
 - Queue Storage connection string
 - host.json pins maxDequeueCount: 5
 - APPLICATIONINSIGHTS_CONNECTION_STRING — fetch with:
