@@ -436,7 +436,7 @@ pipeline — assert the properties, do not inherit them:
 | No backslashes in entry names | The `Compress-Archive` bug in §Deploying, if this ever runs anywhere but Linux |
 | `host.json`, `functions.metadata`, `worker.config.json`, `extensions.json`, `TrainerOS.Functions.dll` at the **package root** | A zip rooted one directory too deep, which unpacks into an app that starts and indexes nothing |
 | Every `hintPath` in `extensions.json` resolves inside the package | A lost `.azurefunctions/` directory — a host that starts cleanly, binds nothing to the queue, and sends no reminders. Silence, not a crash |
-| `functions.metadata` lists all three of `ReminderScheduler`, `ReminderWorker`, `ReminderPoisonHandler` | A `[Function]` attribute lost to a refactor. Asserted here because post-deploy the same question has two answers (below) and here it has one |
+| `functions.metadata` lists all three of `ReminderScheduler`, `ReminderWorker`, `ReminderPoisonHandler` | A `[Function]` attribute lost to a refactor. This is the **only** place the three names are asserted — see §What this pipeline verifies, and what it does not |
 
 **Deploy uses `Azure/functions-action@v1` with the publish profile, and that is the whole reason
 this pipeline exists at all.** The obvious reading of §Deploying is that the working path needs
@@ -465,29 +465,56 @@ through Kudu, polls up to 100 s each for propagation, and then deletes them afte
 had not been set before. The empty string is the documented bypass. Neither setting affects
 zipdeploy in any case — they were tried against OneDeploy and did not stop Oryx.
 
-**The smoke check reads the host's own index, which is a better signal than the ARM list would
-have been.** None of the three functions is HTTP-triggered, so there is nothing to `curl` the way
-`deploy-app.yml` probes `/api/health`. Instead the workflow reads the master key from Kudu
-(`/api/functions/admin/masterkey`, available to the same basic-auth credential that just
-deployed) and polls the host's admin API at `/admin/functions` until all three names appear.
+**There is no post-deploy smoke check.** `deploy-app.yml` can `curl` `/api/health`; none of the
+three functions is HTTP-triggered, so this pipeline has no equivalent. A probe was tried — read
+the master key from Kudu at `/api/functions/admin/masterkey`, then poll the host's admin API at
+`/admin/functions` until all three names appear — and it was removed rather than debugged, for
+two reasons that compound. The credential path did not work: the deploy itself succeeds on the
+same basic-auth pair, but the master-key read failed, and chasing that is effort spent on a
+check whose ceiling was already low. And the ceiling really is low: the three function names are
+**identical before and after a deploy**, so a host still serving the previous package answers
+the probe exactly like one that swapped. It could never have proved what it looked like it was
+proving.
 
-That sidesteps the "empty list is not a failed deploy" gotcha rather than working around it: the
-list that lags is `az functionapp function list`, which reads the ARM cache: `/admin/functions`
-is answered by the running host, so a name there means *that host* has indexed it. No restart is
-needed, which is fortunate, because without `az` there is no way to force one.
+#### What this pipeline verifies, and what it does not
 
-What the check is really for is **startup**, not delivery. `functions-action` already fails the
-job if Kudu's deployment fails — it polls the deployment to completion and throws — so the
-package landing is not in question. Whether the host comes back up is: #16's startup guard
-throws when Resend configuration is missing, and Core Tools forces `Development` locally, so
-that guard first executes in Azure (§Application). A host that cannot start deploys perfectly
-and sends nothing.
+Stated plainly because the difference is invisible from a green checkmark.
 
-**Its honest limit:** it does not prove the running host swapped to the *new* package. The three
-function names are identical before and after, so a host still serving the previous package
-answers the probe the same way. Kudu's deployment record covers that half; the probe covers
-liveness. Closing the gap would need a build marker in the package and a way to read it back
-from the mount, which is not worth the machinery at one environment.
+**Verified:**
+
+| Claim | By what |
+|---|---|
+| The build compiles and the whole `TrainerOS.Tests` suite passes | `dotnet test` in **build** |
+| The package has the right shape — root layout, no backslash entries, every `extensions.json` hint-path present | The package verification step in **build** |
+| All three functions were **built** into the package | `functions.metadata` assertion in **build** |
+| The app is still in run-from-package mode | Kudu `/api/settings` check in **deploy** |
+| Kudu accepted the package | `functions-action` polls the deployment to completion and throws on failure, which fails the job |
+
+**Not verified — and this is the honest gap:**
+
+- **The host started after the deploy.** Nothing in this pipeline talks to the running host. The
+  deploy step's success means Kudu unpacked and mounted the package, not that the worker process
+  came back up.
+- **Consequently, a config-guard failure is invisible here.** `Program.cs` throws at startup on a
+  missing `ConnectionStrings:Postgres`, `AzureWebJobsStorage`, `App:BaseUrl` or
+  `Notifications:PauseTokenKey` (the last is #40's signed pause link, which the reminder cannot
+  be built without), and `ResendOptions` validates `Resend:ApiKey` / `Resend:From` the same way
+  (#16). Core Tools forces `Development` locally, so every one of those first executes in Azure
+  (§Application). A host that cannot start **deploys perfectly**: the pipeline is green, the
+  deployment record is clean, and reminders silently stop sending. That failure surfaces as a
+  client not receiving an email — via App Insights, or via a human noticing — and never as a red
+  pipeline. It is exactly the shape of failure the rest of this file works to avoid, and the one
+  place the pipeline cannot see.
+- **That the running host swapped to the new package.** Kudu's deployment record is the only
+  evidence, and nothing reads it back off the mount.
+
+Closing the first two would need a probe the deployed host answers — which needs either a
+working master-key path or an HTTP-triggered health function of our own — and closing the third
+would need a build marker in the package read back from the running host. Neither is worth the
+machinery at one environment, but **neither is covered today**, and a green run on this workflow
+should not be read as "reminders are sending." The check that would catch it is the App Insights
+alert on the poison-queue function (notifications.md §Observability) plus the fact that a host
+which never starts also never logs.
 
 ## App Service (API)
 - ConnectionStrings:Postgres
