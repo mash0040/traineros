@@ -101,11 +101,36 @@ jobs:
       # Same-origin is this copy. The SPA is not a separate host, an SWA, or a CDN origin —
       # it is static content inside the API's own wwwroot, which is what lets the session
       # cookie stay first-party with zero CORS configuration.
+      #
+      # `dist/.` and not `dist/*`. The manual deploy lost a round to `Copy-Item dist/* -Recurse`,
+      # which flattens `assets/` into the destination root (docs/deploy-config.md §Deploying);
+      # `cp -r dist/.` copies the tree as a tree. The assertions below are what stop a future
+      # flattening spelling from passing again.
       - name: Copy SPA into wwwroot
         run: |
           mkdir -p publish/wwwroot
           cp -r src/web/dist/. publish/wwwroot/
           test -f publish/wwwroot/index.html   # a silently empty wwwroot deploys a blank app
+
+          # index.html surviving is not the SPA surviving. A flattened copy leaves the shell at
+          # the root and every hashed bundle one directory away from where the shell asks for
+          # it, so the app loads and then 404s on itself — which is exactly the failure a
+          # `test -f index.html` check waves through. Resolve the references instead.
+          # `|| true` because the runner's shell is `bash -eo pipefail`: a grep that matches
+          # nothing would otherwise kill the step with no output at all, and "no references
+          # found" is precisely the case worth an explanation.
+          refs=$(grep -oE '/assets/[A-Za-z0-9._-]+' publish/wwwroot/index.html | sort -u || true)
+          if [ -z "$refs" ]; then
+            echo "::error::index.html references no /assets/ files, so this check would pass vacuously."
+            exit 1
+          fi
+          for ref in $refs; do
+            if [ ! -f "publish/wwwroot$ref" ]; then
+              echo "::error::index.html references $ref, which is not in the package — the SPA copy flattened or dropped files."
+              exit 1
+            fi
+          done
+          echo "wwwroot resolves $(printf '%s\n' "$refs" | wc -l) referenced asset(s)."
 
       # The bundle is a self-contained executable of the migrations, which is why the migrate
       # job below needs no .NET SDK at all. Built here so a broken migration fails the build
@@ -124,11 +149,48 @@ jobs:
             --self-contained --target-runtime linux-x64 \
             --output efbundle --force
 
+      # Zipped here, deliberately, rather than handing the deploy action a folder and letting it
+      # zip on our behalf. The manual deploy's opaque 400 was a zip problem: PowerShell's
+      # Compress-Archive writes Windows backslashes into the entry names, Kudu's rsync on the
+      # Linux side reads the backslash as part of the filename, and every non-root file fails
+      # with `Invalid argument (22)` (docs/deploy-config.md §Deploying). This runner is Linux and
+      # Info-ZIP writes forward slashes, so that bug does not reach this workflow — but "the
+      # separator is correct because of which OS the job happens to run on" is a property to
+      # assert, not one to inherit. Owning the zip is also what makes the assertion possible at
+      # all: you cannot check the entry names of an archive the action builds after you.
+      #
+      # It costs nothing either: the artifact round trip moves one file instead of the few
+      # hundred in publish/, and a zip carries no file mode for the round trip to lose.
+      - name: Package
+        working-directory: publish
+        run: zip -qr ../deploy.zip .
+
+      - name: Verify the package
+        run: |
+          # Info-ZIP drops the leading ./ from `zip -r … .`; normalise anyway so the assertions
+          # below test the separator and the layout rather than that detail.
+          names=$(unzip -Z1 deploy.zip | sed 's|^\./||')
+
+          # `[\]` and not `\\`: a bracket expression takes the backslash literally, where the
+          # escaped form is the spelling that argues with the shell about how many it gets.
+          if printf '%s\n' "$names" | grep -q '[\]'; then
+            echo "::error::zip entry names contain backslashes; Kudu's rsync rejects every one of them."
+            printf '%s\n' "$names" | grep '[\]' | head
+            exit 1
+          fi
+
+          for required in TrainerOS.Api.dll wwwroot/index.html; do
+            if ! printf '%s\n' "$names" | grep -qxF "$required"; then
+              echo "::error::deploy.zip does not contain $required at the package root."
+              exit 1
+            fi
+          done
+
       - name: Upload app package
         uses: actions/upload-artifact@v4
         with:
           name: app
-          path: publish
+          path: deploy.zip
 
       - name: Upload migration bundle
         uses: actions/upload-artifact@v4
@@ -167,14 +229,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: app
-          path: publish
 
+      # The exact archive the build job verified, uploaded as one file and deployed as one file.
       - name: Deploy
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: publish
+          package: deploy.zip
 
       # /api/health, not /health — the API mounts every route under /api, and a probe on the
       # wrong path gets the SPA shell with a cheerful 200 (docs/deploy-config.md).

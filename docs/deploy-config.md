@@ -278,13 +278,63 @@ one environment, and it is a credential to rotate rather than an identity to fed
 managed identity where it is supported; a GitHub runner deploying into App Service is not one of
 those places.
 
+#### Re-examined in #128, and kept — with an expiry date
+
+The deploy step's repeated opaque 500s were the reason to look again, and they turn out not to
+be evidence against the credential. **Publish-profile auth fails as 401 or 403, not 500.** A 500
+comes from the far side of the door, and this environment had a documented reason to produce
+them in exactly that window: F1's CPU quota reached `usageState: Exceeded` during setup, which
+disables the site *including its SCM endpoint* (§What F1 did not do). That is gone on B1. So the
+next run tests the packaging fix against a plan that is no longer disabled, and swapping the
+credential in the same change would only make a second failure ambiguous.
+
+What is real is the clock. SCM basic auth is deprecated: it is **off by default** on new web
+apps, which is why creating this one needed the `basicPublishingCredentialsPolicies` override
+above. That override is a platform default being held open by hand — a tenant policy or a future
+default can close it, and when it does the pipeline fails with a 401 that reads like a bad
+secret rather than like a withdrawn mechanism. The publish profile is therefore a dated
+decision, not a permanent one.
+
+The migration, when that day comes or when a real auth failure arrives, whichever is first:
+
+```bash
+# Federated credential — no client secret exists to leak or rotate. The subject must match the
+# workflow's trigger exactly; a push-to-main pipeline is the ref form, not the environment form.
+az ad app create --display-name gh-traineros-deploy
+az ad app federated-credential create --id <appId> --parameters '{
+  "name": "gh-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:mash0040/traineros:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+az ad sp create --id <appId>
+
+# Website Contributor on the one site, not Contributor on the subscription: this identity
+# deploys an app, and that is the whole list of things it should be able to do.
+az role assignment create --assignee <appId> --role "Website Contributor" \
+  --scope /subscriptions/<subId>/resourceGroups/rg-traineros/providers/Microsoft.Web/sites/app-traineros
+```
+
+Then in `deploy-app.yml`: give the **deploy job** `permissions: { contents: read, id-token: write }`
+(job-level, so the token stays out of build and migrate), add `azure/login@v2` with
+`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`, and drop the `publish-profile`
+input — `azure/webapps-deploy` uses the logged-in session when no profile is supplied. Delete
+the `AZURE_WEBAPP_PUBLISH_PROFILE` secret and set `properties.allow=false` on the basic-auth
+policy, or the deprecated door is still open behind the new one.
+
+**The one thing to check before starting:** an Azure for Students tenant can forbid app
+registration outright (*Users can register applications* = No). If `az ad app create` is
+refused, this path needs a tenant admin and there is no workaround inside the pipeline — which
+is the other reason not to burn the working credential before the replacement is proven.
+
 ### Pipeline shape
 
 `.github/workflows/deploy-app.yml`, on push to `main`. Three jobs, and the split is the point:
 
 1. **build** — .NET tests and client tests, then `npm run build`, then `dotnet publish`, then
    Vite's `dist/` copied into `publish/wwwroot`. That copy is what "same-origin" means in
-   practice. Then `dotnet ef migrations bundle` produces a self-contained `efbundle`.
+   practice. Then `dotnet ef migrations bundle` produces a self-contained `efbundle`, and
+   `publish/` is zipped into `deploy.zip` — the artifact the deploy job hands to Kudu unchanged.
 2. **migrate** — runs `efbundle --connection "$POSTGRES_CONNECTION_STRING"`. Migrations are a
    pipeline step and never on startup: startup migrations across multiple instances race, and
    the day this plan scales out would be the first time anyone found out.
@@ -298,6 +348,28 @@ those places.
 Schema goes first, code second: new code against old schema is the combination that takes the
 site down, and old code against new schema survives the two minutes in between. `concurrency`
 queues runs rather than cancelling them, so two pushes never apply migrations at the same time.
+
+#### Packaging, and the two bugs it does not have (#128)
+
+The manual deploy found two packaging bugs (§Known gotchas → Deploying) and the pipeline was
+read against both. **It has neither, and both were structural rather than lucky:** the jobs run
+on `ubuntu-latest`, so nothing here is PowerShell, and the SPA copy was already written as
+`cp -r src/web/dist/. publish/wwwroot/`, which copies a tree as a tree. What #128 changed is
+that neither is true *by accident* any more:
+
+- **The zip is built here, not by the deploy action.** `zip -qr ../deploy.zip .` out of
+  `publish/`, and a verification step reads the entry names back with `unzip -Z1` and fails the
+  build if any contains a backslash. The bug is a property of the zipping tool, so the fix is to
+  pin the tool and assert the property — not to rely on which runner OS the job happens to use.
+  Deploying the zip rather than the folder also shrinks the artifact round trip to one file.
+- **The wwwroot check resolves the SPA's own references.** `test -f index.html` is exactly the
+  check a flattened copy passes: the shell is at the root either way, and it is the hashed
+  bundles under `assets/` that moved. The step now reads the `/assets/…` paths out of
+  `index.html` and asserts each one exists at the path the shell will ask for, and fails if
+  `index.html` referenced none at all rather than passing vacuously.
+
+Neither guard is theoretical: both were run against a real flattened copy and a real
+backslash-entry zip before being written down.
 
 The SDK is pinned in the workflow (`8.0.x`) rather than by a `global.json`, per §Application
 below.
@@ -368,7 +440,9 @@ the lesser problem.
 ### Deploying (#57, #58)
 
 Found during the first manual deploy. Each one presents as a different failure than it is,
-which is the reason they are written down rather than remembered.
+which is the reason they are written down rather than remembered. The first two are packaging
+bugs; the pipeline was read against both in #128 and has neither, and now asserts as much —
+see §Pipeline shape → Packaging.
 
 - **`Compress-Archive` produces a zip Kudu cannot unpack.** PowerShell writes Windows
   backslashes as the path separator inside the zip entries; Kudu's rsync on the Linux side
