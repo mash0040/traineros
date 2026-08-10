@@ -1,0 +1,310 @@
+# Deploys the Function App — the reminder scheduler, worker and poison handler
+# (notifications.md §Architecture). The product half — API + SPA — deploys from deploy-app.yml.
+#
+# Two pipelines because they change on different cadences: a CSS tweak has no business
+# restarting the scheduler, and a change to the 15-minute timer has no business waiting on the
+# client test suite. The split is the acceptance criterion of #58, not an optimisation.
+#
+# **This workflow never applies migrations.** deploy-app.yml owns the schema, alone, and that is
+# a rule rather than a lock because EF Core 8 has no lock to take — IMigrationsDatabaseLock
+# arrived in EF Core 9. Two efbundle runs against one database would both read
+# __EFMigrationsHistory, both conclude the same migration is pending, and the loser would die
+# mid-DDL with something like `relation already exists` — a red pipeline whose message points at
+# the schema rather than at the pipeline that raced it. So there is no migrate job here, and
+# nothing in src/TrainerOS.Functions calls Migrate() or EnsureCreated().
+name: Deploy Function App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Its own group, deliberately NOT shared with deploy-app.yml. Sharing one looks like the fix for
+# the window below and is not: GitHub keeps exactly one *pending* run per group and cancels the
+# older one when a newer arrives, so two quick pushes to main would silently drop a queued
+# Functions deploy. A Functions change that never deployed fails by being absent, which is worse
+# than the thing it would be preventing.
+#
+# What that leaves on the table is a window where this workflow deploys while deploy-app.yml is
+# still migrating, so the worker briefly runs new code against the old schema. The queue absorbs
+# it: the worker throws, the message goes back, and host.json's maxDequeueCount of 5 gives it
+# four more attempts after the schema lands. A reminder is late by minutes and nothing is lost —
+# the same property notifications.md leans on everywhere else.
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false
+
+env:
+  AZURE_FUNCTIONAPP_NAME: func-traineros
+  # Pinned here because the repo has no global.json (docs/deploy-config.md §Application).
+  DOTNET_VERSION: '8.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+# No id-token anywhere: this pipeline authenticates with a publish profile, not a federated
+# identity. That is a constraint rather than a preference — the tenant refuses app registration
+# (docs/deploy-config.md §Why there is no service principal).
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      # The whole suite, not a Functions-only filter. TrainerOS.Tests is one project referencing
+      # all three of Api, Domain and Functions, and the scheduler's behaviour is asserted through
+      # the same Domain code the API endpoints use. Splitting it to shave a minute off this
+      # pipeline would mean a Domain change could deploy the scheduler while the tests that
+      # actually cover it ran in the other workflow. The suite is offline — SQLite in-memory,
+      # no Postgres and no Azurite — which is what keeps it cheap enough to sit here.
+      - name: Test
+        run: dotnet test --no-build -c Release
+
+      # Portable publish, no --runtime: worker.config.json in the output declares
+      # `defaultExecutablePath: dotnet` and `defaultWorkerPath: TrainerOS.Functions.dll`, so the
+      # Linux host runs the same framework-dependent payload a Windows box produces. Pinning
+      # linux-x64 here would buy nothing and add an apphost nobody launches.
+      - name: Publish
+        run: dotnet publish src/TrainerOS.Functions --no-build -c Release -o publish
+
+      # Own the zip rather than hand a folder to something that will zip it later — the same
+      # reasoning as deploy-app.yml. It is the only way the entry names can be asserted before
+      # Kudu sees them, and it keeps the artifact round trip to one file. Handing
+      # functions-action a `.zip` also means it deploys exactly this archive: given a folder it
+      # would build its own, after the verification below had already passed on a different one.
+      - name: Package
+        working-directory: publish
+        run: zip -qr ../deploy.zip .
+
+      - name: Verify the package
+        run: |
+          # Info-ZIP drops the leading ./ from `zip -r … .`; normalise anyway so the assertions
+          # below test the separator and the layout rather than that detail.
+          names=$(unzip -Z1 deploy.zip | sed 's|^\./||')
+
+          # `[\]` and not `\\`: a bracket expression takes the backslash literally, where the
+          # escaped form is the spelling that argues with the shell about how many it gets.
+          # PowerShell's Compress-Archive writes Windows separators into the entry names and
+          # Kudu's rsync fails every non-root file with `Invalid argument (22)`
+          # (docs/deploy-config.md §Deploying). This runner is Linux, so the bug does not reach
+          # here — which is a property to assert, not one to inherit.
+          if printf '%s\n' "$names" | grep -q '[\]'; then
+            echo "::error::zip entry names contain backslashes; Kudu's rsync rejects every one of them."
+            printf '%s\n' "$names" | grep '[\]' | head
+            exit 1
+          fi
+
+          # The host reads all five of these from the package root, and a zip rooted one
+          # directory too deep unpacks into an app that starts and indexes nothing.
+          for required in host.json functions.metadata worker.config.json extensions.json TrainerOS.Functions.dll; do
+            if ! printf '%s\n' "$names" | grep -qxF "$required"; then
+              echo "::error::deploy.zip does not contain $required at the package root."
+              exit 1
+            fi
+          done
+
+          # Resolve the extension binaries the same way the SPA check resolves its bundles:
+          # follow the declared references rather than assert a list of assembly names that
+          # goes stale the moment a package version moves. extensions.json hint-paths into
+          # .azurefunctions/, and a package that lost that directory is a host which starts
+          # cleanly, indexes nothing onto the queue, and never sends a reminder — silence
+          # rather than a crash, which is the worst shape this failure could take.
+          hints=$(unzip -p deploy.zip extensions.json | jq -r '.extensions[].hintPath' | sed 's|^\./||' | sort -u)
+          for hint in $hints; do
+            if ! printf '%s\n' "$names" | grep -qxF "$hint"; then
+              echo "::error::extensions.json hint-paths at $hint, which is not in the package."
+              exit 1
+            fi
+          done
+
+          # `functions.metadata` is generated by the worker SDK at build time, so a [Function]
+          # attribute lost to a refactor shows up as a short list in an otherwise green
+          # pipeline — exactly the silent shape a scheduler failure takes. Asserted here as well
+          # as against the live host after deploy, because these are two different claims: this
+          # one is about what was built, that one about what is running.
+          indexed=$(unzip -p deploy.zip functions.metadata | jq -r '.[].name' | sort)
+          for fn in ReminderScheduler ReminderWorker ReminderPoisonHandler; do
+            if ! printf '%s\n' "$indexed" | grep -qxF "$fn"; then
+              echo "::error::functions.metadata does not list $fn. It lists: $(printf '%s' "$indexed" | tr '\n' ' ')"
+              exit 1
+            fi
+          done
+          echo "Package indexes: $(printf '%s' "$indexed" | tr '\n' ' ')"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: funcapp
+          path: deploy.zip
+
+  deploy:
+    name: Deploy to Function App
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: funcapp
+
+      # The publish profile is the only credential this workflow has, and two steps besides the
+      # deploy need the SCM basic-auth pair out of it. Parsed once here rather than kept as a
+      # second pair of secrets, which would be the same credential stored twice and free to
+      # drift from the profile it was copied out of.
+      #
+      # The password is masked; the username is not. It is `$func-traineros`, not a secret, and
+      # masking short predictable strings turns unrelated log lines into asterisks.
+      - name: Read SCM credentials from the publish profile
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+        run: |
+          # `|| true` so a malformed profile falls through to the check below with a message,
+          # rather than dying on the read and leaving a Python traceback as the explanation.
+          creds=$(python3 - <<'PY' || true
+          import os, xml.etree.ElementTree as ET
+
+          root = ET.fromstring(os.environ["PUBLISH_PROFILE"])
+          profile = next(
+              (p for p in root.iter("publishProfile") if p.get("publishMethod") == "MSDeploy"), None)
+          if profile is None:
+              raise SystemExit("no publishProfile with publishMethod=MSDeploy")
+          print(profile.get("userName"))
+          print(profile.get("userPWD"))
+          # publishUrl is `<app>.scm.azurewebsites.net:443`; the port is not wanted in a URL.
+          print(profile.get("publishUrl").split(":")[0])
+          PY
+          )
+
+          scm_user=$(printf '%s\n' "$creds" | sed -n 1p)
+          scm_pass=$(printf '%s\n' "$creds" | sed -n 2p)
+          scm_host=$(printf '%s\n' "$creds" | sed -n 3p)
+
+          if [ -z "$scm_pass" ] || [ -z "$scm_host" ]; then
+            echo "::error::Could not read MSDeploy credentials out of AZURE_FUNCTIONAPP_PUBLISH_PROFILE."
+            exit 1
+          fi
+
+          echo "::add-mask::$scm_pass"
+          {
+            echo "SCM_USER=$scm_user"
+            echo "SCM_PASS=$scm_pass"
+            echo "SCM_HOST=$scm_host"
+          } >> "$GITHUB_ENV"
+
+      # The deploy below only behaves if the app is in run-from-package mode, and that is an app
+      # setting a human can clear from the portal without ever seeing this file. Cleared, the
+      # deploy still reports success and the app keeps running whatever was last mounted.
+      #
+      # Read through Kudu rather than ARM because there is no ARM credential here — the same
+      # /api/settings endpoint functions-action itself reads. The response carries every app
+      # setting, including the Postgres and Resend secrets, so it goes to a file that is read by
+      # jq and deleted, and is never echoed.
+      - name: Check run-from-package is still on
+        run: |
+          settings="$RUNNER_TEMP/kudu-settings.json"
+          code=$(curl -sS -o "$settings" -w '%{http_code}' \
+            -u "$SCM_USER:$SCM_PASS" "https://$SCM_HOST/api/settings")
+
+          if [ "$code" != "200" ]; then
+            rm -f "$settings"
+            echo "::error::Kudu /api/settings returned $code. A 401 here means SCM basic auth is disabled on the app — see docs/deploy-config.md §Why there is no service principal."
+            exit 1
+          fi
+
+          mode=$(jq -r '.WEBSITE_RUN_FROM_PACKAGE // "unset"' "$settings")
+          rm -f "$settings"
+
+          if [ "$mode" != "1" ]; then
+            echo "::error::WEBSITE_RUN_FROM_PACKAGE is '$mode', expected '1'. See docs/deploy-config.md §Deploying."
+            exit 1
+          fi
+
+      # With a publish profile the action authenticates to Kudu directly, makes no ARM call at
+      # all, and posts the package to https://<scm>/api/zipdeploy — the same endpoint
+      # `az functionapp deployment source config-zip` posts to, which is the path that got this
+      # app live by hand. It is NOT the OneDeploy endpoint behind `az functionapp deploy
+      # --type zip`, which forces an Oryx build that fails on an already-published .NET payload
+      # and explains itself with an empty log (docs/deploy-config.md §Deploying). Same
+      # mechanism, no az, no service principal.
+      #
+      # The two build inputs are empty strings and NOT 'false'. Their action defaults are the
+      # string 'false', which is a value rather than an absence: the action would write
+      # SCM_DO_BUILD_DURING_DEPLOYMENT and ENABLE_ORYX_BUILD into the live app through Kudu, poll
+      # for propagation, and then delete them afterwards if they had not been set before. The
+      # empty string is the documented bypass and leaves the app's own settings — already false
+      # on this app — untouched. Neither setting affects zipdeploy anyway; they were tried
+      # against OneDeploy and did not stop Oryx.
+      - name: Deploy
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: deploy.zip
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          scm-do-build-during-deployment: ''
+          enable-oryx-build: ''
+
+      # None of the three functions is HTTP-triggered, so there is nothing to curl the way
+      # deploy-app.yml probes /api/health. The host's own admin API is the substitute, and it is
+      # a better signal than `az functionapp function list` would have been: that list is the ARM
+      # cache, which is what lags behind a deploy until the app restarts and produces the "empty
+      # list is not a failed deploy" ambiguity in §Deploying. /admin/functions is answered by the
+      # running host itself, so a name appearing there means that host has indexed it.
+      #
+      # The action already fails this job if Kudu's deployment fails — it polls the deployment
+      # to completion and throws — so this step is not asking "did the package land". It is
+      # asking whether the host came back up, which is a different failure: #16's startup guard
+      # throws when Resend configuration is missing, and Core Tools forces Development locally,
+      # so that guard first executes here (docs/deploy-config.md §Application). A host that
+      # cannot start deploys perfectly and sends nothing.
+      #
+      # What it does not prove: the running host swapped to the *new* package. The three names
+      # are the same before and after, so a host still serving the previous package answers this
+      # identically. Kudu's deployment record covers that half; this covers liveness.
+      - name: Verify the host indexed the functions
+        run: |
+          app="${{ env.AZURE_FUNCTIONAPP_NAME }}"
+
+          # The admin API takes the master key and nothing weaker. Kudu hands it over to the same
+          # basic-auth credential that just deployed, so this introduces no new secret — but it
+          # is the app's most powerful key, so it is masked before it can reach a log line.
+          key=$(curl -sS --fail -u "$SCM_USER:$SCM_PASS" \
+            "https://$SCM_HOST/api/functions/admin/masterkey" | jq -r '.masterKey')
+
+          if [ -z "$key" ] || [ "$key" = "null" ]; then
+            echo "::error::Could not read the master key from Kudu; cannot probe the host."
+            exit 1
+          fi
+          echo "::add-mask::$key"
+
+          for attempt in $(seq 1 12); do
+            listed=$(curl -sS --fail --max-time 30 -H "x-functions-key: $key" \
+              "https://$app.azurewebsites.net/admin/functions" | jq -r '.[].name' | sort || true)
+
+            missing=
+            for fn in ReminderScheduler ReminderWorker ReminderPoisonHandler; do
+              printf '%s\n' "$listed" | grep -qxF "$fn" || missing="$missing $fn"
+            done
+
+            if [ -z "$missing" ]; then
+              echo "Host is up and indexing: $(printf '%s' "$listed" | tr '\n' ' ')"
+              exit 0
+            fi
+
+            echo "Attempt $attempt: host not serving the full index yet, missing$missing; retrying in 15s."
+            sleep 15
+          done
+
+          echo "::error::The host never indexed:$missing"
+          exit 1

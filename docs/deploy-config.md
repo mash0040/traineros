@@ -182,7 +182,7 @@ resources: clickops, and the commands are a record of what was created.
 |---|---|---|---|---|
 | App Service plan | `plan-traineros` | `canadacentral` | **B1**, Linux (created as F1) | Started on the ladder's first rung; F1's 60 CPU-minutes/day ran out during setup, so it is B1 now — the ladder working as designed, not a surprise. Must match #56's region or every queue call from the API crosses a region boundary. |
 | Web app | `app-traineros` *(globally unique — see note)* | `canadacentral` | `DOTNETCORE:8.0` | Serves the API and the SPA out of one wwwroot (architecture.md §Deployment shape). |
-| Function App | `func-traineros` | `canadacentral` | Linux | Scheduler and worker (#58). Deploys from its own workflow and never touches the schema — see §One migrator. |
+| Function App | `func-traineros` | `canadacentral` | Linux, **on `plan-traineros`** (B1 Dedicated — not Consumption) | Scheduler and worker (#58). Deploys from its own workflow and never touches the schema — see §One migrator. Sharing the web app's plan is why the Function App adds nothing to the bill, and why it is not subject to Consumption's deployment shape. |
 | Postgres | Neon project `traineros` | closest Neon region to Toronto | Free | Second rung. Not an Azure resource — deliberately, per the ladder. |
 
 **The web app name is globally unique** (`<name>.azurewebsites.net`), like the storage account.
@@ -265,18 +265,29 @@ and it bit within the first day. What each hole cost, and where it stands now:
 
 ### GitHub secrets the pipeline needs
 
-Repository settings → Secrets and variables → Actions. Both are secrets; neither goes in the
-repo (architecture.md: "No secrets in repo").
+Repository settings → Secrets and variables → Actions. None of these goes in the repo
+(architecture.md: "No secrets in repo").
 
-| Secret | Value | Read it with |
-|---|---|---|
-| `AZURE_WEBAPP_PUBLISH_PROFILE` | The whole XML file, pasted | `az webapp deployment list-publishing-profiles -n app-traineros -g rg-traineros --xml` |
-| `POSTGRES_CONNECTION_STRING` | Neon **direct** (non-pooler) string, Npgsql key-value format | Neon console, then convert per §Known gotchas |
+| Secret | Used by | Value | Read it with |
+|---|---|---|---|
+| `AZURE_WEBAPP_PUBLISH_PROFILE` | `deploy-app.yml` | The whole XML file, pasted | `az webapp deployment list-publishing-profiles -n app-traineros -g rg-traineros --xml` |
+| `POSTGRES_CONNECTION_STRING` | `deploy-app.yml` | Neon **direct** (non-pooler) string, Npgsql key-value format | Neon console, then convert per §Known gotchas |
+| `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` | `deploy-functions.yml` | The whole XML file, pasted | `az functionapp deployment list-publishing-profiles -n func-traineros -g rg-traineros --xml` |
 
-Publish profile rather than a service principal with OIDC: it is the clickops-shaped option for
-one environment, and it is a credential to rotate rather than an identity to federate. #59 owns
-managed identity where it is supported; a GitHub runner deploying into App Service is not one of
-those places.
+Both pipelines authenticate the same way, with a publish profile. Neither uses a service
+principal, and that is a constraint rather than a preference — see §Why there is no service
+principal.
+
+**SCM basic auth must be enabled on each site for its profile to work.** It is off by default,
+and the deploy fails with a 401 that reads like a bad secret. `app-traineros` was switched on
+during #57; `func-traineros` was still `allow: false` when #58 was written, so it needs the same
+command:
+
+```bash
+az resource update -g rg-traineros --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies \
+  --name scm --parent sites/func-traineros --set properties.allow=true
+```
 
 #### Re-examined in #128, and kept — with an expiry date
 
@@ -295,37 +306,34 @@ default can close it, and when it does the pipeline fails with a 401 that reads 
 secret rather than like a withdrawn mechanism. The publish profile is therefore a dated
 decision, not a permanent one.
 
-The migration, when that day comes or when a real auth failure arrives, whichever is first:
+#### Why there is no service principal
 
-```bash
-# Federated credential — no client secret exists to leak or rotate. The subject must match the
-# workflow's trigger exactly; a push-to-main pipeline is the ref form, not the environment form.
-az ad app create --display-name gh-traineros-deploy
-az ad app federated-credential create --id <appId> --parameters '{
-  "name": "gh-main",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:mash0040/traineros:ref:refs/heads/main",
-  "audiences": ["api://AzureADTokenExchange"]
-}'
-az ad sp create --id <appId>
+Not a deferral. **The tenant refuses to create one.** `az ad app create` fails with
+*Insufficient privileges to complete the operation*, this is an Azure for Students subscription
+on a personal account, and there is no tenant admin to ask. App registration is an Entra
+directory permission, not a subscription one, so owning the subscription does not help and no
+`az role assignment` can grant it.
 
-# Website Contributor on the one site, not Contributor on the subscription: this identity
-# deploys an app, and that is the whole list of things it should be able to do.
-az role assignment create --assignee <appId> --role "Website Contributor" \
-  --scope /subscriptions/<subId>/resourceGroups/rg-traineros/providers/Microsoft.Web/sites/app-traineros
-```
+That closes the OIDC path completely, for both workflows, until the account changes — a
+different tenant, a work or school directory, or an admin who can flip *Users can register
+applications*. It is worth re-testing whenever any of those changes, because everything else
+about the migration is still true: federated credentials remove a stored secret, and the
+publish-profile mechanism is on a deprecation clock this project does not control.
 
-Then in `deploy-app.yml`: give the **deploy job** `permissions: { contents: read, id-token: write }`
-(job-level, so the token stays out of build and migrate), add `azure/login@v2` with
-`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`, and drop the `publish-profile`
-input — `azure/webapps-deploy` uses the logged-in session when no profile is supplied. Delete
-the `AZURE_WEBAPP_PUBLISH_PROFILE` secret and set `properties.allow=false` on the basic-auth
-policy, or the deprecated door is still open behind the new one.
+**What the constraint actually costs is `az`, not deployment.** The Azure CLI can only
+authenticate as a principal, so no `az` command can run in either pipeline. Anything that
+reaches for ARM — `az functionapp deployment source config-zip`, `az functionapp restart`,
+`az functionapp function list` — is unavailable. Everything those commands do over the SCM
+endpoint is still reachable, because the publish profile *is* an SCM credential. That
+distinction is what makes the Functions pipeline possible (§Functions pipeline shape); it was
+worth establishing rather than assuming, because "needs `az`" and "needs ARM" are not the same
+requirement and only the second one is real.
 
-**The one thing to check before starting:** an Azure for Students tenant can forbid app
-registration outright (*Users can register applications* = No). If `az ad app create` is
-refused, this path needs a tenant admin and there is no workaround inside the pipeline — which
-is the other reason not to burn the working credential before the replacement is proven.
+The residual risk to keep in view: both workflows now depend on SCM basic auth, and the day
+Azure withdraws it — or a policy closes the override — **both** pipelines fail at once with a
+401, and neither has a fallback while the tenant blocks registration. That is the single point
+of failure this environment has, and it is written down because there is nothing to do about it
+today.
 
 ### Pipeline shape
 
@@ -402,6 +410,85 @@ If #58 ever does need to apply migrations, the two workflows must move to a shar
 group and accept the cancelled-pending-run trade-off — that is the point at which it becomes
 the lesser problem.
 
+### Functions pipeline shape (#58)
+
+`.github/workflows/deploy-functions.yml`, on push to `main`. Two jobs — build then deploy — and
+**no migrate job at all**, which is the rule above expressed as an absence. Its `concurrency`
+group is `deploy-functions`, deliberately not shared with `deploy-app`.
+
+Both workflows fire on the same push and neither waits for the other. That is the point of the
+split: a CSS change has no business restarting the scheduler, and a change to the 15-minute
+timer has no business waiting on the client test suite.
+
+**Build** runs the whole `TrainerOS.Tests` suite rather than a Functions-only filter. The
+project references Api, Domain and Functions together, and the scheduler's behaviour is asserted
+through the same Domain code the endpoints use; splitting it would let a Domain change deploy
+the scheduler while the tests covering it ran in the other pipeline. Then `dotnet publish`
+(portable, no `--runtime`: `worker.config.json` declares `defaultExecutablePath: dotnet`, so the
+Linux host runs the same framework-dependent payload a Windows box produces), then `zip` and the
+package verification below.
+
+**The package is verified before it is uploaded**, on the same principle as the App Service
+pipeline — assert the properties, do not inherit them:
+
+| Check | The failure it catches |
+|---|---|
+| No backslashes in entry names | The `Compress-Archive` bug in §Deploying, if this ever runs anywhere but Linux |
+| `host.json`, `functions.metadata`, `worker.config.json`, `extensions.json`, `TrainerOS.Functions.dll` at the **package root** | A zip rooted one directory too deep, which unpacks into an app that starts and indexes nothing |
+| Every `hintPath` in `extensions.json` resolves inside the package | A lost `.azurefunctions/` directory — a host that starts cleanly, binds nothing to the queue, and sends no reminders. Silence, not a crash |
+| `functions.metadata` lists all three of `ReminderScheduler`, `ReminderWorker`, `ReminderPoisonHandler` | A `[Function]` attribute lost to a refactor. Asserted here because post-deploy the same question has two answers (below) and here it has one |
+
+**Deploy uses `Azure/functions-action@v1` with the publish profile, and that is the whole reason
+this pipeline exists at all.** The obvious reading of §Deploying is that the working path needs
+`az functionapp deployment source config-zip`, and `az` needs a service principal the tenant
+will not create (§Why there is no service principal) — which would have made #58 impossible.
+That reading is wrong, and the action's source is where it comes apart:
+
+- Given a `publish-profile`, the action takes its **SCM** code path and *makes no ARM call at
+  all* — it builds a Kudu client straight from the profile and reads app settings through
+  `/api/settings`. Its own log line for this is "GitHub Action will not perform resource
+  validation."
+- On that path it posts to `https://<scm>/api/zipdeploy` unless `sku` is `flexconsumption`.
+  That is **the same endpoint `config-zip` posts to**. The Oryx failure in §Deploying belongs to
+  OneDeploy — `/api/publish`, which is what `az functionapp deploy --type zip` uses — and this
+  path never touches it.
+
+So the verified mechanism and the available credential are compatible after all; what the
+tenant blocks is `az`, not zipdeploy. The workflow still checks `WEBSITE_RUN_FROM_PACKAGE` is
+`1` before deploying — an app setting a human can clear from the portal without ever seeing the
+workflow — reading it through Kudu's `/api/settings` rather than ARM.
+
+**One non-obvious input:** `scm-do-build-during-deployment` and `enable-oryx-build` are passed as
+**empty strings, not `false`**. Their action defaults are the *string* `'false'`, which is a
+value rather than an absence: on the SCM path the action writes both settings into the live app
+through Kudu, polls up to 100 s each for propagation, and then deletes them afterwards if they
+had not been set before. The empty string is the documented bypass. Neither setting affects
+zipdeploy in any case — they were tried against OneDeploy and did not stop Oryx.
+
+**The smoke check reads the host's own index, which is a better signal than the ARM list would
+have been.** None of the three functions is HTTP-triggered, so there is nothing to `curl` the way
+`deploy-app.yml` probes `/api/health`. Instead the workflow reads the master key from Kudu
+(`/api/functions/admin/masterkey`, available to the same basic-auth credential that just
+deployed) and polls the host's admin API at `/admin/functions` until all three names appear.
+
+That sidesteps the "empty list is not a failed deploy" gotcha rather than working around it: the
+list that lags is `az functionapp function list`, which reads the ARM cache: `/admin/functions`
+is answered by the running host, so a name there means *that host* has indexed it. No restart is
+needed, which is fortunate, because without `az` there is no way to force one.
+
+What the check is really for is **startup**, not delivery. `functions-action` already fails the
+job if Kudu's deployment fails — it polls the deployment to completion and throws — so the
+package landing is not in question. Whether the host comes back up is: #16's startup guard
+throws when Resend configuration is missing, and Core Tools forces `Development` locally, so
+that guard first executes in Azure (§Application). A host that cannot start deploys perfectly
+and sends nothing.
+
+**Its honest limit:** it does not prove the running host swapped to the *new* package. The three
+function names are identical before and after, so a host still serving the previous package
+answers the probe the same way. Kudu's deployment record covers that half; the probe covers
+liveness. Closing the gap would need a build marker in the package and a way to read it back
+from the mount, which is not worth the machinery at one environment.
+
 ## App Service (API)
 - ConnectionStrings:Postgres
 - Resend:ApiKey
@@ -461,6 +548,15 @@ see §Pipeline shape → Packaging.
   on an already-published .NET package, with an empty build log to explain it. Setting
   `SCM_DO_BUILD_DURING_DEPLOYMENT=false` and `ENABLE_ORYX_BUILD=false` did **not** stop it. The
   working path is `WEBSITE_RUN_FROM_PACKAGE=1` plus `az functionapp deployment source config-zip`.
+
+  **The distinction is the endpoint, not the tool** — established in #58 and worth stating
+  because it is what makes the pipeline possible. `az functionapp deploy --type zip` posts to
+  OneDeploy at `/api/publish`, which is where the forced Oryx build lives. `config-zip` posts to
+  the older `/api/zipdeploy`, which with run-from-package mounts the package as-is and builds
+  nothing. Anything that posts to `/api/zipdeploy` works, including
+  `Azure/functions-action@v1` authenticated with a publish profile — so this finding is about
+  two Kudu endpoints, and reads as being about two `az` commands only because that is how it was
+  first met.
 - **After a Functions deploy, the functions do not appear in `az functionapp function list`
   until the app is restarted.** An empty list is not necessarily a failed deploy. Restart, then
   list again before believing it.
