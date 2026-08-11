@@ -334,6 +334,7 @@ Azure withdraws it — or a policy closes the override — **both** pipelines fa
 401, and neither has a fallback while the tenant blocks registration. That is the single point
 of failure this environment has, and it is written down because there is nothing to do about it
 today.
+Managed identity (#59) was evaluated and declined for the same reason plus a value argument. The tenant block on app registration makes the identity path uncertain — role assignment is a different permission than app registration and may or may not be permitted — but the benefit is thin regardless: the credentials managed identity would replace already live in Azure app settings rather than anywhere they could leak from. The project's real credential risk is that both pipelines depend on SCM basic auth with no fallback, which managed identity does not address. Worth revisiting if the subscription moves to a tenant where app registration is permitted.
 
 ### Pipeline shape
 
