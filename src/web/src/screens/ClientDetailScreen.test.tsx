@@ -151,11 +151,14 @@ describe('ClientDetailScreen', () => {
     expect(screen.getByText('Shoulder tweaked on OHP.')).toBeInTheDocument()
   })
 
-  it('links to the program builder as the edit entry point', async () => {
+  // The program's title is the way into the builder, not a separate "Edit program" button
+  // beside it (DESIGN.md §Controls: one way in per row). Pinned by accessible name, so this
+  // also catches the title regressing back to a non-interactive <span>.
+  it('links to the program builder from the program title', async () => {
     mockApi({ clients: [ada], programs: [adasProgram], schedule })
     renderAt('client-ada')
 
-    expect(await screen.findByRole('link', { name: 'Edit program' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Winter Block' })).toHaveAttribute(
       'href',
       '/programs/program-1',
     )

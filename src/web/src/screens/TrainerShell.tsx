@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 
-import { trainerLink } from './trainerControls'
+import { trainerNavLink } from './trainerControls'
 
 // The layout the four trainer screens sit in (#50 lands it; #51–#53 fill it).
 //
@@ -58,7 +58,7 @@ export function TrainerShell({ children }: { children: React.ReactNode }) {
                   <li key={item.to}>
                     <Link
                       aria-current={pathname === item.to ? 'page' : undefined}
-                      className={`${trainerLink} ${
+                      className={`${trainerNavLink} ${
                         pathname === item.to
                           ? 'text-sm font-semibold text-ink-bold'
                           : 'text-sm text-muted'

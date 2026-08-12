@@ -5,13 +5,7 @@ import { createExercise, fetchExercises, updateExercise } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import {
-  trainerDanger,
-  trainerField,
-  trainerPrimary,
-  trainerQuiet,
-  trainerSecondary,
-} from './trainerControls'
+import { trainerDanger, trainerField, trainerPrimary, trainerSecondary } from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -104,8 +98,9 @@ export function ExercisesScreen() {
             </h2>
             <p className="text-base text-muted">Check your connection and try again.</p>
           </div>
+          {/* The accent: the only action on a screen that otherwise failed to load. */}
           <button
-            className={trainerQuiet}
+            className={trainerPrimary}
             onClick={() => setAttempt((previous) => previous + 1)}
             type="button"
           >
@@ -208,9 +203,17 @@ function Exercise({
             {editing ? 'Close' : `Edit ${name}`}
           </button>
 
+          {/* The same split as the roster's Deactivate/Reactivate, and the same defect before
+              #132: retiring and restoring are opposite acts that rendered as one object. Retire
+              takes --danger; Restore stays a bordered neutral, because it reverses a removal and
+              a green for "this one is safe" is the success hue DESIGN.md refuses by name.
+
+              Both sit beside Edit, which is also bordered. That is the point of putting the red
+              on exactly one of the three: in a library of forty rows the eye needs to find the
+              destructive control without reading three labels per row. */}
           {active ? (
             <button
-              className={trainerSecondary}
+              className={trainerDanger}
               disabled={saving}
               onClick={() => setConfirming(true)}
               type="button"
@@ -255,8 +258,9 @@ function Exercise({
             >
               {saving ? 'Retiring' : 'Retire'}
             </button>
+            {/* Bordered, not amber. Dismissing is not committing. */}
             <button
-              className={trainerPrimary}
+              className={trainerSecondary}
               onClick={() => {
                 setConfirming(false)
                 setError(null)
@@ -310,9 +314,13 @@ function Details({ exercise }: { exercise: ExerciseResponse }) {
 
           rel is not optional on a target=_blank link to a third-party origin. Same treatment as
           TodayScreen's, minus the 44px tap target — DESIGN.md relaxes that here. */}
+      {/* Not composed from trainerLink, because the underline has to sit on the label alone: a
+          descendant cannot switch off an ancestor's text-decoration, so underlining the anchor
+          would draw a line under the ↗ glyph too. Same three properties, split across two
+          elements, hover included — #132 found this one missing its hover entirely. */}
       {videoUrl !== '' && (
         <a
-          className="inline-flex items-center gap-1 text-sm font-semibold text-ink"
+          className="inline-flex cursor-pointer items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold"
           href={videoUrl}
           rel="noopener noreferrer"
           target="_blank"
@@ -459,10 +467,16 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
   // One toggle outside the form, one submit inside it — #114's ruling on the add-client form,
   // for the same reason: closing is dismissal, not completion, and a footer button beside "Add"
   // reads as a second way to finish.
+  // Amber while closed, bordered once open, matching the roster's add toggle for the same
+  // reason: this is the library's reason to exist, and scoping the accent to the form's submit
+  // left the screen with none of it until the form was open. DESIGN.md §Controls.
+  //
+  // Note this is the one toggle on the screen that gets it. The per-row "Edit {name}" toggles
+  // stay bordered: there is one of these and forty of those.
   const toggle = (
     <button
       aria-expanded={open}
-      className={`mt-8 ${trainerSecondary}`}
+      className={`mt-8 ${open ? trainerSecondary : trainerPrimary}`}
       onClick={() => {
         setOpen((previous) => !previous)
         setError(null)

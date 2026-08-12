@@ -106,6 +106,20 @@ describe('ClientsScreen', () => {
     expect(screen.getByText('Grace')).toBeInTheDocument()
   })
 
+  // The name is the way into the client, and the chevron beside it is decoration for the eye
+  // only. Matching on the accessible name pins that: drop the aria-hidden on RecordLink's glyph
+  // and every client in the roster is announced as "Ada ›", which is what a trainer using a
+  // screen reader would hear on every row.
+  it('opens the client from the name, and the chevron stays out of the accessible name', async () => {
+    mockApi({ clients: [ada, grace] })
+    renderScreen()
+
+    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute(
+      'href',
+      '/clients/client-ada',
+    )
+  })
+
   it('shows how long ago each client last trained, which is the whole point of the column', async () => {
     // ui-ux.md calls this the "who's slacking" signal. A bare date makes the trainer do the
     // arithmetic; the age leads and the date backs it up.

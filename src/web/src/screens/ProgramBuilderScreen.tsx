@@ -23,7 +23,14 @@ import {
 import { messageFor } from '../lib/apiMessages'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import { trainerDanger, trainerField, trainerPrimary, trainerQuiet, trainerSecondary } from './trainerControls'
+import {
+  trainerDanger,
+  trainerField,
+  trainerLink,
+  trainerPrimary,
+  trainerSecondary,
+  trainerSelected,
+} from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
 
@@ -129,7 +136,7 @@ export function ProgramBuilderScreen() {
         <p className="mt-2 text-base text-muted">
           It may belong to another trainer, or the link may be wrong.
         </p>
-        <Link className={`mt-6 inline-block ${trainerQuiet}`} to="/clients">
+        <Link className={`mt-6 inline-block text-base text-ink ${trainerLink}`} to="/clients">
           Back to clients
         </Link>
       </TrainerShell>
@@ -141,8 +148,9 @@ export function ProgramBuilderScreen() {
       <TrainerShell>
         <h1 className="text-xl font-semibold text-ink-bold">We couldn&rsquo;t load this program</h1>
         <p className="mt-2 text-base text-muted">Check your connection and try again.</p>
+        {/* The accent: the only action on a screen that otherwise failed to load. */}
         <button
-          className={`mt-6 ${trainerQuiet}`}
+          className={`mt-6 ${trainerPrimary}`}
           onClick={() => setAttempt((previous) => previous + 1)}
           type="button"
         >
@@ -157,7 +165,7 @@ export function ProgramBuilderScreen() {
   return (
     <TrainerShell>
       {program.clientId != null && (
-        <Link className={`text-sm text-muted ${trainerQuiet}`} to={`/clients/${program.clientId}`}>
+        <Link className={`text-sm text-muted ${trainerLink}`} to={`/clients/${program.clientId}`}>
           Back to client
         </Link>
       )}
@@ -277,12 +285,24 @@ function ProgramStatus({
   return (
     <div className="mt-4">
       <div className="flex items-center gap-2" role="group" aria-label="Program status">
+        {/* Inverted for the current status, bordered for the two you could move to.
+            #132: this group used to paint the *current* status in solid amber, which is the one
+            button in the row that does nothing when pressed. DESIGN.md gives amber exactly one
+            job — "amber means the thing to tap" — and spending it on the already-selected state
+            told a trainer to press the status they were already in, while the two real
+            transitions sat next to it looking like nothing.
+
+            Taking the amber off was step one; the first replacement was --surface-sunk, which
+            the browser pass caught as its own regression. At 97% against a 99% surface that is
+            about 1.03:1, so "is this program active or archived" was answered by a difference
+            you cannot see across a desk. This is the whole reason a trainer opens this screen,
+            and it was the faintest thing on it. Inverted neutral now, per DESIGN.md §Controls. */}
         {STATUSES.map((candidate) => {
           const current = candidate === status
           return (
             <button
               aria-pressed={current}
-              className={current ? trainerPrimary : trainerSecondary}
+              className={current ? trainerSelected : trainerSecondary}
               disabled={saving !== null}
               key={candidate}
               onClick={() => void choose(candidate)}
@@ -438,7 +458,10 @@ function Day({
             value={title}
           />
         </div>
-        <button className={trainerSecondary} disabled={saving} type="submit">
+        {/* The submit of this form, so it takes the accent on the same rule the prescription
+            rows and the two add-forms already follow: amber commits the form it sits in. It was
+            the odd one out, rendering identically to the reorder arrows a few pixels below. */}
+        <button className={trainerPrimary} disabled={saving} type="submit">
           {saving ? 'Saving' : 'Save name'}
         </button>
       </form>
@@ -521,7 +544,9 @@ function Day({
               <button className={trainerDanger} disabled={deleting} onClick={() => void remove()} type="button">
                 {deleting ? 'Deleting' : 'Delete day'}
               </button>
-              <button className={trainerPrimary} onClick={() => setConfirming(false)} type="button">
+              {/* Bordered, matching the prescription row's "Keep it" below. These two prompts
+                  used to disagree with each other: one dismissal was amber, the other was not. */}
+              <button className={trainerSecondary} onClick={() => setConfirming(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -665,7 +690,11 @@ function Prescription({
 
             The labels name the exercise because a day of five rows otherwise offers ten
             controls all called "Move up", and a screen reader moving through them has no way
-            to tell which row it is on. */}
+            to tell which row it is on.
+
+            Bordered and quiet on purpose (#132): reordering rearranges what is already there
+            and writes nothing new, and a day of five rows carries ten of these. Ten accented
+            arrows would be most of the colour on the screen. */}
         <div className="flex shrink-0 gap-1">
           <button
             aria-label={`Move ${name} up`}
@@ -794,7 +823,10 @@ function Prescription({
               </button>
             </>
           ) : (
-            <button className={trainerSecondary} onClick={() => setConfirming(true)} type="button">
+            /* --danger, like the day delete above it. This one was bordered neutral, so the
+               control that removes an exercise from a client's program looked exactly like the
+               Save beside it minus the amber. */
+            <button className={trainerDanger} onClick={() => setConfirming(true)} type="button">
               Delete
             </button>
           )}
@@ -917,7 +949,11 @@ function AddPrescription({
       <div className="mt-6 border-t border-edge pt-4">
         <p className="text-sm text-muted">
           Your exercise library is empty, so there is nothing to add yet.{' '}
-          <Link className={trainerQuiet} to="/exercises">
+          {/* A link inside a sentence, and the one place on these four screens where that is
+              genuinely what it is: it goes somewhere, mid-prose, and a button in the middle of
+              a paragraph would be the wrong object. Inherits the paragraph's size and --muted,
+              which is why trainerLink sets neither. */}
+          <Link className={trainerLink} to="/exercises">
             Add an exercise
           </Link>{' '}
           and then prescribe it here.
