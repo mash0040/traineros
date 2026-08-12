@@ -150,10 +150,13 @@ export function ClientDetailScreen() {
         Back to clients
       </Link>
 
-      <div className="mt-4 flex items-baseline justify-between gap-6">
-        <div>
-          <h1 className="text-xl font-semibold text-ink-bold">{client.displayName}</h1>
-          <p className="mt-1 text-sm text-muted">{client.email}</p>
+      {/* flex-wrap and min-w-0: a display name and an email address are both trainer-supplied,
+          both unbounded, and at 390px there is no width at which "name on the left, Deactivated
+          on the right" survives a long one of either. */}
+      <div className="mt-4 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold wrap-break-word text-ink-bold">{client.displayName}</h1>
+          <p className="mt-1 wrap-break-word text-sm text-muted">{client.email}</p>
         </div>
         {!active && <p className="text-sm font-semibold text-danger">Deactivated</p>}
       </div>
@@ -226,7 +229,10 @@ function Programs({ clientId, programs }: { clientId: string; programs: ProgramR
           this screen belongs to the schedule form's submit, which is the only control here that
           commits. Sending a trainer to another screen under the colour that means "this saves"
           is the sort of small lie that costs the palette its meaning. */}
-      <Link className={`mt-4 inline-block ${trainerSecondary}`} to={`/programs/new?client=${clientId}`}>
+      {/* inline-block dropped: trainerSecondary carries inline-flex of its own now (#135, so the
+          label centres in a 44px box), and two display utilities in one string is a coin toss
+          decided by stylesheet emission order rather than by anything here. */}
+      <Link className={`mt-4 ${trainerSecondary}`} to={`/programs/new?client=${clientId}`}>
         {ordered.length === 0 ? 'Build a program' : 'Build another program'}
       </Link>
     </section>
@@ -382,12 +388,23 @@ function ReminderSchedule({
           {/* A fieldset because seven checkboxes are one question. Without the legend each box
               announces as a bare weekday with nothing saying what checking it means. */}
           <legend className="text-sm font-semibold text-ink">Days</legend>
-          <div className="mt-1 flex flex-wrap gap-4">
+          {/* #135: the tap target is the <label>, not the box. A native checkbox renders at
+              about 13px, and seven of them is the densest row of controls in the trainer area —
+              picking a client's training days on a phone was a game of darts. Clicking a label
+              toggles its control, so giving the label the 44px height and the box a size the
+              thumb can aim at fixes it without a custom control or a third-party checkbox.
+
+              gap-y-2 because at 390px seven of these wrap to two lines, and two 44px rows with
+              no gap between them read as one block of text. */}
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
             {DAY_ABBREVIATIONS.map((label, day) => (
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink" key={label}>
+              <label
+                className="flex min-h-[var(--tap-min)] cursor-pointer items-center gap-2 text-sm text-ink"
+                key={label}
+              >
                 <input
                   checked={days.includes(day)}
-                  className="cursor-pointer"
+                  className="size-5 cursor-pointer"
                   name="daysOfWeek"
                   onChange={() => toggleDay(day)}
                   type="checkbox"
@@ -399,10 +416,10 @@ function ReminderSchedule({
           </div>
         </fieldset>
 
-        <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-ink">
+        <label className="flex min-h-[var(--tap-min)] cursor-pointer items-center gap-2 text-sm font-semibold text-ink">
           <input
             checked={enabled}
-            className="cursor-pointer"
+            className="size-5 cursor-pointer"
             name="enabled"
             onChange={(event) => {
               setEnabled(event.target.checked)

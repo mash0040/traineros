@@ -284,7 +284,9 @@ function ProgramStatus({
 
   return (
     <div className="mt-4">
-      <div className="flex items-center gap-2" role="group" aria-label="Program status">
+      {/* flex-wrap: three 44px buttons at ~80px each plus gaps is most of a 390px viewport, and
+          "Archived" saving reads "Saving", which is wider. It wraps rather than overflows. */}
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Program status">
         {/* Inverted for the current status, bordered for the two you could move to.
             #132: this group used to paint the *current* status in solid amber, which is the one
             button in the row that does nothing when pressed. DESIGN.md gives amber exactly one
@@ -438,7 +440,10 @@ function Day({
   }
 
   return (
-    <li className="rounded-md border border-edge p-6">
+    // p-4 below sm:. This card nests another (the prescription rows), so the two paddings
+    // compound: at p-6 outside and p-4 inside, a 390px viewport was down to ~246px of usable
+    // width by the time it reached a set/reps field.
+    <li className="rounded-md border border-edge p-4 sm:p-6">
       <form className="flex flex-wrap items-end gap-3" noValidate onSubmit={rename}>
         <div className="grid gap-2">
           <label className="text-sm font-semibold text-ink" htmlFor={`day-title-${day.id}`}>
@@ -682,7 +687,11 @@ function Prescription({
   return (
     <li className="rounded-sm border border-edge bg-surface-sunk p-4">
       <div className="flex items-baseline justify-between gap-4">
-        <h3 className="text-base font-semibold text-ink-bold">{name}</h3>
+        {/* min-w-0 so the name yields to the arrows rather than pushing them off the card: a
+            flex item's default minimum is min-content, which for an unbroken exercise name is
+            the whole word. The arrows keep shrink-0 — they are 44px targets and there is
+            nothing in them to compress — which is exactly why this side has to give. */}
+        <h3 className="min-w-0 text-base font-semibold wrap-break-word text-ink-bold">{name}</h3>
 
         {/* Buttons, not drag. ui-ux.md calls buttons acceptable in v1 and drag polish, and the
             trade is real: a keyboard user gets the same two controls a mouse user does, and

@@ -141,6 +141,33 @@ describe('ExercisesScreen', () => {
     expect(within(active).getByRole('button', { name: 'Retire Back Squat' })).toBeInTheDocument()
   })
 
+  // #135. "Retire Jumping Jacks" and "Edit Jumping Jacks" side by side in a shrink-0 group was
+  // the overflow that opened the issue: laid out at max-content inside a card with ~294px to
+  // give at 390px, the group hung over the right edge. The naming form moved to aria-label.
+  //
+  // The overflow itself needs a browser to see. This is the invariant underneath it: the row
+  // controls read as one word and are announced with the exercise they act on. The test above
+  // already matches on the accessible name, so this asserts the half that could silently rot —
+  // someone "simplifying" the aria-label away would still pass every other test in this file.
+  it('names the exercise in the row controls’ accessible names, not in their visible labels', async () => {
+    mockApi({ library: [squat, sissy] })
+    renderScreen()
+    await screen.findByRole('heading', { name: /^Back Squat/ })
+
+    const active = rowByHeading('Back Squat')
+    expect(within(active).getByRole('button', { name: 'Retire Back Squat' })).toHaveTextContent(
+      /^Retire$/,
+    )
+    expect(within(active).getByRole('button', { name: 'Edit Back Squat' })).toHaveTextContent(
+      /^Edit$/,
+    )
+
+    const retired = rowByHeading('Sissy Squat')
+    expect(within(retired).getByRole('button', { name: 'Restore Sissy Squat' })).toHaveTextContent(
+      /^Restore$/,
+    )
+  })
+
   it('confirms a retire by saying what survives it', async () => {
     // The word "retire" does not tell a trainer what happens to work already done, which is the
     // only question worth asking before pressing it.

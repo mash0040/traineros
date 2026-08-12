@@ -2,10 +2,18 @@
 // one place so the four screens inherit it instead of each re-deriving what a button looks like.
 //
 // ── Why the trainer screens need this and the client screens do not ────────────────────────
-// Fingers do not hover. Every client surface is a phone surface, so a control proves itself by
-// being 44px and obviously tappable, and there is no pointer to give feedback to. The trainer
-// works on a desktop, where the pointer is the whole interaction model and a control with no
-// hover response reads as decoration — which is what #50 shipped and the desktop pass caught.
+// Not because the trainer is on a desktop. #135 established they are on the gym floor with a
+// phone, the same as their clients, and revoked the `--tap-min` carve-out that premise had been
+// holding open — which is why every string below now sizes to var(--tap-min).
+//
+// What survives that correction is the reason this file exists. The client screens are five
+// single-purpose surfaces where the one control is obvious from the fact that it is the only
+// one; these four stack a roster, a library, a schedule form and a program builder, so a
+// trainer needs to tell a destructive control from a navigational one from a commit *within* a
+// screen, which is what the vocabulary encodes. Hover is a real part of that on the wide case
+// and dead weight on the narrow one — Tailwind gates `hover:` behind `@media (hover: hover)`,
+// so a touch device simply never sees it, and none of these controls rely on it to be legible
+// at rest. That was #114's actual finding, and it holds under mobile-first unchanged.
 //
 // ── The rule #132 applies, in one line ─────────────────────────────────────────────────────
 // Colour states intent, not importance. --danger means "this takes something away", --accent
@@ -42,7 +50,19 @@
 // `enabled:hover:` rather than bare `hover:`: a disabled button must not light up under the
 // pointer. It is a promise the control cannot keep.
 
-const BUTTON = 'cursor-pointer rounded-sm px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed'
+// `min-h-[var(--tap-min)]` and its `min-w` twin are where #135 lands, and they land here rather
+// than on any screen because one string sizes every control in the trainer area. The width is
+// not belt-and-braces: the program builder's reorder arrows are a single glyph behind `px-3`,
+// which is a 30px-wide target that clears the height rule and misses the point of it. A control
+// is 44px on the axis a thumb actually has to hit, which for an icon button is both of them.
+//
+// `inline-flex` and the two centring utilities come with them. `py-2` alone stopped setting the
+// height the moment a min-height above it did, so without a flex box the label sits at the top
+// of a 44px button. Call sites that laid these controls out with `inline-block` were updated
+// rather than left to fight it (ClientDetailScreen's "Build a program" is the one).
+const BUTTON =
+  'inline-flex min-h-[var(--tap-min)] min-w-[var(--tap-min)] cursor-pointer items-center ' +
+  'justify-center rounded-sm px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed'
 
 /**
  * Default action. Bordered, quiet until pointed at.
@@ -217,11 +237,29 @@ export const trainerRecordChevron = 'text-muted'
  * A nav bar is a fixed set of destinations in a known place, and `aria-current` plus the weight
  * and colour swap in TrainerShell already say which one you are on. Underlining both entries
  * would decorate a landmark rather than mark a control inside prose.
+ *
+ * Sized like everything else (#135). Two 20px-tall text links 24px apart is a fine pointer
+ * target and a coin toss for a thumb, and this is the control a trainer hits most often.
  */
-export const trainerNavLink = 'cursor-pointer hover:text-ink-bold'
+export const trainerNavLink =
+  'inline-flex min-h-[var(--tap-min)] cursor-pointer items-center hover:text-ink-bold'
 
-/** Inputs and selects. Hover included because a desktop user hunts for the edit surface too. */
+/**
+ * Inputs, selects and textareas. Hover included because a pointer hunts for the edit surface too.
+ *
+ * `max-w-full` is the second of #135's two overflow fixes, and it exists for `<select>`. A select
+ * with no width sizes itself to its widest *option*, so the exercise picker is as wide as the
+ * longest name in the library and the add-client picker is as wide as the longest IANA timezone
+ * string — both comfortably past 390px, and neither visible to anyone testing with short seed
+ * data. It is inert on the inputs that carry an explicit `w-20`/`w-32`, which is why it can sit
+ * on the shared string instead of being remembered at two call sites.
+ *
+ * The height matches BUTTON's for the same reason BUTTON has one: a form is a column of
+ * alternating labels and controls, and a 40px input beside a 44px button is both under the
+ * minimum and visibly ragged.
+ */
 export const trainerField =
-  'rounded-sm border border-edge bg-surface px-3 py-2 text-base text-ink ' +
+  'min-h-[var(--tap-min)] max-w-full rounded-sm border border-edge bg-surface px-3 py-2 ' +
+  'text-base text-ink ' +
   'hover:border-edge-strong ' +
   'aria-[invalid=true]:border-danger'

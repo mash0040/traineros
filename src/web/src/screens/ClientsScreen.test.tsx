@@ -93,8 +93,16 @@ describe('ClientsScreen', () => {
     )
   }
 
+  // Was getByRole('row'). #135 took the roster off <table> — a table cannot reflow at 390px —
+  // so a row is now an <li> in the roster list. Scoped from the name link rather than by index,
+  // which keeps the helper indifferent to how the row is laid out: the columns exist only from
+  // sm: up, and nothing here should have an opinion about that.
   function rowFor(name: string) {
-    return screen.getByRole('row', { name: new RegExp(name) })
+    const row = screen.getByRole('link', { name }).closest('li')
+    if (row === null) {
+      throw new Error(`No roster row for ${name}`)
+    }
+    return row
   }
 
   it('lists the roster with each client’s name and email', async () => {
@@ -118,6 +126,37 @@ describe('ClientsScreen', () => {
       'href',
       '/clients/client-ada',
     )
+  })
+
+  // #135. The roster was a <table>, which has a fixed layout algorithm and so cannot reflow:
+  // four columns of real content on a 390px viewport either overflow or crush, at every width.
+  // The columns now come from a grid that exists only from sm: up.
+  //
+  // Whether the columns *look* right is a layout question and the human's to judge — jsdom
+  // loads no stylesheet. What is assertable without one is the structure the fix depends on,
+  // which is also the thing a later refactor would quietly undo.
+  it('renders the roster as a list, not a table, so it can reflow on a phone', async () => {
+    mockApi({ clients: [ada, grace] })
+    renderScreen()
+    await screen.findByText('Ada')
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+
+    const roster = screen.getByRole('list', { name: /Your clients/ })
+    expect(within(roster).getAllByRole('listitem')).toHaveLength(2)
+  })
+
+  // The other half of #135: the client's name left the visible label and went to aria-label.
+  // Both halves matter and they pull in opposite directions, so both are asserted here — the
+  // eye gets a button that fits a 390px card, and a screen reader going down the roster still
+  // hears which client each control belongs to, because a linear reading has no other way to
+  // know. Shortening the label without the aria-label would be a regression dressed as a fix.
+  it('keeps the client’s name in the accessible name of the deactivate control, not in its visible text', async () => {
+    mockApi({ clients: [ada] })
+    renderScreen()
+
+    const deactivate = await screen.findByRole('button', { name: 'Deactivate Ada' })
+    expect(deactivate).toHaveTextContent(/^Deactivate$/)
   })
 
   it('shows how long ago each client last trained, which is the whole point of the column', async () => {
