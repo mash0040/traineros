@@ -5,7 +5,7 @@ import { ApiError, createProgram } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import { trainerField, trainerPrimary, trainerQuiet } from './trainerControls'
+import { trainerField, trainerLink, trainerPrimary } from './trainerControls'
 
 // The other half of #51's handoff. That screen links here as /programs/new?client=<id> from a
 // client who has no program yet, and this is the smallest thing that turns that link into a
@@ -63,7 +63,7 @@ export function NewProgramScreen() {
         <p className="mt-2 text-base text-muted">
           A program belongs to one client. Open theirs and start it from there.
         </p>
-        <Link className={`mt-6 inline-block ${trainerQuiet}`} to="/clients">
+        <Link className={`mt-6 inline-block text-base text-ink ${trainerLink}`} to="/clients">
           Back to clients
         </Link>
       </TrainerShell>
@@ -72,7 +72,7 @@ export function NewProgramScreen() {
 
   return (
     <TrainerShell>
-      <Link className={`text-sm text-muted ${trainerQuiet}`} to={`/clients/${clientId}`}>
+      <Link className={`text-sm text-muted ${trainerLink}`} to={`/clients/${clientId}`}>
         Back to client
       </Link>
 

@@ -13,9 +13,10 @@ import {
 import { messageFor } from '../lib/apiMessages'
 import { formatSessionDate } from '../lib/history'
 import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
+import { RecordLink } from './RecordLink'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import { trainerField, trainerPrimary, trainerQuiet, trainerSecondary } from './trainerControls'
+import { trainerField, trainerLink, trainerPrimary, trainerSecondary } from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
 
@@ -113,7 +114,7 @@ export function ClientDetailScreen() {
         <p className="mt-2 text-base text-muted">
           They may belong to another trainer, or the link may be wrong.
         </p>
-        <Link className={`mt-6 inline-block ${trainerQuiet}`} to="/clients">
+        <Link className={`mt-6 inline-block text-base text-ink ${trainerLink}`} to="/clients">
           Back to clients
         </Link>
       </TrainerShell>
@@ -125,8 +126,9 @@ export function ClientDetailScreen() {
       <TrainerShell>
         <h1 className="text-xl font-semibold text-ink-bold">We couldn&rsquo;t load this client</h1>
         <p className="mt-2 text-base text-muted">Check your connection and try again.</p>
+        {/* The accent: the only action on a screen that otherwise failed to load. */}
         <button
-          className={`mt-6 ${trainerQuiet}`}
+          className={`mt-6 ${trainerPrimary}`}
           onClick={() => setAttempt((previous) => previous + 1)}
           type="button"
         >
@@ -141,7 +143,10 @@ export function ClientDetailScreen() {
 
   return (
     <TrainerShell>
-      <Link className={`text-sm text-muted ${trainerQuiet}`} to="/clients">
+      {/* text-sm text-muted now actually applies. trainerQuiet carried text-base text-ink of its
+          own, so this string set the same two properties twice and the winner was whichever
+          utility Tailwind emitted last. trainerLink sets neither. */}
+      <Link className={`text-sm text-muted ${trainerLink}`} to="/clients">
         Back to clients
       </Link>
 
@@ -193,27 +198,34 @@ function Programs({ clientId, programs }: { clientId: string; programs: ProgramR
       ) : (
         <ul className="mt-4 divide-y divide-edge border-y border-edge">
           {ordered.map((program) => (
-            <li className="flex items-baseline justify-between gap-6 py-3" key={program.id}>
-              <div>
-                <span className="block text-base font-semibold text-ink-bold">{program.title}</span>
-                <span className="block text-sm text-muted">
-                  {program.status}
-                  {program.startsOn != null && program.startsOn !== '' && ` · starts ${formatSessionDate(program.startsOn)}`}
-                </span>
-              </div>
-              {/* The handoff. /programs/:id is the path #52 will own; until it registers that
-                  route the app's catch-all sends this back to the roster, which is the one
-                  thing on this screen that does not work yet. */}
-              <Link className={trainerSecondary} to={`/programs/${program.id}`}>
-                Edit program
-              </Link>
+            <li className="py-3" key={program.id}>
+              {/* The handoff, and the title is what carries it. This row used to render the
+                  title as a dead <span> with an "Edit program" button opposite, which is the
+                  two-controls-one-destination shape the roster rejects a few files over: the
+                  title is what a trainer looks at, so it should be what they can click.
+
+                  DESIGN.md §Controls settles which of the two survives — one way in per row —
+                  and RecordLink is the treatment, the same one the roster's client names now
+                  take, chevron included. Dropping the button also takes a bordered control out
+                  of a section whose remaining one ("Build a program") is the actual next step. */}
+              <RecordLink to={`/programs/${program.id}`}>{program.title}</RecordLink>
+              <span className="block text-sm text-muted">
+                {program.status}
+                {program.startsOn != null && program.startsOn !== '' && ` · starts ${formatSessionDate(program.startsOn)}`}
+              </span>
             </li>
           ))}
         </ul>
       )}
 
       {/* Creating a program is also the builder's, and it takes a client id — which this screen
-          is the only place that has one to hand. */}
+          is the only place that has one to hand.
+
+          Bordered rather than amber even on a client with no program, where it is the most
+          inviting thing in the section. It navigates; it does not write anything. The accent on
+          this screen belongs to the schedule form's submit, which is the only control here that
+          commits. Sending a trainer to another screen under the colour that means "this saves"
+          is the sort of small lie that costs the palette its meaning. */}
       <Link className={`mt-4 inline-block ${trainerSecondary}`} to={`/programs/new?client=${clientId}`}>
         {ordered.length === 0 ? 'Build a program' : 'Build another program'}
       </Link>

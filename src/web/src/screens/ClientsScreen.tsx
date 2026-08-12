@@ -7,16 +7,10 @@ import { messageFor } from '../lib/apiMessages'
 import { looksLikeEmail } from '../lib/email'
 import { formatSessionDate } from '../lib/history'
 import { todayIn } from '../lib/workoutDraft'
+import { RecordLink } from './RecordLink'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import {
-  trainerDanger,
-  trainerField,
-  trainerLink,
-  trainerPrimary,
-  trainerQuiet,
-  trainerSecondary,
-} from './trainerControls'
+import { trainerDanger, trainerField, trainerPrimary, trainerSecondary } from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -158,8 +152,11 @@ export function ClientsScreen() {
             <h2 className="text-lg font-semibold text-ink-bold">We couldn&rsquo;t load your clients</h2>
             <p className="text-base text-muted">Check your connection and try again.</p>
           </div>
+          {/* The accent, because on this view it is the only thing to do. #114 gave every
+              recovery control the link treatment, which put an underline on a <button> and left
+              the one action on a dead screen looking like a footnote. */}
           <button
-            className={trainerQuiet}
+            className={trainerPrimary}
             onClick={() => setAttempt((previous) => previous + 1)}
             type="button"
           >
@@ -275,13 +272,14 @@ function ClientRow({
       <td className="py-3 pr-4">
         {/* The way into the client detail screen (#51). The name is the link because it is what
             the trainer is already looking for when they scan the column; a separate "View"
-            control would be a second thing in the row that goes where the first one points. */}
-        <Link
-          className={`block text-base font-semibold text-ink-bold underline underline-offset-4 ${trainerLink}`}
-          to={`/clients/${client.id}`}
-        >
-          {name}
-        </Link>
+            control would be a second thing in the row that goes where the first one points.
+
+            RecordLink, not trainerLink: this is the identifying field of a table row, and an
+            underline at rest put a rule under every name in the column, which is decoration
+            spread evenly and so not a signal. What replaced it is a trailing chevron rather
+            than nothing, because weight and ink are hierarchy and a name that is merely the
+            boldest thing in its row reads as a heading. DESIGN.md §Controls. */}
+        <RecordLink to={`/clients/${client.id}`}>{name}</RecordLink>
         <span className="block text-sm text-muted">{client.email}</span>
       </td>
 
@@ -313,8 +311,11 @@ function ClientRow({
               >
                 {saving ? 'Deactivating' : 'Deactivate'}
               </button>
+              {/* Bordered, not amber. Dismissing is not committing, and a solid accent on the
+                  button that does nothing is the palette's one promise pointed at the wrong
+                  control. The confirmation prompt above is what makes this the safe exit. */}
               <button
-                className={trainerPrimary}
+                className={trainerSecondary}
                 onClick={() => {
                   setConfirming(false)
                   setError(null)
@@ -326,8 +327,14 @@ function ClientRow({
             </div>
           </div>
         ) : (
+          /* The headline defect in #132: one control, two opposite meanings, one appearance.
+             Deactivating takes a client's access and their reminders away; reactivating gives
+             them back. Which of the two this button is depended entirely on a word, so the two
+             states now take different treatments — --danger arming the confirmation, bordered
+             neutral for the way back. Reactivate deliberately gets no colour of its own: a
+             green here is the success hue DESIGN.md refuses by name. */
           <button
-            className={trainerSecondary}
+            className={active ? trainerDanger : trainerSecondary}
             disabled={saving}
             onClick={() => (active ? setConfirming(true) : void setActive(true))}
             type="button"
@@ -515,10 +522,15 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   // Closing is dismissal, not completion, so it does not belong in the form's footer at all.
   // The disclosure that opened the form closes it, and says which it will do. One completion
   // path in the form, one toggle outside it.
+  // Amber while closed, bordered once open. Adding a client is what this screen is *for*, and
+  // with the accent scoped to the form's submit the roster had no amber on it at all until you
+  // opened this — a screen teaching nothing about the one colour the palette spends. Opening it
+  // hands the accent to the submit below, and the relabel is what keeps that from being two
+  // primaries: "Close" is a dismissal, and dismissals are never amber. (DESIGN.md §Controls.)
   const toggle = (
     <button
       aria-expanded={open}
-      className={`mt-8 ${trainerSecondary}`}
+      className={`mt-8 ${open ? trainerSecondary : trainerPrimary}`}
       onClick={() => {
         setOpen((previous) => !previous)
         setError(null)

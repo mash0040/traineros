@@ -174,6 +174,74 @@ The fallback is not a concession — it is load-bearing. `bad_request` covers ~2
 
 Copy in the map obeys §Absolute bans like any other string: **no em dashes**, including in the reload-prompt pattern above.
 
+## Controls: what takes the accent, what "selected" looks like, what a link to a record is
+
+**Scope: trainer screens**, for the same reason §Messages is. A client screen is one purpose and one obvious control; these four stack a roster, a library, a schedule form and a program builder, and every question below is a question about which of eleven controls on one page the eye should land on first.
+
+### The accent is scoped to the view state, not to the form
+
+**The defect.** §Color says amber "*is* the primary-action signal" and budgets it at ≤10% of a surface's pixels, but never says what "primary" is scoped to. The trainer screens were built to a working rule of *one accent per form, on the control that commits it*, which is correct inside a form and says nothing at all outside one. On the two list screens the only creating form sits behind a disclosure toggle, so the rule left them rendering **zero accent pixels at rest**. A budget of ≤10% was being met with 0%, and a screen where nothing is amber is a screen where "amber means the thing to tap" has nothing to teach.
+
+**Rule:**
+
+> Every trainer view has exactly one solid `--accent` control **in each state it can be in**, and it marks the action that advances the screen's purpose. A disclosure that opens the screen's only creating form is that action while it is closed. Once open it relabels ("Close") and drops to bordered, and the form's submit takes the accent.
+
+The relabel is what makes this safe rather than a second amber: the toggle and the submit are never both primary, because the toggle is never *itself* while the form is open. One accent at rest, one while filling.
+
+**What still does not take the accent, and why the rule does not swallow them:**
+
+- **Navigation.** A control that moves you to another screen commits nothing. "Build a program" stays bordered on a client with no program even though it is the most inviting thing in the section; the screen's accent belongs to the schedule form, which is the control on that screen that writes.
+- **Row-level controls in a list.** A roster of forty rows has forty edit toggles, and per-row accent is how the ≤10% budget is actually blown. The screen's accent is the screen's, not each row's.
+- **Dismissals.** "Cancel", "Keep it", "Close". Solid amber on the button that does nothing teaches the opposite of the rule on the one surface where the thing to tap is the other one.
+- **A view with no writes at all.** It gets no accent, and that is the correct outcome, not a violation to be patched. The rule says one per state, not one forced into every state.
+
+### Selected state: neutral inversion, never a tint
+
+**The defect.** A group of mutually exclusive options (the program builder's draft / active / archived) first rendered the *current* option in solid `--accent`, which pointed the palette's one chromatic promise at the single button in the row that does nothing when pressed. Replacing it with `--surface-sunk` fixed the wrong thing and broke a second: `--surface-sunk` is 97% against `--surface` at 99%, roughly 1.03:1, which is a texture rather than a state. Active and archived became indistinguishable at a glance.
+
+**Rule:**
+
+> A selected control inverts to neutral: `--ink-bold` ground, `--surface` figure, hovering to `--ink`. Selection is a *strong* signal carried by a *neutral* one. `--surface-sunk` is a recessed background for rows and disabled inputs and cannot carry state at 2% lightness separation; it is not a selected state and must not be used as one.
+
+This is the same local inversion §Color already blesses for primary CTAs ("Primary CTAs invert locally"), applied to the other thing that needs to read as *filled*. It costs no new token and no new hue, it is darker than the ~12:1 §Color records for `--ink` on `--surface`, and it survives greyscale, which a tint at 1.03:1 does not.
+
+**The selected control keeps its hover.** It is still clickable (in the status group, clicking the status you are already in is how a rejected transition gets dismissed) and a dead-looking control hides that.
+
+### Links to a record are not underlined prose
+
+**The defect.** The way into a client was the client's name, styled as an in-prose link: underline, weight 600, body colour. In a column of forty names that reads as forty underlined phrases, which is decoration applied uniformly and therefore no signal at all, and it makes the primary way into a record look like the back link in the page header.
+
+**Removing the underline is half a decision, and shipping only that half is a second defect.** Weight and ink are *hierarchy*: they say "this is the row's identity", which is what a heading says. They are not an affordance, and a record link with nothing but weight and ink at rest reads as a bold heading that happens to respond to a click. The underline was the wrong affordance; the answer is a different one, not none.
+
+**Rule:**
+
+> A record link carries a trailing `›` in `--muted`, at rest, inside the link. Weight and ink stay, and they carry hierarchy only. The chevron is the affordance.
+
+| | In prose | To a record |
+|---|---|---|
+| Where | Back links, a link inside a sentence | The identifying field of a row in a list or table |
+| At-rest affordance | Underline | Trailing `›` in `--muted` |
+| Underline | Always, at rest | On hover, on the label only |
+| Weight | 600 | 600 |
+| Colour | Inherited from the call site | `--ink-bold` |
+| Size | Inherited from the call site | `--text-base` |
+
+**Why a chevron and not the two other candidates:**
+
+- **Not colour.** The palette has one chromatic hue and it is spoken for. §Color rules amber out twice over: as text it is "only ~3:1 and would fail as a text color", and semantically it means "tap this to commit", which a navigation link does not. A dedicated link-blue is a third hue, refused for the same reason there is no success-green.
+- **Not a row-level hover target.** A hover affordance is by definition absent at rest, which is the defect, and it is pointer-only. It would also need a row background to hover *to*, and the only candidate is `--surface-sunk` at 1.03:1, ruled out one subsection above. A whole-row click target is separately unavailable: these rows already contain buttons, and interactive elements do not nest.
+- **A chevron is a fourth axis: shape.** Independent of colour, weight and decoration, so it survives greyscale and deuteranopia, and it is the axis §Messages already leans on when it makes the glyph the actual signal and the tint merely ambient. It also extends a vocabulary this product already has, rather than inventing one: `↗` already marks a link that leaves the app, so `›` marks one that opens a record inside it.
+
+**Forty chevrons is not the same objection as forty underlines.** An underline alters the text's own rendering, so applying it to every name in a column asserts that those *words* are special, which is not true of any one of them. A chevron is a discrete mark at the link's trailing edge asserting that every row in this column opens something, which is true, and which is structure rather than decoration. Uniformity is the message there, not the failure.
+
+**The chevron is `aria-hidden` and lives inside the link.** Inside, so it is part of the hit area and travels with the label; hidden, so the accessible name stays the record's name. A screen reader is already told this is a link and does not need a glyph to say so, which is exactly why the glyph is free to be purely visual.
+
+**The hover underline goes on the label, never the anchor.** A descendant cannot switch off an ancestor's `text-decoration`, so underlining the anchor draws the rule under the chevron too. Same split the external-link treatment already uses.
+
+**The in-prose treatment sets no colour and no size of its own.** It baked in both once, and every call site then fought it with a second utility for the same property, where the winner was decided by Tailwind's emission order rather than by anything at the call site.
+
+**One way in per row.** If a row's record link goes somewhere, that row does not also carry a button going to the same place. A second control pointing where the first one points is the thing a scannable column is for.
+
 ## Elevation & borders
 
 **Border-first.** `1px solid var(--edge)` is the default separator. Cards, inputs, and dividers all use it. Elevation via shadow is reserved for the sticky bottom CTA (implies floating over scroll content) and toast notifications.
