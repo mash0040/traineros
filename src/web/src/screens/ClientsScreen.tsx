@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 
 import type { ClientResponse } from '../api/types.gen'
 import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
