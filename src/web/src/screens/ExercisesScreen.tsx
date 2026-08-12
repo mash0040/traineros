@@ -177,9 +177,12 @@ function Exercise({
 
   return (
     <li className="rounded-sm border border-edge bg-surface p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold text-ink-bold">
+          {/* wrap-break-word: an exercise name is trainer-supplied free text, and one long
+              unbroken token has nothing to wrap at. min-w-0 above lets the column shrink; this
+              is what stops the shrinking from turning into overflow. */}
+          <h2 className="text-base font-semibold wrap-break-word text-ink-bold">
             {name}
             {!active && (
               // Beside the name rather than in a status column, because with no column to
@@ -189,9 +192,25 @@ function Exercise({
           </h2>
         </div>
 
-        <div className="flex shrink-0 flex-wrap gap-2">
+        {/* #135's headline defect, and `shrink-0` is the mechanism rather than the labels.
+            A flex item that cannot shrink is laid out at max-content — here the two buttons
+            side by side, ~330px — inside a card that has ~294px to give at 390px, so the group
+            hung over the right edge instead of wrapping. Its own `flex-wrap` never fired,
+            because nothing ever narrowed it. Dropping `shrink-0` lets the outer flex compress
+            it, at which point the inner wrap does what it was always there to do.
+
+            The short labels are the other half. At 44px tall and one per line, "Retire Jumping
+            Jacks" is a button most of the way across a phone to say a word the heading directly
+            above it already said. */}
+        <div className="flex flex-wrap gap-2">
+          {/* The naming form moves to aria-label, so the accessible name is unchanged: a screen
+              reader moving down forty rows still hears which exercise each control belongs to,
+              which is the case the long label was written for and the only one it served. The
+              eye gets that from the heading. Same trade the program builder's reorder arrows
+              already made — they have been icon-plus-aria-label since #52. */}
           <button
             aria-expanded={editing}
+            aria-label={editing ? `Close ${name}` : `Edit ${name}`}
             className={trainerSecondary}
             onClick={() => {
               setEditing((previous) => !previous)
@@ -200,7 +219,7 @@ function Exercise({
             }}
             type="button"
           >
-            {editing ? 'Close' : `Edit ${name}`}
+            {editing ? 'Close' : 'Edit'}
           </button>
 
           {/* The same split as the roster's Deactivate/Reactivate, and the same defect before
@@ -213,21 +232,27 @@ function Exercise({
               destructive control without reading three labels per row. */}
           {active ? (
             <button
+              aria-label={`Retire ${name}`}
               className={trainerDanger}
               disabled={saving}
               onClick={() => setConfirming(true)}
               type="button"
             >
-              Retire {name}
+              Retire
             </button>
           ) : (
+            // The aria-label tracks the saving state rather than being pinned to "Restore".
+            // A static one would leave a screen reader user with a button still announcing
+            // "Restore Sissy Squat" while its visible label reads "Restoring" — the two names
+            // for one control that #132 spent a whole ticket removing, in a different form.
             <button
+              aria-label={`${saving ? 'Restoring' : 'Restore'} ${name}`}
               className={trainerSecondary}
               disabled={saving}
               onClick={() => void setActive(true)}
               type="button"
             >
-              {saving ? 'Restoring' : `Restore ${name}`}
+              {saving ? 'Restoring' : 'Restore'}
             </button>
           )}
         </div>
@@ -313,14 +338,15 @@ function Details({ exercise }: { exercise: ExerciseResponse }) {
           where the href points.
 
           rel is not optional on a target=_blank link to a third-party origin. Same treatment as
-          TodayScreen's, minus the 44px tap target — DESIGN.md relaxes that here. */}
+          TodayScreen's, 44px tap target included — that used to read "minus the 44px tap target,
+          DESIGN.md relaxes that here", and #135 revoked the carve-out it was leaning on. */}
       {/* Not composed from trainerLink, because the underline has to sit on the label alone: a
           descendant cannot switch off an ancestor's text-decoration, so underlining the anchor
           would draw a line under the ↗ glyph too. Same three properties, split across two
           elements, hover included — #132 found this one missing its hover entirely. */}
       {videoUrl !== '' && (
         <a
-          className="inline-flex cursor-pointer items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold"
+          className="inline-flex min-h-[var(--tap-min)] cursor-pointer items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold"
           href={videoUrl}
           rel="noopener noreferrer"
           target="_blank"
@@ -495,7 +521,7 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
   return (
     <>
       {toggle}
-      <section className="mt-8 max-w-xl rounded-md border border-edge p-6">
+      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-ink-bold">Add an exercise</h2>
 
         <form className="mt-6 grid gap-4" noValidate onSubmit={onSubmit}>

@@ -179,11 +179,29 @@ export function ClientsScreen() {
   )
 }
 
-// A table, not a list of cards. The roster is five parallel facts about each of several rows,
-// read by comparing down a column — which is what a table is for, and what DESIGN.md means by
-// reserving cards for units that are bounded and meaningful alone. On a desktop screen the
-// column of dates *is* the "who's slacking" signal; the same data as cards would be a grid of
-// identical boxes, which the same doc bans by name.
+// A list that becomes columns, which is what the <table> here was reaching for and could not do.
+//
+// The original argument for the table still stands and is worth restating, because it is what
+// this has to keep: the roster is parallel facts about several rows, read by comparing down a
+// column, and the column of dates *is* the "who's slacking" signal ui-ux.md names. That is a
+// table's job. What a table cannot do is stop being one — `<tr>`/`<td>` have a fixed layout
+// algorithm, so four columns of real content on a 390px viewport either overflow or crush, and
+// there is no width at which the trainer gets a legible roster instead.
+//
+// So the columns move to a grid that only exists at sm: and up. Below that each client is one
+// stacked block; above it the same markup lays out as aligned columns and the down-column scan
+// comes back. #135 revised ui-ux.md to make that ordering explicit — the table was the wide
+// case all along, and it was being built as the only case.
+//
+// Deliberately not cards, and this is the part DESIGN.md constrains: a bordered box per client
+// would be "a grid of identical boxes", which it bans by name, and it would say each client is
+// a bounded unit meaningful alone when the whole point is comparing them. Same divide-y rule
+// treatment the client detail screen's program and history lists already use.
+//
+// The header strip renders from sm: only, because a column header with nothing beside it to be
+// a header *for* is a label the stacked layout does not need. What the stacked layout needs
+// instead is that the values be self-describing, which they are ("3 days ago", "No sessions
+// yet", "Active") — except the loading dash, which gets an sr-only label below.
 function Roster({
   clients,
   lastSessions,
@@ -196,27 +214,29 @@ function Roster({
   const today = todayIn(undefined)
 
   return (
-    <table className="mt-8 w-full border-collapse text-left">
-      <caption className="sr-only">Your clients, with the date each last trained</caption>
-      <thead>
-        <tr className="border-b border-edge-strong">
-          <th className="py-2 pr-4 text-xs font-normal text-muted" scope="col">
-            Client
-          </th>
-          <th className="py-2 pr-4 text-xs font-normal text-muted" scope="col">
-            Last session
-          </th>
-          <th className="py-2 pr-4 text-xs font-normal text-muted" scope="col">
-            Status
-          </th>
-          {/* The column exists structurally so the header row and the body agree; naming it
-              "Actions" would be a label for a thing the buttons already say. */}
-          <th className="py-2" scope="col">
-            <span className="sr-only">Actions</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      {/* aria-hidden, and that is not a shortcut. These four words are a visual aid for the
+          wide layout; the row content below is self-describing, so exposing them would put a
+          set of labels in the accessible tree that stand in no announced relationship to the
+          values they sit above — which is the thing a real <th scope="col"> did and a grid
+          cannot. What the table's semantics were buying, the wording is buying instead. */}
+      <div
+        aria-hidden="true"
+        className={`mt-8 hidden py-2 text-xs text-muted sm:grid ${COLUMNS}`}
+      >
+        <span>Client</span>
+        <span>Last session</span>
+        <span>Status</span>
+        {/* Empty on purpose. The old <th> here held an sr-only "Actions", which was a label for
+            a thing the buttons already say; with the header out of the tree there is nothing
+            left for it to label. */}
+        <span />
+      </div>
+
+      <ul
+        aria-label="Your clients, with the date each last trained"
+        className="divide-y divide-edge border-y border-edge max-sm:mt-8"
+      >
         {clients.map((client) => (
           <ClientRow
             client={client}
@@ -226,10 +246,21 @@ function Roster({
             today={today}
           />
         ))}
-      </tbody>
-    </table>
+      </ul>
+    </>
   )
 }
+
+// The one thing the header and the rows must agree on, so they cannot drift. Everything else
+// about the two differs (the header is display:none below sm:, the rows are a stacked grid),
+// which is why this is the template alone rather than a shared row class — `hidden` and `grid`
+// in one string is a display property set twice, decided by stylesheet emission order.
+//
+// minmax(0,·) on the two flexible tracks rather than bare fr: a grid track's default minimum is
+// min-content, so an unbreakable email address or a long client name would push the track wider
+// than its share and take the row past the viewport with it. This is the same overflow the
+// exercise library's shrink-0 caused, in the grid dialect.
+const COLUMNS = 'sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto_auto] sm:gap-4'
 
 function ClientRow({
   client,
@@ -267,8 +298,8 @@ function ClientRow({
   }
 
   return (
-    <tr className="border-b border-edge align-top">
-      <td className="py-3 pr-4">
+    <li className={`grid gap-1 py-3 sm:items-start sm:gap-4 ${COLUMNS}`}>
+      <div className="min-w-0">
         {/* The way into the client detail screen (#51). The name is the link because it is what
             the trainer is already looking for when they scan the column; a separate "View"
             control would be a second thing in the row that goes where the first one points.
@@ -279,18 +310,21 @@ function ClientRow({
             than nothing, because weight and ink are hierarchy and a name that is merely the
             boldest thing in its row reads as a heading. DESIGN.md §Controls. */}
         <RecordLink to={`/clients/${client.id}`}>{name}</RecordLink>
-        <span className="block text-sm text-muted">{client.email}</span>
-      </td>
+        {/* wrap-break-word because an email address has nothing in it a browser will break at,
+            and one long address in a minmax(0,2fr) track is a row wider than the phone. */}
+        <span className="block wrap-break-word text-sm text-muted">{client.email}</span>
+      </div>
 
-      <td className="py-3 pr-4">
+      <div>
         <LastSession performedOn={lastSession} today={today} />
-      </td>
+      </div>
 
-      <td className="py-3 pr-4 text-sm text-ink">
-        {active ? 'Active' : 'Deactivated'}
-      </td>
+      <div className="text-sm text-ink">{active ? 'Active' : 'Deactivated'}</div>
 
-      <td className="py-3">
+      {/* justify-self-start so the auto track is the button's width and not the column's: in
+          the confirming state this cell grows a prompt and two more controls, and a stretched
+          cell would let that reflow the three columns beside it mid-interaction. */}
+      <div className="sm:justify-self-start">
         {confirming ? (
           // Inline, replacing the control that raised it, rather than a dialog over the page:
           // DESIGN.md calls the modal the lazy first answer, and #105/#108 settled the same
@@ -332,13 +366,22 @@ function ClientRow({
              states now take different treatments — --danger arming the confirmation, bordered
              neutral for the way back. Reactivate deliberately gets no colour of its own: a
              green here is the success hue DESIGN.md refuses by name. */
+          /* #135 took the client's name out of the visible label and put it in aria-label. The
+             accessible name is byte-for-byte what it was, which is the whole reason this is the
+             right move rather than a loss: a screen reader going down the roster still hears
+             "Deactivate Ada", because that is the context a linear reading has no other way to
+             get. A sighted trainer reads it off the name at the head of the row — which on a
+             phone is directly above this button rather than four columns to the left. */
           <button
+            aria-label={
+              saving ? `Saving ${name}` : active ? `Deactivate ${name}` : `Reactivate ${name}`
+            }
             className={active ? trainerDanger : trainerSecondary}
             disabled={saving}
             onClick={() => (active ? setConfirming(true) : void setActive(true))}
             type="button"
           >
-            {saving ? 'Saving' : active ? `Deactivate ${name}` : `Reactivate ${name}`}
+            {saving ? 'Saving' : active ? 'Deactivate' : 'Reactivate'}
           </button>
         )}
 
@@ -357,8 +400,8 @@ function ClientRow({
         {!active && !saving && (
           <p className="mt-2 text-xs text-muted">Reminders stay off until you turn them back on.</p>
         )}
-      </td>
-    </tr>
+      </div>
+    </li>
   )
 }
 
@@ -373,7 +416,17 @@ function LastSession({
 }) {
   if (performedOn === undefined) {
     // Still loading, or the request failed. One dash, and no claim either way.
-    return <span className="text-base text-muted tabular-nums">&ndash;</span>
+    //
+    // The sr-only half is what the dropped <th> used to provide. Every other value this
+    // component renders says what it is ("3 days ago", "No sessions yet"); a bare dash in a
+    // stacked layout, with no column header above it and no label beside it, is the one that
+    // announces as nothing at all.
+    return (
+      <span className="text-base text-muted tabular-nums">
+        <span className="sr-only">Last session not known</span>
+        <span aria-hidden="true">&ndash;</span>
+      </span>
+    )
   }
 
   if (performedOn === null) {
@@ -548,7 +601,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   return (
     <>
       {toggle}
-      <section className="mt-8 max-w-xl rounded-md border border-edge p-6">
+      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-ink-bold">Add a client</h2>
 
         {/* api.md is explicit that POST /api/clients sends nothing: "invite = trainer tells them

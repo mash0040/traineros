@@ -81,7 +81,9 @@ Deliberately rejected:
 
 **Container discipline:** no reflexive `max-w-*` wrapper on the root of a page. Containers appear where the *content* is genuinely bounded (a form, a session card). The page shell is the viewport minus safe-area padding, nothing more.
 
-**Thumb-reach zone (client screens, binding).** Primary CTAs live in the bottom half of the mobile viewport, ideally the bottom third. Sticky footer CTA is the pattern for logging. `--tap-min: 44px` is consumed by button/input `min-height` — never smaller on client-facing surfaces.
+**Thumb-reach zone (binding, every screen).** Primary CTAs live in the bottom half of the mobile viewport, ideally the bottom third. Sticky footer CTA is the pattern for logging. `--tap-min: 44px` is consumed by button/input `min-height` — never smaller, anywhere.
+
+(#135 revoked the trainer carve-out this paragraph used to carry. It read "client screens, binding" and "never smaller on client-facing surfaces", both of which were downstream of a ui-ux.md rule that had the trainer at a desk. They are on the gym floor with a phone, so the number binds on their screens on the same terms. The sticky-footer half does not travel with it — ui-ux.md §Gym-floor constraints says why a screen with several write surfaces cannot have one of them pinned.)
 
 **Cards.** Used only where the unit is genuinely bounded and the whole thing is meaningful as one object (a session row in history, an exercise block in the logging screen). Never nested. Never as decoration for a heading + paragraph.
 
@@ -152,7 +154,7 @@ Known tradeoff: only the last row holds inputs, so as sets are logged the inputs
 
 ### Does the single-accent rule need an explicit carve-out?
 
-**No — and recording one would be wrong.** `--tap-min` needed a carve-out because trainer screens genuinely violate it: 44px controls sized for a thumb are the wrong size for a pointer, so the rule is suspended. Nothing here is suspended. Amber for confirmations is not an exception to §Color, it is §Color: "Confirmations are amber (the 'committed' color)" has been in that section since v1 and the trainer screens simply were not doing it.
+**No — and recording one would be wrong.** The comparison this paragraph originally drew was to `--tap-min`, which had a carve-out here on the grounds that "44px controls sized for a thumb are the wrong size for a pointer". #135 deleted that carve-out along with the premise under it — the trainer is on a phone — so the contrast no longer holds and the answer no longer needs it. It never depended on it: nothing about the accent rule is suspended on any surface. Amber for confirmations is not an exception to §Color, it is §Color: "Confirmations are amber (the 'committed' color)" has been in that section since v1 and the trainer screens simply were not doing it.
 
 **What does need recording is a boundary, and it is this:**
 
@@ -270,7 +272,7 @@ When motion is added post-v1:
 ## Accessibility
 
 - Every color pairing above meets or exceeds WCAG AA (4.5:1 normal text, 3:1 large text). `--ink` on `--surface` is ~12:1; `--accent-ink` on `--accent` clears 4.5:1; `--muted` on `--surface` clears 4.5:1 at body size.
-- `--tap-min: 44px` baked into button/input min-heights for client screens. Trainer screens (desktop) may relax.
+- `--tap-min: 44px` baked into button/input min-heights, on every screen. Trainer screens are not an exception (#135); an icon-only control takes it on both axes, or it is a 44px-tall 30px-wide target.
 - Semantic HTML always. `<button>` never a `<div>`. `<label>` associated with every input.
 - No formal audit committed in v1 (per ui-ux.md). Do the basics; skip the theater.
 

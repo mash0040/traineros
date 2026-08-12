@@ -4,15 +4,18 @@ import { trainerNavLink } from './trainerControls'
 
 // The layout the four trainer screens sit in (#50 lands it; #51–#53 fill it).
 //
-// ── Desktop-first, and what that actually changes ──────────────────────────────────────────
-// ui-ux.md: clients are phone-only, the trainer "views on desktop occasionally", and trainer
-// screens get "responsive-but-unpolished" treatment. Two concrete consequences, so nobody has
-// to re-derive them per screen:
-//   * The container is wide (max-w-5xl) rather than the client screens' max-w-lg. A roster with
-//     five columns on a 26rem column is a phone layout nobody asked for.
-//   * DESIGN.md's --tap-min: 44px is binding on client surfaces and explicitly relaxed here.
-//     Trainer controls are sized for a pointer. They are still not tiny — "unpolished" is a
-//     licence to skip the layout pass, not to build something unusable on a laptop trackpad.
+// ── Mobile-first, and what that actually changes ───────────────────────────────────────────
+// This comment used to open "Desktop-first", on ui-ux.md's rule that the trainer "views on
+// desktop occasionally" and their screens get "responsive-but-unpolished" treatment. #135
+// revised the rule: the trainer is on the gym floor with a phone, so these four are designed at
+// 390px and widened from there. What that leaves:
+//   * max-w-5xl stays, but as the ceiling the layout grows into rather than the width it is
+//     designed at. The roster's columns are what the extra width buys; they are a wide-case
+//     layout that stacks below sm:, not the shape the screen is built around.
+//   * DESIGN.md's --tap-min: 44px is binding here, with no carve-out. It is consumed by
+//     trainerControls.ts, so no screen sizes a control itself.
+//   * Padding is px-4 on a phone. px-8 spent 64px of a 390px viewport on margins — 16% of the
+//     screen, taken off the content width that the overflow defects were measured against.
 // Everything else in DESIGN.md still applies. The tokens, the single accent, the border-first
 // treatment, the ban on decorative cards: those are the visual system, not a client-screen
 // concession, and a trainer area with its own look would be a second design to maintain.
@@ -42,8 +45,12 @@ export function TrainerShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh">
-      <header className="border-b border-edge px-8 py-4">
-        <div className="mx-auto flex w-full max-w-5xl items-baseline justify-between gap-6">
+      <header className="border-b border-edge px-4 py-2 sm:px-8">
+        {/* flex-wrap, because the product name and a two-item nav are one line at 390px only
+            while both stay short. items-center rather than items-baseline: the nav links are
+            44px boxes now, and baseline-aligning a text run against a box that is mostly
+            padding puts the two on visibly different lines. */}
+        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-x-6 gap-y-1">
           <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
 
           {/* The trainer's own name is not shown, because the SPA does not have it: GET /api/me
@@ -75,7 +82,7 @@ export function TrainerShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className="px-8 py-10">
+      <main className="px-4 py-8 sm:px-8 sm:py-10">
         <div className="mx-auto w-full max-w-5xl">{children}</div>
       </main>
     </div>
