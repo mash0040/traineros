@@ -244,6 +244,15 @@ This is the same local inversion §Color already blesses for primary CTAs ("Prim
 
 **One way in per row.** If a row's record link goes somewhere, that row does not also carry a button going to the same place. A second control pointing where the first one points is the thing a scannable column is for.
 
+**Grid roster alignment.** A grid that stands in for a table must make each column's header and
+cells share the same horizontal alignment explicitly. The clients roster uses left alignment
+for Client, Last session, Status, and Actions: names scan from one left edge; relative dates
+are prose plus a supporting date, not numeric totals; status is a word, not a measure; row
+actions start at their own control edge. Vertical alignment is separate: status and action cells
+may center against each other on desktop so a short status word does not hang from the top of a
+44px button. The mobile stacked layout keeps headers hidden and does not inherit a desktop-only
+column label beside every value.
+
 ## Elevation & borders
 
 **Border-first.** `1px solid var(--edge)` is the default separator. Cards, inputs, and dividers all use it. Elevation via shadow is reserved for the sticky bottom CTA (implies floating over scroll content) and toast notifications.

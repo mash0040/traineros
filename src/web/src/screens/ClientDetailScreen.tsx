@@ -16,7 +16,13 @@ import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/
 import { RecordLink } from './RecordLink'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import { trainerField, trainerLink, trainerPrimary, trainerSecondary } from './trainerControls'
+import {
+  trainerField,
+  trainerLink,
+  trainerPrimary,
+  trainerRecordRow,
+  trainerSecondary,
+} from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
 
@@ -201,7 +207,7 @@ function Programs({ clientId, programs }: { clientId: string; programs: ProgramR
       ) : (
         <ul className="mt-4 divide-y divide-edge border-y border-edge">
           {ordered.map((program) => (
-            <li className="py-3" key={program.id}>
+            <li className={`py-3 ${trainerRecordRow}`} key={program.id}>
               {/* The handoff, and the title is what carries it. This row used to render the
                   title as a dead <span> with an "Edit program" button opposite, which is the
                   two-controls-one-destination shape the roster rejects a few files over: the

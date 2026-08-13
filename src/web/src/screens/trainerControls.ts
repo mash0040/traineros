@@ -210,12 +210,13 @@ export const trainerLink = 'cursor-pointer font-semibold underline underline-off
  * affordance; the weight and the ink went back to meaning what they meant before.
  *
  * Shape is the axis this palette has left. Colour is unavailable twice over (DESIGN.md §Color:
- * amber as text is ~3:1 and "would fail as a text color", and it already means "commit this"),
- * a hover target is by definition not an at-rest cue, and the row cannot become one click
- * target because it already contains buttons. §Controls has the full argument.
+ * amber as text is ~3:1 and "would fail as a text color", and it already means "commit this").
+ * The row can still become the hit target without nesting controls: the row is positioned,
+ * RecordLink stretches a pseudo-element over it, and row controls opt into the layer above.
  */
 export const trainerRecordLink =
-  'group inline-flex cursor-pointer items-center gap-1 text-base font-semibold text-ink-bold'
+  'group inline-flex cursor-pointer items-center gap-1 text-base font-semibold text-ink-bold ' +
+  "after:absolute after:inset-0 after:z-10 after:content-['']"
 
 /**
  * The label half. Carries the hover underline, because a descendant cannot switch off an
@@ -229,7 +230,22 @@ export const trainerRecordLabel = 'group-hover:underline group-hover:underline-o
  * affordance needs to be *present*, not loud, and at forty rows a chevron in --ink would be a
  * second column of dark marks arguing with the names.
  */
-export const trainerRecordChevron = 'text-muted'
+export const trainerRecordChevron =
+  'text-muted max-sm:absolute max-sm:right-0 max-sm:top-1/2 max-sm:-translate-y-1/2 sm:static'
+
+/**
+ * The positioned row that lets RecordLink stretch over the full row while keeping the markup as
+ * one link plus whatever controls the row owns. `select-text` is intentional: the larger hit
+ * target must not turn roster metadata into unselectable chrome.
+ */
+export const trainerRecordRow =
+  'relative isolate select-text max-sm:pr-6 hover:bg-surface-sunk active:bg-surface-sunk'
+
+/**
+ * Buttons and other real controls inside a stretched-link row sit above RecordLink's overlay,
+ * so tapping Deactivate/Retire/Cancel never follows the row link underneath.
+ */
+export const trainerRecordRowControl = 'relative z-20'
 
 /**
  * The shell's nav, which is the one link context that stays un-underlined.

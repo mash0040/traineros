@@ -9,7 +9,14 @@ import { todayIn } from '../lib/workoutDraft'
 import { RecordLink } from './RecordLink'
 import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
-import { trainerDanger, trainerField, trainerPrimary, trainerSecondary } from './trainerControls'
+import {
+  trainerDanger,
+  trainerField,
+  trainerPrimary,
+  trainerRecordRow,
+  trainerRecordRowControl,
+  trainerSecondary,
+} from './trainerControls'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -214,28 +221,33 @@ function Roster({
   const today = todayIn(undefined)
 
   return (
-    <>
+    // The single grid. Everything below it is a subgrid of this one definition rather than a
+    // copy of it — see COLUMNS for why a copy could not work.
+    <div className={`mt-8 ${COLUMNS}`}>
       {/* aria-hidden, and that is not a shortcut. These four words are a visual aid for the
           wide layout; the row content below is self-describing, so exposing them would put a
           set of labels in the accessible tree that stand in no announced relationship to the
           values they sit above — which is the thing a real <th scope="col"> did and a grid
           cannot. What the table's semantics were buying, the wording is buying instead. */}
-      <div
-        aria-hidden="true"
-        className={`mt-8 hidden py-2 text-xs text-muted sm:grid ${COLUMNS}`}
-      >
+      <div aria-hidden="true" className={`hidden py-2 text-xs text-muted ${SUBGRID} sm:grid`}>
         <span>Client</span>
         <span>Last session</span>
         <span>Status</span>
         {/* Empty on purpose. The old <th> here held an sr-only "Actions", which was a label for
             a thing the buttons already say; with the header out of the tree there is nothing
-            left for it to label. */}
+            left for it to label.
+
+            It is also the cell that broke the previous attempt: as a track of its own in a
+            second grid, an empty span made column 4 zero-wide here and ~110px wide in every
+            row, and the surplus went to the fr tracks, which is what pushed these three labels
+            right of their values. In a subgrid the track is sized once, by the widest thing in
+            it anywhere — the button — and this span simply sits in it. */}
         <span />
       </div>
 
       <ul
         aria-label="Your clients, with the date each last trained"
-        className="divide-y divide-edge border-y border-edge max-sm:mt-8"
+        className={`divide-y divide-edge border-y border-edge ${SUBGRID} sm:grid`}
       >
         {clients.map((client) => (
           <ClientRow
@@ -247,20 +259,61 @@ function Roster({
           />
         ))}
       </ul>
-    </>
+    </div>
   )
 }
 
-// The one thing the header and the rows must agree on, so they cannot drift. Everything else
-// about the two differs (the header is display:none below sm:, the rows are a stacked grid),
-// which is why this is the template alone rather than a shared row class — `hidden` and `grid`
-// in one string is a display property set twice, decided by stylesheet emission order.
-//
-// minmax(0,·) on the two flexible tracks rather than bare fr: a grid track's default minimum is
-// min-content, so an unbreakable email address or a long client name would push the track wider
-// than its share and take the row past the viewport with it. This is the same overflow the
-// exercise library's shrink-0 caused, in the grid dialect.
-const COLUMNS = 'sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto_auto] sm:gap-4'
+/**
+ * The column definition, declared once, on the one element that owns it.
+ *
+ * This used to be applied to the header strip and to every row, on the theory that one shared
+ * string could not drift. It drifted anyway, because `grid-template-columns` is not a layout —
+ * it is an instruction resolved separately by each grid container against that container's own
+ * content, and the same instruction in two containers is two different layouts as soon as the
+ * content differs.
+ *
+ * Here it differed by construction. Tracks 3 and 4 are `auto`, so they take their width from
+ * what is in them before the `fr` tracks divide up what is left: in the header those cells hold
+ * the word "Status" and nothing at all, and in a row they hold "Deactivated" and a button. The
+ * header therefore had ~190px more to give away, handed it to the two `fr` tracks in their 2:1
+ * ratio, and every column boundary after the first landed further right than the rows' — about
+ * 125px out at "Last session" and 190px by "Status". Column 1 matched, which is exactly what
+ * made it read as an alignment problem rather than a sizing one.
+ *
+ * `justify-self-start` on both sides was the natural-looking fix and could not have worked:
+ * justify-self positions an item *within its track* and cannot move the track. Both cells were
+ * already start-aligned, so it changed nothing on screen.
+ *
+ * minmax(0,·) on the two flexible tracks rather than bare fr: a grid track's default minimum is
+ * min-content, so an unbreakable email address or a long client name would push the track wider
+ * than its share and take the row past the viewport with it. This is the same overflow the
+ * exercise library's shrink-0 caused, in the grid dialect.
+ *
+ * gap-x only. Row spacing belongs to the stacked phone layout and is per-row (`gap-y-1` on the
+ * li); the column gap is a property of the columns, so it is declared here with them.
+ */
+const COLUMNS = 'sm:grid sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto_auto] sm:gap-x-4'
+
+/**
+ * What everything under COLUMNS wears instead of a copy of it: span all four tracks, and take
+ * the track *sizes* from the parent rather than re-deriving them.
+ *
+ * This is the fix. `subgrid` means the four tracks are measured once, over the header and every
+ * row together — the `auto` columns come out as wide as the widest status word and the widest
+ * button anywhere in the roster, and every cell in a column starts at the same x because there
+ * is only one x to start at. It is what `<table>` did for free, and what two sibling grids
+ * cannot reproduce at any gap or width.
+ *
+ * Nested deliberately: the <ul> is a subgrid of the wrapper, and each <li> is a subgrid of the
+ * <ul>. The alternative — `display: contents` on both — flattens the rows into the outer grid
+ * and destroys the boxes they need, since a row carries `relative isolate` for RecordLink's
+ * stretched overlay, a hover background, and the divide-y rule between rows. Subgrid shares the
+ * tracks and keeps every one of those.
+ *
+ * From sm: only. Below it there are no columns to share and no subgrid in play, so the stacked
+ * phone layout — the primary one, per ui-ux.md — never depends on this.
+ */
+const SUBGRID = 'sm:col-span-4 sm:grid-cols-subgrid'
 
 function ClientRow({
   client,
@@ -298,8 +351,12 @@ function ClientRow({
   }
 
   return (
-    <li className={`grid gap-1 py-3 sm:items-start sm:gap-4 ${COLUMNS}`}>
-      <div className="min-w-0">
+    // gap-y-1, not gap-1. A subgrid takes its column gap from the parent unless it sets one of
+    // its own, and setting one here would put the gutter back in two places — the exact shape
+    // of duplication that produced the misalignment. The row gap is this element's own business
+    // (it separates the stacked cells on a phone, where there are no columns at all).
+    <li className={`grid gap-y-1 py-3 sm:items-start ${trainerRecordRow} ${SUBGRID}`}>
+      <div className="min-w-0 sm:justify-self-start">
         {/* The way into the client detail screen (#51). The name is the link because it is what
             the trainer is already looking for when they scan the column; a separate "View"
             control would be a second thing in the row that goes where the first one points.
@@ -315,16 +372,23 @@ function ClientRow({
         <span className="block wrap-break-word text-sm text-muted">{client.email}</span>
       </div>
 
-      <div>
+      <div className="sm:justify-self-start">
         <LastSession performedOn={lastSession} today={today} />
       </div>
 
-      <div className="text-sm text-ink">{active ? 'Active' : 'Deactivated'}</div>
+      <div className="text-sm text-ink sm:self-center sm:justify-self-start">
+        {active ? 'Active' : 'Deactivated'}
+      </div>
 
-      {/* justify-self-start so the auto track is the button's width and not the column's: in
-          the confirming state this cell grows a prompt and two more controls, and a stretched
-          cell would let that reflow the three columns beside it mid-interaction. */}
-      <div className="sm:justify-self-start">
+      {/* justify-self-start keeps this cell at its own width instead of stretching to fill the
+          track — which now matters more than it did, because the track is sized across every
+          row at once and the confirming state (a prompt plus two buttons) is the widest thing
+          in it. A stretched resting cell would sit in a column sized for a state it is not in.
+
+          It does not size the track, and the earlier version of this comment said it did. That
+          misreading is what produced the failed alignment attempt: justify-self is item
+          placement inside a track, never track geometry. See COLUMNS. */}
+      <div className={`sm:self-center sm:justify-self-start ${trainerRecordRowControl}`}>
         {confirming ? (
           // Inline, replacing the control that raised it, rather than a dialog over the page:
           // DESIGN.md calls the modal the lazy first answer, and #105/#108 settled the same
