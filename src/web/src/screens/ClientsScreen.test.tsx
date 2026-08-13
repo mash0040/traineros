@@ -122,10 +122,79 @@ describe('ClientsScreen', () => {
     mockApi({ clients: [ada, grace] })
     renderScreen()
 
-    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute(
-      'href',
-      '/clients/client-ada',
+    const link = await screen.findByRole('link', { name: 'Ada' })
+    expect(link).toHaveAttribute('href', '/clients/client-ada')
+    expect(link).toHaveClass('after:absolute', 'after:inset-0')
+
+    const chevron = link.querySelector('[aria-hidden="true"]')
+    expect(chevron).toHaveClass('max-sm:absolute', 'max-sm:right-0', 'sm:static')
+  })
+
+  it('stretches the client link over the row without swallowing the deactivate button', async () => {
+    mockApi({ clients: [ada] })
+    renderScreen()
+
+    const link = await screen.findByRole('link', { name: 'Ada' })
+    const row = link.closest('li')
+    if (row === null) {
+      throw new Error('No roster row for Ada')
+    }
+    expect(row).toHaveClass(
+      'relative',
+      'isolate',
+      'select-text',
+      'max-sm:pr-6',
+      'hover:bg-surface-sunk',
     )
+
+    expect(within(row).getByText('Active')).toHaveClass('sm:self-center', 'sm:justify-self-start')
+    const controls = within(row).getByRole('button', { name: 'Deactivate Ada' }).closest('div')
+    expect(controls).toHaveClass('relative', 'z-20', 'sm:self-center')
+    expect(within(row).getAllByRole('link')).toHaveLength(1)
+    expect(within(row).getAllByRole('button')).toHaveLength(1)
+  })
+
+  // This test used to assert sm:justify-self-start on the three headers and the three cells,
+  // and it passed for as long as the headers were visibly right of their values — which is the
+  // only interesting thing about it. justify-self places an item inside its track and cannot
+  // move the track, so the property it was asserting was never the one that aligns a column.
+  //
+  // The headers and the rows were two sibling grid containers holding one shared template
+  // string. That is not one layout: grid-template-columns is resolved per container against
+  // that container's own content, and tracks 3 and 4 are `auto` — "Status" and an empty span in
+  // the header, "Deactivated" and a button in a row. The header had ~190px more left over for
+  // the fr tracks and every column boundary after the first drifted right.
+  //
+  // So what is worth pinning is the structure that makes one set of tracks exist: a single
+  // grid-template-columns, and subgrid everywhere else. Widths need a browser; this does not,
+  // and it is what a later refactor would undo without noticing.
+  it('sizes the roster columns once, so a header and its values cannot resolve to different tracks', async () => {
+    mockApi({ clients: [ada, grace] })
+    renderScreen()
+    await screen.findByRole('link', { name: 'Ada' })
+
+    const roster = screen.getByRole('list', { name: /Your clients/ })
+    const grid = roster.parentElement
+    if (grid === null) {
+      throw new Error('The roster list has no grid wrapper')
+    }
+
+    // Exactly one element defines the tracks, and it is the wrapper.
+    const defines = (element: Element) =>
+      Array.from(element.classList).some((name) => name.includes('grid-cols-['))
+    expect(defines(grid)).toBe(true)
+    expect(
+      Array.from(grid.querySelectorAll('*')).filter(defines),
+      'a second grid-template-columns is the defect this test exists for',
+    ).toEqual([])
+
+    // Everything that lays out against those tracks borrows them rather than restating them.
+    const header = screen.getByText('Status').parentElement
+    expect(header).toHaveClass('sm:col-span-4', 'sm:grid-cols-subgrid')
+    expect(roster).toHaveClass('sm:col-span-4', 'sm:grid-cols-subgrid')
+    for (const row of within(roster).getAllByRole('listitem')) {
+      expect(row).toHaveClass('sm:col-span-4', 'sm:grid-cols-subgrid')
+    }
   })
 
   // #135. The roster was a <table>, which has a fixed layout algorithm and so cannot reflow:

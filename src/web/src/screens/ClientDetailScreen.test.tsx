@@ -158,9 +158,22 @@ describe('ClientDetailScreen', () => {
     mockApi({ clients: [ada], programs: [adasProgram], schedule })
     renderAt('client-ada')
 
-    expect(await screen.findByRole('link', { name: 'Winter Block' })).toHaveAttribute(
-      'href',
-      '/programs/program-1',
+    const link = await screen.findByRole('link', { name: 'Winter Block' })
+    expect(link).toHaveAttribute('href', '/programs/program-1')
+    expect(link).toHaveClass('after:absolute', 'after:inset-0')
+    expect(link.querySelector('[aria-hidden="true"]')).toHaveClass(
+      'max-sm:absolute',
+      'max-sm:right-0',
+      'sm:static',
+    )
+
+    const row = link.closest('li')
+    expect(row).toHaveClass(
+      'relative',
+      'isolate',
+      'select-text',
+      'max-sm:pr-6',
+      'hover:bg-surface-sunk',
     )
   })
 
