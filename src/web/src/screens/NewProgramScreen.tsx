@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ApiError, createProgram } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
-import { TrainerMessage } from './TrainerMessage'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 import { TrainerShell } from './TrainerShell'
 import { trainerField, trainerLink, trainerPrimary } from './trainerControls'
 
@@ -23,7 +24,8 @@ export function NewProgramScreen() {
 
   const [title, setTitle] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+
+  const block = useBlockMessage('new-program-message')
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -32,12 +34,12 @@ export function NewProgramScreen() {
     }
 
     if (title.trim() === '') {
-      setError('Give the program a name.')
+      block.fail('Give the program a name.')
       return
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       const created = await createProgram({ clientId, title: title.trim() })
       if (created.id === undefined) {
@@ -48,7 +50,7 @@ export function NewProgramScreen() {
       // would create a second program if it were submitted again.
       navigate(`/programs/${created.id}`, { replace: true })
     } catch (caught) {
-      setError(messageFor(caught, 'program'))
+      block.fail(messageFor(caught, 'program'))
       setSaving(false)
     }
   }
@@ -87,8 +89,8 @@ export function NewProgramScreen() {
             Name
           </label>
           <input
-            aria-describedby={error === null ? undefined : 'new-program-error'}
-            aria-invalid={error !== null}
+            aria-describedby={block.describedBy}
+            aria-invalid={block.message !== null}
             className={trainerField}
             id="program-title"
             name="title"
@@ -96,20 +98,25 @@ export function NewProgramScreen() {
               setTitle(event.target.value)
               // Goes as soon as the trainer starts fixing what it named, rather than standing
               // there describing a submission they have already moved past.
-              setError(null)
+              block.clear()
             }}
             placeholder="Winter Block"
             value={title}
           />
         </div>
 
-        {error !== null && (
-          <TrainerMessage id="new-program-error" tone="failure">
-            {error}
-          </TrainerMessage>
+        {block.message !== null && (
+          <Message id={block.id} tone={block.message.tone}>
+            {block.message.body}
+          </Message>
         )}
 
-        <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
+        <button
+          aria-describedby={block.describedBy}
+          className={`justify-self-start ${trainerPrimary}`}
+          disabled={saving}
+          type="submit"
+        >
           {saving ? 'Creating' : 'Create program'}
         </button>
       </form>

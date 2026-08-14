@@ -13,8 +13,9 @@ import {
 import { messageFor } from '../lib/apiMessages'
 import { formatSessionDate } from '../lib/history'
 import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 import { RecordLink } from './RecordLink'
-import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import {
   trainerField,
@@ -272,16 +273,13 @@ function ReminderSchedule({
   const [days, setDays] = useState<number[]>(() => schedule?.daysOfWeek ?? [])
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
 
-  // Both notes describe the last save attempt, so both go the moment a field moves. Without the
-  // error clear, "Pick at least one day." survived picking a day — the same staleness #46 named
-  // and the program builder's status control had.
-  function edited() {
-    setSaved(false)
-    setError(null)
-  }
+  const block = useBlockMessage('schedule-message')
+
+  // Whatever is in the slot describes the last save attempt, so it goes the moment a field
+  // moves. Without this, "Pick at least one day." survived picking a day — the same staleness
+  // #46 named and the program builder's status control had.
+  const edited = block.clear
 
   function toggleDay(day: number) {
     edited()
@@ -300,17 +298,16 @@ function ReminderSchedule({
     // server's messages ("send_time is required", "days_of_week must be non-empty") are written
     // in wire-field names that mean nothing to someone looking at a form.
     if (sendTime.trim() === '') {
-      setError('Pick a time to send the reminder.')
+      block.fail('Pick a time to send the reminder.')
       return
     }
     if (days.length === 0) {
-      setError('Pick at least one day.')
+      block.fail('Pick at least one day.')
       return
     }
 
     setSaving(true)
-    setError(null)
-    setSaved(false)
+    block.clear()
 
     // The seconds are the whole point of toApiTime. Sending "07:30" is a 400 from both routes.
     const body = { sendTime: toApiTime(sendTime), daysOfWeek: [...days].sort((a, b) => a - b), enabled }
@@ -330,12 +327,24 @@ function ReminderSchedule({
       setSendTime(toInputTime(result.sendTime))
       setDays(result.daysOfWeek ?? [])
       setEnabled(result.enabled ?? enabled)
-      setSaved(true)
+      // Says which days the client will actually be emailed on, which is the whole outcome of
+      // the form and the reason this confirmation carries more than "Saved."
+      //
+      // Built from the response rather than from the form state, for the same reason the fields
+      // are re-seeded from it: #29 normalizes days_of_week, so the server's copy is the one that
+      // describes what will actually be sent.
+      block.done(
+        `Saved. ${
+          (result.enabled ?? enabled)
+            ? `Sending ${describeDays(result.daysOfWeek ?? [])}.`
+            : 'Reminders are off.'
+        }`,
+      )
     } catch (caught) {
       // 'schedule' rather than 'client': this form writes to the schedule, so a 404 here means
       // the schedule vanished (deleted from another tab), not that the client did. The roster
       // read above is what would catch a missing client.
-      setError(messageFor(caught, 'schedule'))
+      block.fail(messageFor(caught, 'schedule'))
     } finally {
       setSaving(false)
     }
@@ -405,12 +414,12 @@ function ReminderSchedule({
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
             {DAY_ABBREVIATIONS.map((label, day) => (
               <label
-                className="flex min-h-[var(--tap-min)] cursor-pointer items-center gap-2 text-sm text-ink"
+                className="flex min-h-[var(--tap-min)] items-center gap-2 text-sm text-ink"
                 key={label}
               >
                 <input
                   checked={days.includes(day)}
-                  className="size-5 cursor-pointer"
+                  className="size-5"
                   name="daysOfWeek"
                   onChange={() => toggleDay(day)}
                   type="checkbox"
@@ -422,10 +431,10 @@ function ReminderSchedule({
           </div>
         </fieldset>
 
-        <label className="flex min-h-[var(--tap-min)] cursor-pointer items-center gap-2 text-sm font-semibold text-ink">
+        <label className="flex min-h-[var(--tap-min)] items-center gap-2 text-sm font-semibold text-ink">
           <input
             checked={enabled}
-            className="size-5 cursor-pointer"
+            className="size-5"
             name="enabled"
             onChange={(event) => {
               setEnabled(event.target.checked)
@@ -436,15 +445,21 @@ function ReminderSchedule({
           Send these reminders
         </label>
 
-        {error !== null && <TrainerMessage tone="failure">{error}</TrainerMessage>}
-
-        {saved && error === null && (
-          <TrainerMessage tone="confirmation">
-            Saved. {enabled ? `Sending ${describeDays(days)}.` : 'Reminders are off.'}
-          </TrainerMessage>
+        {block.message !== null && (
+          <Message id={block.id} tone={block.message.tone}>
+            {block.message.body}
+          </Message>
         )}
 
-        <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
+        {/* #138: both messages were unwired. The confirmation matters as much as the failure
+            here, because it is the one that says which days the client will actually be
+            emailed on — the whole outcome of the form, announced once and then unreachable. */}
+        <button
+          aria-describedby={block.describedBy}
+          className={`justify-self-start ${trainerPrimary}`}
+          disabled={saving}
+          type="submit"
+        >
           {saving ? 'Saving' : schedule === null ? 'Create schedule' : 'Save schedule'}
         </button>
       </form>

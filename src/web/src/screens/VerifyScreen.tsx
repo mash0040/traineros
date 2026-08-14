@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ApiError, checkMagicLink, consumeMagicLink } from '../lib/api'
+import { Message } from './Message'
 
 // 'unreachable' is not the same as 'invalid' and the difference matters: one means the token
 // is spent, the other means we could not ask. Collapsing them tells a client with flaky gym
@@ -78,7 +79,7 @@ export function VerifyScreen() {
     <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
       <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
 
-      <div className="mx-auto grid w-full max-w-[26rem] content-end gap-10 sm:content-center">
+      <div className="mx-auto grid w-full max-w-lg content-end gap-10 sm:content-center">
         {status === 'checking' ? (
           // No spinner: the check is one request against a local API and a spinner for
           // 80ms is noise. Plain text, announced for screen readers.
@@ -126,13 +127,18 @@ export function VerifyScreen() {
               <h1 className="text-xl font-semibold text-ink-bold">Welcome back</h1>
               <p className="text-base text-muted">Your link checks out. One tap to finish.</p>
               {error !== null && (
-                <p className="text-sm text-danger" role="alert">
+                <Message id="verify-error" tone="failure">
                   {error}
-                </p>
+                </Message>
               )}
             </div>
 
+            {/* aria-describedby, per DESIGN.md §Messages (#138): role="alert" announces that
+                something went wrong, and nothing connected it to the control it was about.
+                Someone who tabs to this button after the announcement has passed hears
+                "Continue" and no reason it did not work the first time. */}
             <button
+              aria-describedby={error === null ? undefined : 'verify-error'}
               className="min-h-[var(--tap-min)] rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
               type="button"
               onClick={onContinue}

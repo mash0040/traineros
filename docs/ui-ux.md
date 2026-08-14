@@ -39,13 +39,16 @@ Binding on the logging screen in full. The first constraint — **tap targets an
 (Resolved in #43: "current day" was stale wording — nothing in the data model records which day is current, and #38 settled the same question for reminder emails by naming the program rather than a day. Today shows a day picker (rendered only when the program has more than one day), defaulting to the first by position, with Start workout carrying the chosen program_day_id. The client picks; the app doesn't guess. The sticky CTA is hidden when the selected day has no prescriptions.)
 (Also #48: a "History" link sits on the Today screen's header line. ui-ux.md specifies no navigation chrome, which was about not building a tab bar for five screens rather than leaving screens unreachable — one link is the minimum honest entry point. Its visual treatment is deliberately quiet; revisit if it needs to stand out more.)
 
-### Trainer (4 screens)
+### Trainer (5 screens)
 | Screen | Content |
 |---|---|
 | Clients | list + add/deactivate; per-client: last session date (the "who's slacking" signal — the v1 stand-in for the deferred digest) |
 | Client detail | their program (edit entry point), their history, reminder schedule (time, days, enabled) |
+| New program | title, for a client; creates the draft the builder then fills. `/programs/new?client=` |
 | Program builder | days → prescriptions; add exercise from library; drag-or-buttons reorder (buttons acceptable in v1; drag is polish) |
 | Exercise library | list/add/edit: name, video URL, cues; soft-delete |
+
+(New program is added to this table by #138, which found it built and routed but absent from the inventory. It is not new scope — #53 built it as the "Build a program" entry point this table's Client detail row already implies, and a create step has to exist somewhere for the builder to have a draft to open. What was wrong was the inventory, which had been describing four trainer screens while five shipped. Recorded rather than scope-reviewed for that reason.)
 
 (Recorded in #50: trainer screens sit at root-level paths, not behind a /trainer prefix — a session is a trainer's or a client's and never both, so the path sets can't collide. RequireTrainerSession mirrors RequireClientSession; "trainer" is inferred from a valid cookie plus a 404 from /api/me, since no endpoint returns trainer identity. Desktop-first means a wider container (max-w-5xl vs the client screens' max-w-lg) and a relaxed --tap-min per DESIGN.md's carve-out; everything else in DESIGN.md still applies. Only Clients and Exercise library are top-level destinations — client detail hangs off a client, the program builder off that — so the nav bar renders only once there is more than one place to go.
 
@@ -58,7 +61,9 @@ The "desktop-first" half of that note is withdrawn by #135; the container is sti
 
 (Also #114: trainer controls carry hover and cursor affordances via a shared vocabulary module; focus remains the app-wide :focus-visible outline. Tailwind v4's preflight dropped v3's button cursor: pointer, which was much of what made buttons read as non-interactive. No transitions — adding them is a DESIGN.md decision, not a component tweak.)
 
-Nine screens total. If a tenth appears during build, it goes through PRODUCT.md scope review, not straight into the sprint.
+Ten screens total (five client, five trainer). If an eleventh appears during build, it goes through PRODUCT.md scope review, not straight into the sprint.
+
+(The count read "nine" until #138. The tenth was New program, above — shipped in #53 and never written down, which is how a screen ends up outside the review this line exists to trigger. The lesson is the ordering: the inventory is what makes a new screen visible as new, so it gets updated in the ticket that builds one, not in an audit two dozen tickets later.)
 
 ## Stack & visual decisions
 

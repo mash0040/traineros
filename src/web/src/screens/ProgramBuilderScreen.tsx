@@ -21,7 +21,8 @@ import {
   updateProgram,
 } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
-import { TrainerMessage } from './TrainerMessage'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 import { TrainerShell } from './TrainerShell'
 import {
   trainerDanger,
@@ -70,6 +71,10 @@ export function ProgramBuilderScreen() {
   const [program, setProgram] = useState<ProgramDetailResponse | null>(null)
   const [library, setLibrary] = useState<ExerciseResponse[]>([])
   const [attempt, setAttempt] = useState(0)
+
+  // The Days section's own block. A deleted day takes its card and every slot in it off the
+  // screen, so the section that owns the list is the nearest container that outlives the write.
+  const section = useBlockMessage('days-message')
 
   useEffect(() => {
     let cancelled = false
@@ -180,13 +185,26 @@ export function ProgramBuilderScreen() {
         status={program.status ?? 'draft'}
       />
 
-      <section className="mt-10">
+      {/* grid gap-6, so the confirmation below spaces itself from the container like every other
+          message rather than carrying an mt-* of its own (DESIGN.md §Messages: a margin on a
+          message is the smell that the placement bug has come back). The three children that
+          were spacing themselves gave their margins up to it. */}
+      <section className="mt-10 grid gap-6">
         <h2 className="text-lg font-semibold text-ink-bold">Days</h2>
 
+        {/* A deleted day takes its own card, and every message slot in it, off the screen — so
+            without this the most destructive write in the builder is the one write with no
+            acknowledgement at all. */}
+        {section.message !== null && (
+          <Message id={section.id} tone={section.message.tone}>
+            {section.message.body}
+          </Message>
+        )}
+
         {days.length === 0 ? (
-          <p className="mt-2 text-base text-muted">No days yet. Add the first one below.</p>
+          <p className="text-base text-muted">No days yet. Add the first one below.</p>
         ) : (
-          <ul className="mt-4 grid gap-6">
+          <ul className="grid gap-6">
             {days.map((day) => (
               <Day
                 day={day}
@@ -195,14 +213,22 @@ export function ProgramBuilderScreen() {
                 onChanged={(next) =>
                   replaceDays(days.map((candidate) => (candidate.id === next.id ? next : candidate)))
                 }
-                onDeleted={() => replaceDays(days.filter((candidate) => candidate.id !== day.id))}
+                onDeleted={(title) => {
+                  section.done(
+                    `${title} deleted. Workouts your client already logged against it stay in their history.`,
+                  )
+                  replaceDays(days.filter((candidate) => candidate.id !== day.id))
+                }}
               />
             ))}
           </ul>
         )}
 
         <AddDay
-          onAdded={(created) =>
+          onAdded={(created) => {
+            // Adding a day is an action in this section, so it takes the slot from the deletion
+            // receipt that was in it.
+            section.clear()
             replaceDays([
               ...days,
               // The create response is a ProgramDayResponse, which has no prescriptions array
@@ -210,7 +236,7 @@ export function ProgramBuilderScreen() {
               // other rather than as a special case until the next reload.
               { id: created.id, title: created.title, position: created.position, prescriptions: [] },
             ])
-          }
+          }}
           programId={programId}
         />
       </section>
@@ -236,34 +262,33 @@ function ProgramStatus({
   const [saving, setSaving] = useState<string | null>(null)
 
   /**
-   * The last transition asked for and how it went — not a rendered message.
+   * This block's one message.
    *
-   * #46's lesson, which this control had shipped a fresh copy of. A captured error string
-   * outlives the condition it describes: the 409 named a conflict with some other program, and
-   * then sat on screen through day edits, renames, and deletes until a reload, because nothing
-   * else on this screen had any reason to touch it. Worse, the "never mind" gesture — clicking
-   * the status the program is already in — hit an early return placed above the clear, so the
-   * one action a trainer would take to dismiss it was the one action that could not.
+   * It used to be an `{ status, message, committed }` record with two values derived off it,
+   * which was #46's lesson applied by hand to one control: a captured 409 outlives the condition
+   * it describes, so the record tracked *which* transition each note was about and the render
+   * checked that against the current status before showing anything.
+   *
+   * The slot subsumes all of it (#141). Every path through `choose` writes the slot, so a note
+   * cannot survive the next thing the trainer does — which is what the record's bookkeeping was
+   * reconstructing. The one clause it also enforced, "the conflict goes if the program reaches
+   * that status by any route", is not lost: in v1 the only thing that moves this program's
+   * status is this function, and it clears the slot on the way in.
    */
-  const [attempt, setAttempt] = useState<{ status: string; message: string | null } | null>(null)
-
-  // Derived every render. Two parts, and both have to hold: a transition was refused, and the
-  // program is still not in the status that was refused. So the message goes when the trainer
-  // asks for something else, and it goes on its own if the program reaches that status by any
-  // route — including a retry that succeeds because they archived the other program in the
-  // meantime, which is exactly what the message told them to do.
-  const conflict =
-    attempt !== null && attempt.message !== null && attempt.status !== status ? attempt.message : null
+  const block = useBlockMessage('program-status-message')
 
   async function choose(next: string) {
     if (saving !== null) {
       return
     }
 
-    // Recorded before the no-op check rather than after it. Clicking the current status is how
-    // someone dismisses a message about a transition they have thought better of, and under
-    // the old order that click returned early and left the message standing.
-    setAttempt({ status: next, message: null })
+    // Cleared before the no-op check rather than after it. Clicking the current status is how
+    // someone dismisses a message about a transition they have thought better of, and under the
+    // old order that click returned early and left the message standing.
+    //
+    // It is also why a dismissal must not land in the slot as a confirmation: nothing was
+    // written, and "Draft." after a click that did nothing is a receipt for a non-event.
+    block.clear()
     if (next === status) {
       return
     }
@@ -271,19 +296,43 @@ function ProgramStatus({
     setSaving(next)
     try {
       onChanged(await updateProgram(programId, { status: next }))
+      // Names the consequence rather than the state, because the state is already on the button:
+      // what a trainer cannot see from here is that activating is what puts the program in front
+      // of the client.
+      block.done(
+        next === 'active'
+          ? 'Active. Your client sees this program on their Today screen now.'
+          : next === 'archived'
+            ? 'Archived. Your client no longer sees this program.'
+            : 'Back to draft. Your client no longer sees this program.',
+      )
     } catch (caught) {
       // This used to concatenate an instruction onto the server's own sentence, which meant the
       // trainer read one sentence written for them and one written for a developer, joined. The
       // whole message for program_active_conflict now lives in the copy map, so rewording the
       // API's string cannot change what a trainer sees here.
-      setAttempt({ status: next, message: messageFor(caught, 'program') })
+      block.fail(messageFor(caught, 'program'))
     } finally {
       setSaving(null)
     }
   }
 
   return (
-    <div className="mt-4">
+    <div className="mt-4 grid justify-items-start gap-2">
+      {/* Before the group, per DESIGN.md §Messages (#138). A rejected transition used to render
+          under the three buttons with an mt-2; the grid gap above now spaces it and the panel
+          carries no margin of its own. */}
+      {/* The transition that worked said nothing at all before #140. The inverted button is a
+          statement about which status the program is in, not about a write having landed — it
+          looks identical whether the trainer just moved the program or loaded the page with it
+          already there. Activating a client's program is the most consequential write on this
+          screen and it was the quietest. */}
+      {block.message !== null && (
+        <Message id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
       {/* flex-wrap: three 44px buttons at ~80px each plus gaps is most of a 390px viewport, and
           "Archived" saving reads "Saving", which is wider. It wraps rather than overflows. */}
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Program status">
@@ -303,6 +352,7 @@ function ProgramStatus({
           const current = candidate === status
           return (
             <button
+              aria-describedby={block.describedBy}
               aria-pressed={current}
               className={current ? trainerSelected : trainerSecondary}
               disabled={saving !== null}
@@ -315,12 +365,6 @@ function ProgramStatus({
           )
         })}
       </div>
-
-      {conflict !== null && (
-        <TrainerMessage className="mt-2" tone="failure">
-          {conflict}
-        </TrainerMessage>
-      )}
     </div>
   )
 }
@@ -334,15 +378,28 @@ function Day({
   day: DayView
   library: ExerciseResponse[]
   onChanged: (day: DayView) => void
-  onDeleted: () => void
+  onDeleted: (title: string) => void
 }) {
   const [title, setTitle] = useState(day.title ?? '')
   const [saving, setSaving] = useState(false)
-  const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [reordering, setReordering] = useState(false)
-  const [reorderError, setReorderError] = useState<string | null>(null)
+
+  /**
+   * Three blocks, not one, and the boundary is DESIGN.md's: a block is a trigger and the slot
+   * immediately before it. This card holds three triggers separated by a whole prescription
+   * list, and one slot for the card could not be "before" all of them — a rename failure would
+   * render at the foot of the day, past the exercises, which is the placement defect #138 spent
+   * a ticket removing.
+   *
+   * Per-day ids, because a program renders one card per day (#138).
+   */
+  const rename = useBlockMessage(`day-rename-message-${day.id ?? ''}`)
+  // The list's slot. It carries the reorder failure — the arrows that produce it are inside the
+  // list — and the confirmation for a removed prescription, which is held here rather than by
+  // the row because the row is gone by the time there is anything to confirm.
+  const list = useBlockMessage(`day-list-message-${day.id ?? ''}`)
+  const deletion = useBlockMessage(`day-delete-message-${day.id ?? ''}`)
 
   const prescriptions = day.prescriptions ?? []
 
@@ -380,7 +437,9 @@ function Day({
     }
 
     setReordering(true)
-    setReorderError(null)
+    // Reordering is an action in this block, so it takes the slot — which is what clears a
+    // "Bench Press removed from this day" receipt the trainer has moved on from.
+    list.clear()
     try {
       await reorderDayExercises(day.id, orderedIds)
       // 204, so the new positions are applied here. Renumbered 1..N to match what the server
@@ -392,13 +451,13 @@ function Day({
     } catch (caught) {
       // 'day': the reorder is a write to the day, so a 404 means the day is gone rather than
       // any one exercise. A rejected id inside the list comes back as its own code.
-      setReorderError(messageFor(caught, 'day'))
+      list.fail(messageFor(caught, 'day'))
     } finally {
       setReordering(false)
     }
   }
 
-  async function rename(event: React.FormEvent<HTMLFormElement>) {
+  async function saveName(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (saving || day.id === undefined) {
       return
@@ -407,17 +466,18 @@ function Day({
     // Mirrors #28's own check. Its message says "title cannot be blank", which is true and
     // says nothing about which of several days it means.
     if (title.trim() === '') {
-      setError('A day needs a name.')
+      rename.fail('A day needs a name.')
       return
     }
 
     setSaving(true)
-    setError(null)
+    rename.clear()
     try {
       const updated = await updateDay(day.id, { title: title.trim() })
       onChanged({ ...day, title: updated.title })
+      rename.done('Name saved.')
     } catch (caught) {
-      setError(messageFor(caught, 'day'))
+      rename.fail(messageFor(caught, 'day'))
     } finally {
       setSaving(false)
     }
@@ -429,12 +489,15 @@ function Day({
     }
 
     setDeleting(true)
-    setError(null)
     try {
       await deleteDay(day.id)
-      onDeleted()
+      onDeleted(day.title ?? 'That day')
     } catch (caught) {
-      setError(messageFor(caught, 'day'))
+      // Its own block, not the rename form's. A failed delete used to be written into the rename
+      // error, which renders at the top of the card — so the one message about a control at the
+      // bottom of the day appeared a whole card away from it, which is the exact defect
+      // DESIGN.md §Messages placement was written against.
+      deletion.fail(messageFor(caught, 'day'))
       setDeleting(false)
     }
   }
@@ -443,8 +506,10 @@ function Day({
     // p-4 below sm:. This card nests another (the prescription rows), so the two paddings
     // compound: at p-6 outside and p-4 inside, a 390px viewport was down to ~246px of usable
     // width by the time it reached a set/reps field.
-    <li className="rounded-md border border-edge p-4 sm:p-6">
-      <form className="flex flex-wrap items-end gap-3" noValidate onSubmit={rename}>
+    // grid gap-6, so the four blocks inside space themselves from one number instead of each
+    // carrying an mt-* — which is what let the two messages here drift to mt-2 (#138).
+    <li className="grid gap-6 rounded-md border border-edge p-4 sm:p-6">
+      <form className="flex flex-wrap items-end gap-3" noValidate onSubmit={saveName}>
         <div className="grid gap-2">
           <label className="text-sm font-semibold text-ink" htmlFor={`day-title-${day.id}`}>
             Day name
@@ -458,26 +523,50 @@ function Day({
             name="title"
             onChange={(event) => {
               setTitle(event.target.value)
-              setError(null)
+              // Whatever is in this block's slot describes the last save, so it goes the moment
+              // the field moves — at which point it describes something that is no longer on
+              // screen. Same rule the prescription rows apply, now the same line of code.
+              rename.clear()
             }}
             value={title}
           />
         </div>
+
+        {/* w-full so the panel takes its own line in this flex-wrap row, which puts it between
+            the field and the submit — before the trigger, inside the trigger's container, per
+            DESIGN.md §Messages (#138). It used to render after the whole form. */}
+        {rename.message !== null && (
+          <Message className="w-full" id={rename.id} tone={rename.message.tone}>
+            {rename.message.body}
+          </Message>
+        )}
+
         {/* The submit of this form, so it takes the accent on the same rule the prescription
             rows and the two add-forms already follow: amber commits the form it sits in. It was
             the odd one out, rendering identically to the reorder arrows a few pixels below. */}
-        <button className={trainerPrimary} disabled={saving} type="submit">
+        <button
+          aria-describedby={rename.describedBy}
+          className={trainerPrimary}
+          disabled={saving}
+          type="submit"
+        >
           {saving ? 'Saving' : 'Save name'}
         </button>
       </form>
 
-      {error !== null && (
-        <TrainerMessage className="mt-2" tone="failure">
-          {error}
-        </TrainerMessage>
+      {/* The list's slot: a reorder failure, or the receipt for a prescription that was removed.
+          Before the list, because both of the controls that write here — the arrows, and each
+          row's Delete — are inside it. The reorder failure used to render after the list, which
+          on a day of five exercises put it several hundred pixels below the arrow that caused
+          it; the removal receipt has nowhere else to go at all, since the row it is about is
+          gone. */}
+      {list.message !== null && (
+        <Message id={list.id} tone={list.message.tone}>
+          {list.message.body}
+        </Message>
       )}
 
-      <ul className="mt-6 grid gap-4">
+      <ul className="grid gap-4">
         {prescriptions.length === 0 ? (
           <p className="text-base text-muted">Nothing prescribed on this day yet.</p>
         ) : (
@@ -494,12 +583,15 @@ function Day({
                   ),
                 })
               }
-              onDeleted={() =>
+              onDeleted={() => {
+                list.done(
+                  `${prescription.exercise?.name ?? 'That exercise'} removed from this day. Sets your client already logged against it stay in their history.`,
+                )
                 onChanged({
                   ...day,
                   prescriptions: prescriptions.filter((candidate) => candidate.id !== prescription.id),
                 })
-              }
+              }}
               onMoveDown={() => void move(index, 1)}
               onMoveUp={() => void move(index, -1)}
               prescription={prescription}
@@ -509,16 +601,13 @@ function Day({
         )}
       </ul>
 
-      {reorderError !== null && (
-        <TrainerMessage className="mt-2" tone="failure">
-          {reorderError}
-        </TrainerMessage>
-      )}
-
       <AddPrescription
         dayId={day.id ?? ''}
         library={library}
-        onAdded={(created) =>
+        onAdded={(created) => {
+          // Adding is an action in the list block, so it takes the slot from whatever receipt
+          // was there. The add form's own confirmation is its block's, one slot down.
+          list.clear()
           onChanged({
             ...day,
             // Appended, because #28 assigns the new prescription the position after the current
@@ -526,38 +615,57 @@ function Day({
             // next read.
             prescriptions: [...prescriptions, created],
           })
-        }
+        }}
       />
 
-      <div className="mt-6 border-t border-edge pt-4">
-        {confirming ? (
-          <div className="grid justify-items-start gap-2" role="group">
-            {/* #17: the delete cascades to this day's prescriptions, but logged history is
-                ON DELETE SET NULL on both workout_sessions.program_day_id and
-                logged_sets.program_day_exercise_id. A trainer hesitating over this button is
-                usually worried about erasing what the client already did, and the honest answer
-                is that they cannot. Saying so is the difference between a confident edit and a
-                program nobody dares tidy up. */}
-            <p className="text-sm text-ink-bold">
-              Delete {day.title}? Its exercises go with it.
-            </p>
-            <p className="text-sm text-muted">
-              Workouts your client already logged stay in their history. They just stop pointing
-              at this day.
-            </p>
-            <div className="flex gap-2">
-              <button className={trainerDanger} disabled={deleting} onClick={() => void remove()} type="button">
-                {deleting ? 'Deleting' : 'Delete day'}
-              </button>
-              {/* Bordered, matching the prescription row's "Keep it" below. These two prompts
-                  used to disagree with each other: one dismissal was amber, the other was not. */}
-              <button className={trainerSecondary} onClick={() => setConfirming(false)} type="button">
-                Cancel
-              </button>
-            </div>
+      <div className="grid justify-items-start gap-2 border-t border-edge pt-4">
+        {/* One slot for this cluster: the question, or the refusal that replaced it. The two
+            used to render stacked, which is #141's shape in the place with the most to lose. */}
+        {deletion.message !== null && (
+          <Message id={deletion.id} tone={deletion.message.tone}>
+            {deletion.message.body}
+          </Message>
+        )}
+
+        {deletion.prompting ? (
+          <div aria-labelledby={deletion.id} className="flex flex-wrap gap-2" role="group">
+            <button
+              aria-describedby={deletion.id}
+              className={trainerDanger}
+              disabled={deleting}
+              onClick={() => void remove()}
+              type="button"
+            >
+              {deleting ? 'Deleting' : 'Delete day'}
+            </button>
+            {/* Bordered, matching the prescription row's "Keep it". These two prompts used to
+                disagree with each other: one dismissal was amber, the other was not. */}
+            <button className={trainerSecondary} onClick={deletion.clear} type="button">
+              Cancel
+            </button>
           </div>
         ) : (
-          <button className={trainerDanger} onClick={() => setConfirming(true)} type="button">
+          /* #17: the delete cascades to this day's prescriptions, but logged history is
+             ON DELETE SET NULL on both workout_sessions.program_day_id and
+             logged_sets.program_day_exercise_id. A trainer hesitating over this button is
+             usually worried about erasing what the client already did, and the honest answer is
+             that they cannot. Saying so is the difference between a confident edit and a
+             program nobody dares tidy up. */
+          <button
+            className={trainerDanger}
+            onClick={() =>
+              deletion.ask(
+                <>
+                  <p>Delete {day.title}? Its exercises go with it.</p>
+                  <p className="font-normal">
+                    Workouts your client already logged stay in their history. They just stop
+                    pointing at this day.
+                  </p>
+                </>,
+              )
+            }
+            type="button"
+          >
             Delete {day.title}
           </button>
         )}
@@ -600,20 +708,24 @@ function Prescription({
   const [note, setNote] = useState(prescription.note ?? '')
 
   const [saving, setSaving] = useState(false)
-  const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
 
   const name = prescription.exercise?.name ?? 'Exercise'
 
-  // Both notes describe the last save, so both go the moment a field moves — at which point
-  // they are describing something that is no longer what is on screen. Same rule the log
-  // screen applies to its set rows, and the same one the status control above needed.
-  function edited() {
-    setSaved(false)
-    setError(null)
-  }
+  // The block this row is. #141: `confirming` and `saved` used to be two booleans with nothing
+  // holding them apart, which is how a delete prompt and a "Saved." ended up stacked — the
+  // trainer opened the prompt, pressed Save instead of answering it, and the row said both
+  // things at once. There is one slot now and the prompt lives in it, so arming the row and
+  // confirming a save are the same piece of state and cannot both be true.
+  //
+  // Per-row id, because a day renders one of these per prescription and a shared one would
+  // point every row's controls at whichever rendered first (#138).
+  const block = useBlockMessage(`prescription-message-${prescription.id ?? name}`)
+
+  // Every note in this slot describes the last thing that happened here, so all of them go the
+  // moment a field moves. That now includes an unanswered delete prompt: editing the row is an
+  // action, and the question is moot once the trainer has done something else with it.
+  const edited = block.clear
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -623,25 +735,24 @@ function Prescription({
 
     const sets = Number.parseInt(targetSets.trim(), 10)
     if (!Number.isInteger(sets) || sets <= 0) {
-      setError('Sets must be a whole number above zero.')
+      block.fail('Sets must be a whole number above zero.')
       return
     }
 
     if (targetReps.trim() === '') {
-      setError('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
+      block.fail('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
       return
     }
 
     const rest = restSeconds.trim()
     const restValue = rest === '' ? null : Number.parseInt(rest, 10)
     if (restValue !== null && (!Number.isInteger(restValue) || restValue <= 0)) {
-      setError('Rest must be a whole number of seconds, or empty.')
+      block.fail('Rest must be a whole number of seconds, or empty.')
       return
     }
 
     setSaving(true)
-    setError(null)
-    setSaved(false)
+    block.clear()
     try {
       const updated = await updatePrescription(prescription.id, {
         targetSets: sets,
@@ -660,9 +771,9 @@ function Prescription({
         restSeconds: updated.restSeconds,
         note: updated.note,
       })
-      setSaved(true)
+      block.done('Saved.')
     } catch (caught) {
-      setError(messageFor(caught, 'prescription'))
+      block.fail(messageFor(caught, 'prescription'))
     } finally {
       setSaving(false)
     }
@@ -674,12 +785,17 @@ function Prescription({
     }
 
     setDeleting(true)
-    setError(null)
     try {
       await deletePrescription(prescription.id)
+      // The row unmounts, so the confirmation is the day's (see Day's `list` block). Nothing is
+      // written into this slot on the way out — there would be nothing left to render it.
       onDeleted()
     } catch (caught) {
-      setError(messageFor(caught, 'prescription'))
+      // Replaces the prompt rather than sitting under it. The block disarms with it: a
+      // destructive control that stays armed through a failure is one stray tap from firing on
+      // a state the trainer has stopped looking at, and re-arming is the same two taps it was
+      // the first time.
+      block.fail(messageFor(caught, 'prescription'))
       setDeleting(false)
     }
   }
@@ -810,45 +926,80 @@ function Prescription({
           />
         </Field>
 
-        {error !== null && (
-          <TrainerMessage tone="failure">{error}</TrainerMessage>
-        )}
-        {saved && error === null && (
-          <TrainerMessage tone="confirmation">Saved.</TrainerMessage>
+        {/* One slot, one message. The failure, the confirmation and the delete prompt were three
+            renders guarded by three booleans, and #141 is what that cost: "Saved." on top of a
+            still-open "Delete Back Squat from this day?". There is nothing to guard now. */}
+        {block.message !== null && (
+          <Message id={block.id} tone={block.message.tone}>
+            {block.message.body}
+          </Message>
         )}
 
-        <div className="flex gap-2">
-          <button className={trainerPrimary} disabled={saving} type="submit">
+        {/* flex-wrap, found by the 390px pass. Armed, this row is [Save][Delete {name}][Keep it],
+            and the middle label carries a trainer-supplied exercise name. This card is nested
+            inside the day's, so both p-4 paddings come off the viewport: 390px leaves about
+            278px here, and those three buttons are about 298px with "Back Squat" in the middle
+            — a shorter name than plenty of real ones. It overflowed rather than wrapping,
+            because nothing here ever narrowed it. Same fix and same cause as #135's `shrink-0`
+            finding on the library rows. */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            aria-describedby={block.describedBy}
+            className={trainerPrimary}
+            disabled={saving}
+            type="submit"
+          >
             {saving ? 'Saving' : 'Save'}
           </button>
 
-          {confirming ? (
+          {/* Read off the slot, not off a boolean beside it. This is the mechanism: the row is
+              armed exactly while the question is the thing in the slot, so a save that puts a
+              confirmation there disarms the row as it answers it. */}
+          {block.prompting ? (
             <>
-              <button className={trainerDanger} disabled={deleting} onClick={() => void remove()} type="button">
+              <button
+                aria-describedby={block.id}
+                className={trainerDanger}
+                disabled={deleting}
+                onClick={() => void remove()}
+                type="button"
+              >
                 {deleting ? 'Deleting' : `Delete ${name}`}
               </button>
-              <button className={trainerSecondary} onClick={() => setConfirming(false)} type="button">
+              {/* Dismissal writes nothing into the slot: cancelling a question needs no receipt,
+                  and "Cancelled." would be a confirmation of not having done anything. */}
+              <button className={trainerSecondary} onClick={block.clear} type="button">
                 Keep it
               </button>
             </>
           ) : (
             /* --danger, like the day delete above it. This one was bordered neutral, so the
                control that removes an exercise from a client's program looked exactly like the
-               Save beside it minus the amber. */
-            <button className={trainerDanger} onClick={() => setConfirming(true)} type="button">
+               Save beside it minus the amber.
+
+               The prompt, which did not exist as a question at all before #140: this row asked
+               for a delete by swapping one button for two and putting the reassurance *after*
+               the button row as muted body text. Same reassurance as the day delete, and the
+               same reason (#17): the client's logged sets are ON DELETE SET NULL against this
+               row, so they survive keyed by the exercise itself. */
+            <button
+              className={trainerDanger}
+              onClick={() =>
+                block.ask(
+                  <>
+                    <p>Delete {name} from this day?</p>
+                    <p className="font-normal">
+                      Sets your client already logged against {name} stay in their history.
+                    </p>
+                  </>,
+                )
+              }
+              type="button"
+            >
               Delete
             </button>
           )}
         </div>
-
-        {/* Same reassurance as the day delete, and the same reason (#17): the client's logged
-            sets are ON DELETE SET NULL against this row, so they survive keyed by the exercise
-            itself. Removing a prescription edits the plan, never the record of what happened. */}
-        {confirming && (
-          <p className="text-sm text-muted">
-            Sets your client already logged against {name} stay in their history.
-          </p>
-        )}
       </form>
     </li>
   )
@@ -877,11 +1028,10 @@ function AddPrescription({
   const [targetSets, setTargetSets] = useState('3')
   const [targetReps, setTargetReps] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  function edited() {
-    setError(null)
-  }
+  const block = useBlockMessage(`add-exercise-message-${dayId}`)
+
+  const edited = block.clear
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -890,23 +1040,23 @@ function AddPrescription({
     }
 
     if (exerciseId === '') {
-      setError('Pick an exercise.')
+      block.fail('Pick an exercise.')
       return
     }
 
     const sets = Number.parseInt(targetSets.trim(), 10)
     if (!Number.isInteger(sets) || sets <= 0) {
-      setError('Sets must be a whole number above zero.')
+      block.fail('Sets must be a whole number above zero.')
       return
     }
 
     if (targetReps.trim() === '') {
-      setError('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
+      block.fail('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
       return
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       const created = await createPrescription(dayId, {
         exerciseId,
@@ -935,6 +1085,7 @@ function AddPrescription({
         },
       })
 
+      block.done(`${exercise?.name ?? 'Exercise'} added to this day.`)
       setExerciseId('')
       setTargetReps('')
       setTargetSets('3')
@@ -944,7 +1095,7 @@ function AddPrescription({
       // case the copy map exists for. The server can only say "Unknown exercise_id." because it
       // has no idea a stale picker offered it; the SPA drew that list, so the SPA is the layer
       // that can say the library moved on and a reload will show it.
-      setError(messageFor(caught, 'prescription'))
+      block.fail(messageFor(caught, 'prescription'))
     } finally {
       setSaving(false)
     }
@@ -1037,15 +1188,25 @@ function AddPrescription({
         />
       </div>
 
-      <button className={trainerPrimary} disabled={saving} type="submit">
+      {/* Before the trigger, which it was not. This form and AddDay below were the last two
+          sites still rendering their message *after* the submit — #138 moved the other eighteen
+          and these two were missed because in a `flex-wrap` row "after" and "below" look
+          identical until you read the DOM. `w-full` is what puts the panel on its own line, so
+          it lands between the fields and the button rather than beside them. */}
+      {block.message !== null && (
+        <Message className="w-full" id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
+      <button
+        aria-describedby={block.describedBy}
+        className={trainerPrimary}
+        disabled={saving}
+        type="submit"
+      >
         {saving ? 'Adding' : 'Add exercise'}
       </button>
-
-      {error !== null && (
-        <TrainerMessage className="w-full" tone="failure">
-          {error}
-        </TrainerMessage>
-      )}
     </form>
   )
 }
@@ -1059,7 +1220,8 @@ function AddDay({
 }) {
   const [title, setTitle] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+
+  const block = useBlockMessage('add-day-message')
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -1068,25 +1230,29 @@ function AddDay({
     }
 
     if (title.trim() === '') {
-      setError('A day needs a name.')
+      block.fail('A day needs a name.')
       return
     }
 
+    const name = title.trim()
+
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
-      onAdded(await createDay(programId, { title: title.trim() }))
+      onAdded(await createDay(programId, { title: name }))
       setTitle('')
+      block.done(`${name} added.`)
     } catch (caught) {
       // 'program': the day does not exist yet, so a 404 is about the program being written to.
-      setError(messageFor(caught, 'program'))
+      block.fail(messageFor(caught, 'program'))
     } finally {
       setSaving(false)
     }
   }
 
+  // No mt-6: the Days section is a grid now and spaces this like everything else in it.
   return (
-    <form className="mt-6 flex flex-wrap items-end gap-3" noValidate onSubmit={onSubmit}>
+    <form className="flex flex-wrap items-end gap-3" noValidate onSubmit={onSubmit}>
       <div className="grid gap-2">
         <label className="text-sm font-semibold text-ink" htmlFor="new-day-title">
           Add a day
@@ -1097,20 +1263,31 @@ function AddDay({
           name="title"
           onChange={(event) => {
             setTitle(event.target.value)
-            setError(null)
+            block.clear()
           }}
           placeholder="Lower"
           value={title}
         />
       </div>
-      <button className={trainerPrimary} disabled={saving} type="submit">
+
+      {/* Before the trigger. See AddPrescription for why these two were the survivors.
+
+          The new day appears at the bottom of a list the trainer may have scrolled past, and the
+          field clears itself, so "did that work" was a genuine question rather than a formality. */}
+      {block.message !== null && (
+        <Message className="w-full" id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
+      <button
+        aria-describedby={block.describedBy}
+        className={trainerPrimary}
+        disabled={saving}
+        type="submit"
+      >
         {saving ? 'Adding' : 'Add day'}
       </button>
-      {error !== null && (
-        <TrainerMessage className="w-full" tone="failure">
-          {error}
-        </TrainerMessage>
-      )}
     </form>
   )
 }

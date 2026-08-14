@@ -39,6 +39,13 @@
 // assigns that token. Restating it per control would be a second source of truth for the
 // keyboard affordance, and the trainer screens are not the place to fork it.
 //
+// The pointer cursor left for the same reason, and it is the sharper case because this file had
+// it and the client screens did not. `cursor-pointer` was on six of the strings below, which
+// meant the affordance was a property of *being a trainer control* rather than of being a
+// control — so the login button, the verify Continue, Save set and Finish workout had none. It
+// is now one selector list in index.css keyed on element type, which no new control can miss.
+// `disabled:cursor-not-allowed` went with it, to the `:disabled` rule beside it.
+//
 // A third hue. DESIGN.md's palette is one warm accent plus one red and §Messages records why
 // there is no success-green: fewer colours, clearer meaning. So a restore, a reactivate and a
 // cancel are all bordered neutrals, and the fact that they are *good* is carried by the verb.
@@ -61,8 +68,8 @@
 // of a 44px button. Call sites that laid these controls out with `inline-block` were updated
 // rather than left to fight it (ClientDetailScreen's "Build a program" is the one).
 const BUTTON =
-  'inline-flex min-h-[var(--tap-min)] min-w-[var(--tap-min)] cursor-pointer items-center ' +
-  'justify-center rounded-sm px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed'
+  'inline-flex min-h-[var(--tap-min)] min-w-[var(--tap-min)] items-center ' +
+  'justify-center rounded-sm px-3 py-2 text-sm font-semibold'
 
 /**
  * Default action. Bordered, quiet until pointed at.
@@ -190,7 +197,7 @@ export const trainerSelected =
  * allows two weights and no third neutral, so an underline plus 600 is the whole vocabulary a
  * link has before it starts borrowing the accent, which belongs to commits.
  */
-export const trainerLink = 'cursor-pointer font-semibold underline underline-offset-4 hover:text-ink-bold'
+export const trainerLink = 'font-semibold underline underline-offset-4 hover:text-ink-bold'
 
 /**
  * The way into a record: the client's name in the roster, the program's title on a client.
@@ -215,7 +222,7 @@ export const trainerLink = 'cursor-pointer font-semibold underline underline-off
  * RecordLink stretches a pseudo-element over it, and row controls opt into the layer above.
  */
 export const trainerRecordLink =
-  'group inline-flex cursor-pointer items-center gap-1 text-base font-semibold text-ink-bold ' +
+  'group inline-flex items-center gap-1 text-base font-semibold text-ink-bold ' +
   "after:absolute after:inset-0 after:z-10 after:content-['']"
 
 /**
@@ -244,6 +251,13 @@ export const trainerRecordRow =
 /**
  * Buttons and other real controls inside a stretched-link row sit above RecordLink's overlay,
  * so tapping Deactivate/Retire/Cancel never follows the row link underneath.
+ *
+ * Messages take it too (#140). They are not controls, but they are worse than controls if left
+ * underneath: a confirmation prompt is a full-width panel a trainer will reflexively tap, and
+ * under the overlay that tap navigates into the client detail screen and takes the unanswered
+ * question with it. Selecting the text of an error to search for it hits the same wall. The
+ * row-wide hit target is for the row's *metadata*, which is what the name, the date and the
+ * status word are; a message is not metadata about the client.
  */
 export const trainerRecordRowControl = 'relative z-20'
 
@@ -258,7 +272,7 @@ export const trainerRecordRowControl = 'relative z-20'
  * target and a coin toss for a thumb, and this is the control a trainer hits most often.
  */
 export const trainerNavLink =
-  'inline-flex min-h-[var(--tap-min)] cursor-pointer items-center hover:text-ink-bold'
+  'inline-flex min-h-[var(--tap-min)] items-center hover:text-ink-bold'
 
 /**
  * Inputs, selects and textareas. Hover included because a pointer hunts for the edit surface too.

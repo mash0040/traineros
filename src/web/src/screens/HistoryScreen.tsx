@@ -10,6 +10,7 @@ import {
   type HistoryExerciseGroup,
   type HistorySession,
 } from '../lib/history'
+import { Message } from './Message'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -228,11 +229,12 @@ export function HistoryScreen() {
         {load === 'ready' && cursor !== null && (
           <div className="mt-6 grid gap-2">
             {moreError !== null && (
-              <p className="text-sm text-danger" role="alert">
+              <Message id="history-more-error" tone="failure">
                 {moreError}
-              </p>
+              </Message>
             )}
             <button
+              aria-describedby={moreError === null ? undefined : 'history-more-error'}
               className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge bg-surface-sunk px-4 text-base font-semibold text-ink disabled:text-muted"
               disabled={loadingMore}
               onClick={() => void loadMore()}

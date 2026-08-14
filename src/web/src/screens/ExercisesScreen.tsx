@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react'
 import type { ExerciseResponse } from '../api/types.gen'
 import { createExercise, fetchExercises, updateExercise } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
-import { TrainerMessage } from './TrainerMessage'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 import { TrainerShell } from './TrainerShell'
 import { trainerDanger, trainerField, trainerPrimary, trainerSecondary } from './trainerControls'
 
@@ -147,12 +148,19 @@ function Exercise({
   onUpdated: (exercise: ExerciseResponse) => void
 }) {
   const [editing, setEditing] = useState(false)
-  const [confirming, setConfirming] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const active = exercise.isActive !== false
   const name = exercise.name ?? 'Exercise'
+
+  // This row's one slot. It holds the retire prompt, any refusal, and the receipt for whichever
+  // of the three writes landed — held by the row rather than by the form or the button that
+  // caused it, because two of the three destroy their own trigger: retiring swaps the control
+  // for its opposite, and saving an edit closes the editor the message would have lived in. A
+  // confirmation that unmounts with the thing it is confirming is not one.
+  //
+  // Per-row id, for the same reason the roster's is: a library renders forty of these.
+  const block = useBlockMessage(`exercise-row-message-${exercise.id ?? name}`)
 
   async function setActive(isActive: boolean) {
     if (exercise.id === undefined || saving) {
@@ -160,23 +168,54 @@ function Exercise({
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       // Only isActive. Sending the text fields here as well would run them through #26's
       // blank-clears rule, so retiring an exercise with no cues written would silently be the
       // same request as clearing its cues — and one with cues would round-trip them for no
       // reason. See updateExercise's note.
       onUpdated(await updateExercise(exercise.id, { isActive }))
-      setConfirming(false)
+      // Lands in the slot the prompt was in, which is what takes the prompt down.
+      //
+      // Says what the state now *is*, not what was pressed, and repeats the one consequence a
+      // trainer is uncertain about: the same three facts the prompt gives on the way in are why
+      // "Retired." alone would leave them wondering what happened to the programs using it.
+      block.done(
+        isActive
+          ? `${name} is back in the library. You can prescribe it again.`
+          : `${name} is retired. Programs already using it keep it, and logged sets are untouched.`,
+      )
     } catch (caught) {
-      setError(messageFor(caught, 'exercise'))
+      block.fail(messageFor(caught, 'exercise'))
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <li className="rounded-sm border border-edge bg-surface p-4">
+    // grid gap-4 rather than block flow with an mt-* on each child (#138). A message has to
+    // inherit its container's gap to carry no margin of its own, and this container had no gap
+    // to inherit — every child was spacing itself, which is exactly how the message ended up
+    // with a hand-rolled mt-3 at the bottom of the row.
+    <li className="grid gap-4 rounded-sm border border-edge bg-surface p-4">
+      {/* Before the trigger, inside the trigger's container. Every control that writes here
+          lives in this card — Edit, Retire, Restore, and the editor's Save — so the card is the
+          container and the top of it is "before" for all of them.
+
+          It is also directly above the control row below, which is what makes the armed state
+          read correctly (#142): the question sits immediately over the two buttons that answer
+          it, because those buttons take the place of the ones that raised it rather than being
+          appended somewhere further down.
+
+          Retiring an exercise used to report itself only by the word "Retired" appearing beside
+          the heading and the button swapping to Restore: both true, neither an answer to "did
+          that go through". */}
+      {block.message !== null && (
+        <Message id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
           {/* wrap-break-word: an exercise name is trainer-supplied free text, and one long
@@ -192,90 +231,29 @@ function Exercise({
           </h2>
         </div>
 
-        {/* #135's headline defect, and `shrink-0` is the mechanism rather than the labels.
-            A flex item that cannot shrink is laid out at max-content — here the two buttons
-            side by side, ~330px — inside a card that has ~294px to give at 390px, so the group
-            hung over the right edge instead of wrapping. Its own `flex-wrap` never fired,
-            because nothing ever narrowed it. Dropping `shrink-0` lets the outer flex compress
-            it, at which point the inner wrap does what it was always there to do.
+        {/* ── One control row, whichever state the card is in (#142) ─────────────────────────
+            Arming swaps this row in place: [Edit][Retire] becomes [Retire][Cancel] where it
+            already was, and the prompt above stays put. The roster, the prescription row and
+            the day card all work this way; this card was the one that did not.
 
-            The short labels are the other half. At 44px tall and one per line, "Retire Jumping
-            Jacks" is a button most of the way across a phone to say a word the heading directly
-            above it already said. */}
-        <div className="flex flex-wrap gap-2">
-          {/* The naming form moves to aria-label, so the accessible name is unchanged: a screen
-              reader moving down forty rows still hears which exercise each control belongs to,
-              which is the case the long label was written for and the only one it served. The
-              eye gets that from the heading. Same trade the program builder's reorder arrows
-              already made — they have been icon-plus-aria-label since #52. */}
-          <button
-            aria-expanded={editing}
-            aria-label={editing ? `Close ${name}` : `Edit ${name}`}
-            className={trainerSecondary}
-            onClick={() => {
-              setEditing((previous) => !previous)
-              setConfirming(false)
-              setError(null)
-            }}
-            type="button"
-          >
-            {editing ? 'Close' : 'Edit'}
-          </button>
+            What it did instead: kept [Edit][Retire] here and appended a *second* [Retire]
+            [Cancel] row below Details. Three failures out of one shape. Two buttons on screen
+            said Retire, and only one of them did anything — the original went inert once armed,
+            which reads as broken rather than as already-answered. The prompt sat above a
+            trigger rather than above its answers. And the answers were separated from the
+            question by the whole body of the card, so on a row with cues and a video link the
+            trainer read the question at the top and hunted for the buttons past everything the
+            card had to say.
 
-          {/* The same split as the roster's Deactivate/Reactivate, and the same defect before
-              #132: retiring and restoring are opposite acts that rendered as one object. Retire
-              takes --danger; Restore stays a bordered neutral, because it reverses a removal and
-              a green for "this one is safe" is the success hue DESIGN.md refuses by name.
-
-              Both sit beside Edit, which is also bordered. That is the point of putting the red
-              on exactly one of the three: in a library of forty rows the eye needs to find the
-              destructive control without reading three labels per row. */}
-          {active ? (
+            #135's headline defect is why this is `flex-wrap` and not `shrink-0`: a flex item
+            that cannot shrink lays out at max-content — two buttons side by side, ~330px —
+            inside a card with ~294px to give at 390px, so the group hung over the right edge
+            instead of wrapping. Its own wrap never fired because nothing ever narrowed it. The
+            armed pair is the wider of the two states, which is what the wrap is now for. */}
+        {block.prompting ? (
+          <div aria-labelledby={block.id} className="flex flex-wrap gap-2" role="group">
             <button
-              aria-label={`Retire ${name}`}
-              className={trainerDanger}
-              disabled={saving}
-              onClick={() => setConfirming(true)}
-              type="button"
-            >
-              Retire
-            </button>
-          ) : (
-            // The aria-label tracks the saving state rather than being pinned to "Restore".
-            // A static one would leave a screen reader user with a button still announcing
-            // "Restore Sissy Squat" while its visible label reads "Restoring" — the two names
-            // for one control that #132 spent a whole ticket removing, in a different form.
-            <button
-              aria-label={`${saving ? 'Restoring' : 'Restore'} ${name}`}
-              className={trainerSecondary}
-              disabled={saving}
-              onClick={() => void setActive(true)}
-              type="button"
-            >
-              {saving ? 'Restoring' : 'Restore'}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <Details exercise={exercise} />
-
-      {confirming && (
-        // Inline, replacing nothing and pushing nothing over: DESIGN.md calls the modal the lazy
-        // first answer, and #50 settled the same question for the roster's deactivate.
-        //
-        // The wording is the whole reason this is a confirmation rather than a plain button. The
-        // word "retire" does not tell a trainer which of three things happens to work already
-        // done, so the prompt says all three: gone from the picker, kept where it is already
-        // prescribed, and history untouched.
-        <div className="mt-4 grid justify-items-start gap-2 border-t border-edge pt-4" role="group">
-          <p className="text-sm text-ink-bold">Retire {name}?</p>
-          <p className="max-w-2xl text-sm text-muted">
-            You won&rsquo;t be able to add it to a program any more. Programs already using it
-            keep it, and logged sets stay exactly as they are. You can restore it later.
-          </p>
-          <div className="flex gap-2">
-            <button
+              aria-describedby={block.id}
               className={trainerDanger}
               disabled={saving}
               onClick={() => void setActive(false)}
@@ -283,20 +261,96 @@ function Exercise({
             >
               {saving ? 'Retiring' : 'Retire'}
             </button>
-            {/* Bordered, not amber. Dismissing is not committing. */}
-            <button
-              className={trainerSecondary}
-              onClick={() => {
-                setConfirming(false)
-                setError(null)
-              }}
-              type="button"
-            >
+            {/* Bordered, not amber. Dismissing is not committing, and it leaves the slot empty:
+                a cancelled question needs no receipt. Cancel restores [Edit][Retire] here. */}
+            <button className={trainerSecondary} onClick={block.clear} type="button">
               Cancel
             </button>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {/* The naming form moves to aria-label, so the accessible name is unchanged: a
+                screen reader moving down forty rows still hears which exercise each control
+                belongs to, which is the case the long label was written for and the only one it
+                served. The eye gets that from the heading. Same trade the program builder's
+                reorder arrows already made — they have been icon-plus-aria-label since #52.
+
+                The armed pair drops the name from both labels, matching the roster: by then the
+                group is labelled by the prompt, which names the exercise in its first four
+                words. */}
+            <button
+              aria-expanded={editing}
+              aria-label={editing ? `Close ${name}` : `Edit ${name}`}
+              className={trainerSecondary}
+              onClick={() => {
+                setEditing((previous) => !previous)
+                // Opening or closing the editor is an action in this block, so it empties the
+                // slot.
+                block.clear()
+              }}
+              type="button"
+            >
+              {editing ? 'Close' : 'Edit'}
+            </button>
+
+            {/* The same split as the roster's Deactivate/Reactivate, and the same defect before
+                #132: retiring and restoring are opposite acts that rendered as one object.
+                Retire takes --danger; Restore stays a bordered neutral, because it reverses a
+                removal and a green for "this one is safe" is the success hue DESIGN.md refuses
+                by name.
+
+                Both sit beside Edit, which is also bordered. That is the point of putting the
+                red on exactly one of the three: in a library of forty rows the eye needs to find
+                the destructive control without reading three labels per row. */}
+            {active ? (
+              <button
+                aria-label={`Retire ${name}`}
+                className={trainerDanger}
+                disabled={saving}
+                onClick={() =>
+                  // The prompt, promoted out of the bare `text-sm text-ink-bold` + `text-sm
+                  // text-muted` pair it used to be (#140). Both paragraphs sit inside the panel:
+                  // the second is what makes the first answerable, and leaving it outside put
+                  // the reassurance about existing programs on paper while the question sat on
+                  // a tint.
+                  block.ask(
+                    <>
+                      <p>Retire {name}?</p>
+                      {/* font-normal: the failure tone sets weight 600 on the panel, which is
+                          right for the question and wrong for the explanation under it. */}
+                      <p className="max-w-2xl font-normal">
+                        You won&rsquo;t be able to add it to a program any more. Programs already
+                        using it keep it, and logged sets stay exactly as they are. You can
+                        restore it later.
+                      </p>
+                    </>,
+                  )
+                }
+                type="button"
+              >
+                Retire
+              </button>
+            ) : (
+              // The aria-label tracks the saving state rather than being pinned to "Restore".
+              // A static one would leave a screen reader user with a button still announcing
+              // "Restore Sissy Squat" while its visible label reads "Restoring" — the two names
+              // for one control that #132 spent a whole ticket removing, in a different form.
+              <button
+                aria-describedby={block.describedBy}
+                aria-label={`${saving ? 'Restoring' : 'Restore'} ${name}`}
+                className={trainerSecondary}
+                disabled={saving}
+                onClick={() => void setActive(true)}
+                type="button"
+              >
+                {saving ? 'Restoring' : 'Restore'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <Details exercise={exercise} />
 
       {editing && (
         <EditExercise
@@ -304,14 +358,14 @@ function Exercise({
           onSaved={(updated) => {
             onUpdated(updated)
             setEditing(false)
+            // The editor closes on save, which is the right behaviour and the reason this
+            // message cannot live inside it: the form that would have shown "Saved." is gone by
+            // the time there is anything to say. The row outlives it, so the row says it. The
+            // new name is quoted because a rename also re-sorts the list, and a trainer whose
+            // row just moved needs to know it is still the one they were editing.
+            block.done(`Saved. ${updated.name ?? name} is up to date.`)
           }}
         />
-      )}
-
-      {error !== null && (
-        <TrainerMessage className="mt-3" tone="failure">
-          {error}
-        </TrainerMessage>
       )}
     </li>
   )
@@ -346,7 +400,7 @@ function Details({ exercise }: { exercise: ExerciseResponse }) {
           elements, hover included — #132 found this one missing its hover entirely. */}
       {videoUrl !== '' && (
         <a
-          className="inline-flex min-h-[var(--tap-min)] cursor-pointer items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold"
+          className="inline-flex min-h-[var(--tap-min)] items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold"
           href={videoUrl}
           rel="noopener noreferrer"
           target="_blank"
@@ -371,7 +425,12 @@ function EditExercise({
   const [videoUrl, setVideoUrl] = useState(exercise.videoUrl ?? '')
   const [cues, setCues] = useState(exercise.cues ?? '')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<{ message: string; field: Field | null } | null>(null)
+
+  const block = useBlockMessage(`exercise-${exercise.id}-message`)
+  const [field, setField] = useState<Field | null>(null)
+  // Derived against the slot, so an attribution cannot mark a field invalid under a message that
+  // is no longer a failure. See AddClient for the same pairing and the reason for it.
+  const invalid = block.message?.tone === 'failure' ? field : null
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -381,12 +440,13 @@ function EditExercise({
 
     const problem = validate({ name, videoUrl })
     if (problem !== null) {
-      setError(problem)
+      setField(problem.field)
+      block.fail(problem.message)
       return
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       // Every field this form owns, every time, including the empty ones. That is what makes
       // clearing possible at all: #26 reads "" as "set this to NULL", so a trainer who deletes
@@ -400,7 +460,8 @@ function EditExercise({
         }),
       )
     } catch (caught) {
-      setError({ message: messageFor(caught, 'exercise'), field: null })
+      setField(null)
+      block.fail(messageFor(caught, 'exercise'))
     } finally {
       setSaving(false)
     }
@@ -410,31 +471,37 @@ function EditExercise({
     <form className="mt-4 grid max-w-xl gap-4 border-t border-edge pt-4" noValidate onSubmit={onSubmit}>
       <Fields
         cues={cues}
-        error={error}
         idPrefix={`exercise-${exercise.id}`}
+        invalid={invalid}
+        messageId={block.id}
         name={name}
         onCues={(value) => {
           setCues(value)
-          setError(null)
+          block.clear()
         }}
         onName={(value) => {
           setName(value)
-          setError(null)
+          block.clear()
         }}
         onVideoUrl={(value) => {
           setVideoUrl(value)
-          setError(null)
+          block.clear()
         }}
         videoUrl={videoUrl}
       />
 
-      {error !== null && (
-        <TrainerMessage id={`exercise-${exercise.id}-error`} tone="failure">
-          {error.message}
-        </TrainerMessage>
+      {block.message !== null && (
+        <Message id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
       )}
 
-      <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
+      <button
+        aria-describedby={block.describedBy}
+        className={`justify-self-start ${trainerPrimary}`}
+        disabled={saving}
+        type="submit"
+      >
         {saving ? 'Saving' : 'Save changes'}
       </button>
     </form>
@@ -451,8 +518,10 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
   const [videoUrl, setVideoUrl] = useState('')
   const [cues, setCues] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<{ message: string; field: Field | null } | null>(null)
-  const [addedName, setAddedName] = useState<string | null>(null)
+
+  const block = useBlockMessage('new-exercise-message')
+  const [field, setField] = useState<Field | null>(null)
+  const invalid = block.message?.tone === 'failure' ? field : null
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -462,13 +531,13 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
 
     const problem = validate({ name, videoUrl })
     if (problem !== null) {
-      setError(problem)
-      setAddedName(null)
+      setField(problem.field)
+      block.fail(problem.message)
       return
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       const created = await createExercise({
         name: name.trim(),
@@ -476,15 +545,15 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
         cues: cues.trim(),
       })
       onAdded(created)
-      setAddedName(created.name ?? name.trim())
+      block.done(`${created.name ?? name.trim()} added. You can prescribe it now.`)
       // Cleared so the form is ready for the next one. A trainer setting the library up is
       // adding several in a row, which is the case worth optimising for.
       setName('')
       setVideoUrl('')
       setCues('')
     } catch (caught) {
-      setError({ message: messageFor(caught, 'exercise'), field: null })
-      setAddedName(null)
+      setField(null)
+      block.fail(messageFor(caught, 'exercise'))
     } finally {
       setSaving(false)
     }
@@ -505,8 +574,7 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
       className={`mt-8 ${open ? trainerSecondary : trainerPrimary}`}
       onClick={() => {
         setOpen((previous) => !previous)
-        setError(null)
-        setAddedName(null)
+        block.clear()
       }}
       type="button"
     >
@@ -527,40 +595,37 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
         <form className="mt-6 grid gap-4" noValidate onSubmit={onSubmit}>
           <Fields
             cues={cues}
-            error={error}
             idPrefix="new-exercise"
+            invalid={invalid}
+            messageId={block.id}
             name={name}
             onCues={(value) => {
               setCues(value)
-              setError(null)
-              setAddedName(null)
+              block.clear()
             }}
             onName={(value) => {
               setName(value)
-              setError(null)
-              setAddedName(null)
+              block.clear()
             }}
             onVideoUrl={(value) => {
               setVideoUrl(value)
-              setError(null)
-              setAddedName(null)
+              block.clear()
             }}
             videoUrl={videoUrl}
           />
 
-          {error !== null && (
-            <TrainerMessage id="new-exercise-error" tone="failure">
-              {error.message}
-            </TrainerMessage>
+          {block.message !== null && (
+            <Message id={block.id} tone={block.message.tone}>
+              {block.message.body}
+            </Message>
           )}
 
-          {addedName !== null && error === null && (
-            <TrainerMessage tone="confirmation">
-              {addedName} added. You can prescribe it now.
-            </TrainerMessage>
-          )}
-
-          <button className={`justify-self-start ${trainerPrimary}`} disabled={saving} type="submit">
+          <button
+            aria-describedby={block.describedBy}
+            className={`justify-self-start ${trainerPrimary}`}
+            disabled={saving}
+            type="submit"
+          >
             {saving ? 'Adding' : 'Add exercise'}
           </button>
         </form>
@@ -575,8 +640,9 @@ type Field = 'name' | 'videoUrl'
 // the same three things in two different ways.
 function Fields({
   cues,
-  error,
   idPrefix,
+  invalid,
+  messageId,
   name,
   onCues,
   onName,
@@ -584,8 +650,11 @@ function Fields({
   videoUrl,
 }: {
   cues: string
-  error: { message: string; field: Field | null } | null
   idPrefix: string
+  /** Which field the block's message is about, or null. Already derived against the slot. */
+  invalid: Field | null
+  /** The owning block's one message id — see blockMessage.ts for why there is only one. */
+  messageId: string
   name: string
   onCues: (value: string) => void
   onName: (value: string) => void
@@ -595,8 +664,7 @@ function Fields({
   // Points the description at the message only for the field it is about. A single error string
   // marking every input aria-invalid sends a screen reader user to fix what is already right —
   // the defect #114 found on the add-client form.
-  const describedBy = (field: Field) =>
-    error?.field === field ? `${idPrefix}-error` : undefined
+  const describedBy = (field: Field) => (invalid === field ? messageId : undefined)
 
   return (
     <>
@@ -606,7 +674,7 @@ function Fields({
         </label>
         <input
           aria-describedby={describedBy('name')}
-          aria-invalid={error?.field === 'name'}
+          aria-invalid={invalid === 'name'}
           className={trainerField}
           id={`${idPrefix}-name`}
           name="name"
@@ -622,7 +690,7 @@ function Fields({
         </label>
         <input
           aria-describedby={describedBy('videoUrl')}
-          aria-invalid={error?.field === 'videoUrl'}
+          aria-invalid={invalid === 'videoUrl'}
           autoCapitalize="none"
           className={trainerField}
           id={`${idPrefix}-video`}

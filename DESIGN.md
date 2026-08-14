@@ -79,7 +79,15 @@ Deliberately rejected:
 
 **Rhythm rule:** vary spacing deliberately. Inside a set row: tight (4–8px vertical). Between exercises: generous (24–32px). Between a screen's major sections: 48px. Same padding everywhere is monotony (per shared law).
 
-**Container discipline:** no reflexive `max-w-*` wrapper on the root of a page. Containers appear where the *content* is genuinely bounded (a form, a session card). The page shell is the viewport minus safe-area padding, nothing more.
+**Container discipline (rewritten by #138).** This rule used to read "no reflexive `max-w-*` wrapper on the root of a page… the page shell is the viewport minus safe-area padding, nothing more." Every one of the eleven screens violated it, which is the signature of a rule that never matched the thing it was governing rather than eleven independent mistakes. It was written against a failure mode this app does not have — a narrow column of content stranded in the middle of a wide page — and what it actually prohibited was the thing that keeps a 1400px browser window readable.
+
+What replaces it:
+
+> **One gutter, app-wide.** `px-6` at every width, on both audiences' screens. A trainer at 390px and a client at 390px get the same margin, because they are the same person's hand on the same phone.
+>
+> **One content cap per audience, from the scale.** Client screens `max-w-lg`; trainer screens `max-w-5xl`, which is the width the roster's columns need. Arbitrary values (`max-w-[26rem]` on the three token screens, before #138) are not a third answer, they are the absence of one.
+
+Containers below the shell still appear only where the content is genuinely bounded — a form, a session card. That half of the original rule was right and is unchanged.
 
 **Thumb-reach zone (binding, every screen).** Primary CTAs live in the bottom half of the mobile viewport, ideally the bottom third. Sticky footer CTA is the pattern for logging. `--tap-min: 44px` is consumed by button/input `min-height` — never smaller, anywhere.
 
@@ -129,13 +137,95 @@ Known tradeoff: only the last row holds inputs, so as sets are logged the inputs
 
 ## Messages: errors, validation failures, confirmations
 
-**Scope: trainer screens.** Surfaced by the #53/#54 desktop passes. Client screens are single-purpose (one form, one outcome, one screen) and their few messages are the whole content of the view they appear in; trainer screens stack six or eight write surfaces on one page, which is where an undifferentiated message stops working.
+**Scope: app-wide, all of it (#140).** Placement, spacing, wiring, treatment, and the tone table. Every message in the product is the same object on every screen, for both audiences.
+
+**This replaces a two-audience split, and the split's premise is what failed.** #138 kept the panel treatment on trainer screens only, arguing that client screens are single-purpose — one form, one outcome, one screen — so their few messages *are* the content of the view and have nothing to be differentiated from. That is not what the client screens look like. A login rate-limit refusal renders under a filled field, above a filled amber button, beside a heading and two paragraphs; the log screen's set-save failure renders inside a four-column grid between a row of inputs and a full-width Save; a dropped page of history renders above the control that asked for it. In every case the message is one small thing among several larger ones, and at `--text-sm` in one colour it was reliably the quietest thing on the screen. That is precisely the defect the panel exists to fix, and the split had exempted five screens from the fix on the strength of a description that did not match them.
+
+**A second, worse consequence, and the one that surfaced it.** The split was drawn on *audience*, which is not the axis that predicts anything, so it also left messages un-panelled on the trainer screens themselves wherever they were not the shape #138 had audited. The roster's deactivate prompt and the builder's two delete prompts rendered as bare `--ink-bold` body text, no panel, no border, no glyph, arming the three most destructive writes in the product.
+
+> One treatment, everywhere. There is no screen, audience, or surface on which a message is a line of coloured text.
+
+### A prompt is a message
+
+**The rule:**
+
+> A question that arms a write — "Deactivate Ada?", "Retire Back Squat?", "Delete Lower?", "Discard and finish?" — is a message and takes the panel, before the controls that answer it, in the container that owns them.
+
+**It takes the failure tone**, and the tone table below is written in two halves for that reason: `failure` is not "an error", it is *this is not a completed write*. Something was refused, or something is about to be taken away and is waiting on an answer. A prompt in `--danger-surface` matches the `--danger` control it arms, which is the pairing §Controls already defines for destructive acts — the prompt and its Delete button should not be two different colours of the same decision.
+
+**The panel holds blocks, because these prompts are two of them.** The question, then what the act does and does not touch: "logged sets stay in their history", "programs already using it keep it". That second paragraph is what makes the first answerable, and it was rendering *outside* the message — as `--muted` prose, and in the prescription row's case *after* the buttons. It stays at weight 400 inside the panel, so the question and its qualification keep the two ranks they had.
+
+**Where the prompt goes when its own cell cannot hold it.** On the roster, the controls live in an `auto` subgrid track sized across every row at once, so a panel in that cell would set the actions column width for all forty rows. The prompt renders at the top of the row instead, spanning the tracks. The placement rule is satisfied either way — the row is the container that owns the trigger — and `aria-labelledby` on the control group is what keeps the question and its answers one object for a screen reader.
+
+### One slot per block
+
+**The defect (#141).** A prescription row held "is the delete prompt open" and "did the last save land" as two independent booleans. Nothing connected them, so answering neither question left both true: a trainer opened the delete prompt, thought better of it and pressed Save instead, and the row rendered **"Saved." stacked above a still-open "Delete Back Squat from this day?"** — two messages, one of them a question about a decision the trainer had already walked away from.
+
+That is #46's defect in new clothes. #46 fixed it on the log screen by deriving the discard prompt from current state instead of capturing it when Finish was tapped, and the lesson never crossed to the trainer screens: every block over there carried two, three or four independent message flags and relied on each write handler to remember to clear the others. The roster's cleared two of three. The day card's rename form cleared none of the delete cluster's. The bug was never that someone forgot a `setSaved(false)` — it was that forgetting one was possible.
+
+**Rule:**
+
+> **A block holds one message.** Not one at a time by convention — one, structurally: a block has a single message slot, and writing anything into it removes what was there.
+
+**What a block is.** The container that owns a trigger and the slot immediately before it. Not "a component" and not "a screen": a day card in the builder is three blocks, because its rename form, its prescription list and its delete cluster are three triggers separated by a whole list of exercises, and one slot for the card could not be "before" all three — a rename failure would render at the foot of the day, past the exercises, which is the placement defect §Messages already forbids. Where the triggers share a slot, they share a block.
+
+**The transitions, which fall out of there being one slot:**
+
+- **Opening a prompt clears any confirmation.** Asking is writing to the slot.
+- **Any action in the block dismisses an unanswered prompt.** Saving, editing a field, reordering, adding — the question is moot once the person did something else with the block, and it is worse than moot when it is still offering to delete a row they have just edited.
+- **A prompt disarms when a failure replaces it.** The block's confirm/cancel controls are read off the slot (`prompting`), never off a second boolean — that parallel flag *is* the bug. A destructive control left armed through a failure is one stray tap from firing on a state the person has stopped looking at, and re-arming costs the same two taps it did the first time.
+- **Cancelling writes nothing.** A dismissed question needs no receipt; "Cancelled." would be a confirmation of not having done anything.
+
+**Stored or derived, as long as it is one.** `useBlockMessage` is the default and stores the slot. A block whose message depends on state it does not own computes it instead — the log screen's Finish footer is the case, because its prompt has to vanish when she saves the unsaved row and that row is in a different block. What the rule forbids is neither of those: it forbids a *set* of independent flags, each rendered by its own guard.
+
+### Confirmations expire; questions do not
+
+> A confirmation clears itself after six seconds. A failure and a prompt stay until something replaces them.
+
+**A confirmation is a receipt.** It answers "did that work", which is a question with a short life — once it has been read, or once the person has moved on to the next edit, a panel still sitting there is clutter competing with the thing they are now doing. Six seconds is read off the copy: the longest confirmation in the product ("Ada is deactivated. Their reminder emails have stopped.") is about nine words, so ~3s of reading, and the other ~3s is the glance back, because people press Save looking at the button rather than at the slot above it. Not three, which is gone before someone who looked away has looked back. Not ten, which is still on screen while they are filling in the next thing.
+
+**A prompt must not expire, and this is the load-bearing half.** A question that vanishes on its own leaves the person unable to tell whether it was cancelled, whether they answered it, or whether the app forgot — and the three have very different consequences when the question was "delete this day". It stays until answered or dismissed.
+
+**A failure does not expire either.** It is actionable: it names something to fix or retry, and a retry that has to be reconstructed from memory is worse than a panel that outstays its welcome.
+
+No fade, no motion: DESIGN.md scopes motion out of v1 and this is a state change, not a transition.
+
+### Every write says it worked
+
+**The defect (#140).** Confirmations existed on three forms — add client, add exercise, save schedule, save prescription — and nowhere else. Deactivating a client, reactivating one, retiring an exercise, restoring one, saving an exercise edit, renaming a day, activating a program, deleting a day, deleting a prescription and removing a logged set all completed in silence. Several of them destroyed their own trigger on the way, which is why silence was the default: the form closes, the row unmounts, the button swaps for its opposite, and there is nothing left holding state to say anything with.
+
+**Rule:**
+
+> Every write that stays on the screen confirms itself. Save, delete, deactivate, reactivate, retire, restore.
+
+**Which means the message often cannot live where the trigger did.** A confirmation belongs to the nearest container that *outlives* the write: the roster row, not the actions cell; the library row, not the editor that closes; the day, not the prescription that was deleted; the days section, not the day that was deleted. A message that unmounts with the thing it is confirming is not a confirmation.
+
+**Two exceptions, both deliberate, both because a stronger confirmation already exists:**
+
+- **Saving a set on the log screen.** The set becomes a row directly above the inputs, in `--ink-bold` at `--text-lg`. That is a larger and more specific statement than a panel could make, it is the one this document already specifies (§Log row), and a workout is twenty of them — twenty panels on the screen everything else here bends toward is worse than the problem. *Removing* a set gets a panel, because there the evidence is an absence and the rows below it renumber.
+- **A write that navigates.** Creating a program lands in the builder; finishing a workout lands on Today. The destination is the confirmation, and a panel on a screen the person has left is not one.
+
+Everything else confirms. "Nothing happened as far as I can tell" is the failure this rule exists to prevent, and it is not a smaller failure than an unexplained error.
+
+### Placement: before the trigger, inside its container
+
+**The defect (#138).** Across twenty message sites, thirteen rendered above the control that produced them and seven below. The split was not a decision anyone made — it fell out of construction. A message written inside a `grid gap-*` form landed above the submit; a message appended after a control or a section landed below it. The worst case put a reorder failure after an entire prescription list, several hundred pixels from the arrow that caused it.
+
+**Rule:**
+
+> A message renders inside the container that owns its trigger, immediately **before** that trigger in DOM order. Never after it, never outside its container.
+
+**Why before, and not after.** After is the more attractive rule at first glance, because a message that appears above a button pushes the button down at the moment someone is reaching for it. One case settles it against: the logging screen's Finish control lives in a sticky footer pinned to the bottom of the viewport, where there is no "after" — a message below it is off-screen. A placement rule that cannot be honoured on the screen everything else in this document bends toward is not the rule. The displacement cost is real and already bounded by the size rule below: the panel is `--text-sm` in both tones, so the trigger moves once on the first failure and does not move again on retry.
+
+**Spacing comes from the container, never the call site.** A message inherits its parent's `gap`. It carries no margin utility of its own. Before #138 exactly those messages placed *after* their trigger carried a hand-written `mt-2` or `mt-3` to make up for sitting outside the flow their trigger was in — the margin was a symptom of the placement bug, and a margin on a message is still the smell that one has come back.
+
+**Every message is wired to what it is about.** The message carries an `id`; the control or field it concerns points at it with `aria-describedby`. This is not decoration on top of the visual rule, it is the same rule in the channel that cannot see: a screen reader user who hears an error with no programmatic relationship to the field it names has been told something happened and not what to fix. Thirteen of twenty sites had no wiring at all when #138 audited them.
 
 **The defect.** Every message rendered as `--text-sm` in one of two text colors, at weight 400, in the same slot under the control that produced it. A save confirmation and a rejected write were separable only by *reading* them, which is precisely what someone does not do when they glance back at a form after clicking Save. Colour alone was carrying the entire signal, and it was carrying it at 14px in a paragraph the eye has no reason to stop on.
 
 **Two tones. Failures keep `--danger`; confirmations take the amber accent, which already means "committed" in this palette (see §Color). Separation comes from treatment, not from a third semantic colour** — this system does not get a success-green, a warning-orange, or an info-blue.
 
-| | Failure | Confirmation |
+| | Failure — refused, or about to be taken away | Confirmation — it worked |
 |---|---|---|
 | Panel | `--danger-surface` | `--accent-surface` |
 | Border | 1px `--danger-edge`, full (never a side stripe) | 1px `--accent-edge`, full |
@@ -178,7 +268,21 @@ Copy in the map obeys §Absolute bans like any other string: **no em dashes**, i
 
 ## Controls: what takes the accent, what "selected" looks like, what a link to a record is
 
-**Scope: trainer screens**, for the same reason §Messages is. A client screen is one purpose and one obvious control; these four stack a roster, a library, a schedule form and a program builder, and every question below is a question about which of eleven controls on one page the eye should land on first.
+### The pointer cursor is one rule, app-wide (#140)
+
+**The defect.** `cursor-pointer` was a utility on six of the strings in `trainerControls.ts`, which made the pointer affordance a property of *being a trainer control* rather than of being a control. So the login submit, "Use a different address", the verify Continue, Pause reminders, Save set, Finish workout, Discard, every history session card and every "Try again" on a failed load had none — the client screens, in other words, and the log screen's two most-tapped buttons. A seventh utility string would have re-created the split one screen later.
+
+**Rule:**
+
+> The pointer cursor is declared once, in `index.css`, keyed on what an element *is* — `button`, `summary`, `a[href]`, `select`, `[role="button"]`, and the input types that are controls. Never as a utility at a call site, on any screen. `:disabled` and `[aria-disabled="true"]` take `not-allowed` in the same place.
+
+Same argument as the focus ring, which has been one `:focus-visible` rule for the whole app since v1 and never drifted, for exactly this reason: an affordance restated per control is an affordance that will be missed on the next control someone writes.
+
+**Bare `label` is deliberately not in the list.** A label for a text field focuses an input that already shows a text caret, and a pointer there is a lie about what the click does. A checkbox or radio and its label *are* controls in their own right — on the schedule form the label is the 44px target, per #135 — so those two are named explicitly via `:has()`.
+
+### Scope of the three rules below: trainer screens
+
+For the reason §Messages *used* to be, and the reason it stopped being: these three answer "which of eleven controls on one page should the eye land on first", which is a question a single-purpose client screen does not ask. That is a real distinction between the surfaces, unlike the one §Messages was drawn on — a message is the same object wherever it appears, and an accent budget is not. A client screen is one purpose and one obvious control; these four stack a roster, a library, a schedule form and a program builder.
 
 ### The accent is scoped to the view state, not to the form
 
@@ -265,7 +369,8 @@ column label beside every value.
 
 - `--radius-sm: 4px` — inputs, small buttons
 - `--radius-md: 6px` — cards, larger buttons, sticky footer
-- `--radius-pill: 999px` — icon-only round buttons (rare; if a button has a text label it is not a pill)
+
+(`--radius-pill: 999px` was specified here for icon-only round buttons and dropped by #138. It was never added to `index.css`, never appeared in the Tailwind block two sections below, and nothing in the product ever used it: v1 has no icon-only round button, and the two icon controls it might have covered — the builder's reorder arrows — are square `--radius-sm` buttons on the same 44px grid as everything else. A token that exists only in prose is a promise the stylesheet has not made.)
 
 ## Motion
 
@@ -296,6 +401,12 @@ Inherited from shared design laws — restated here so nobody has to open anothe
 - **Identical card grids.** Same-sized icon + heading + text cards, repeated. Vary or find a different structure.
 - **Modal as first thought.** Prefer inline / progressive alternatives.
 - **Em dashes.** Commas, colons, semicolons, periods, or parentheses instead. Also not `--`.
+
+**The one dash that is not prose (#138).** The ban above is about sentences, and it left the other use of a dash unspecified: the glyph that stands where a value would be. Nothing said which one, so the logging screen rendered `—` for a bodyweight set while the roster rendered `–` for a client whose last session had not loaded — one meaning, two glyphs, and the one on the screen this document spends the most words on was the banned one.
+
+> An absent value renders as an **en dash**, from `src/web/src/lib/glyphs.ts` (`NO_VALUE`). Not a literal in a screen, not the empty string, and not a word.
+
+Not empty, because a blank cell in a column of numbers reads as a rendering failure. Not a word, because "None" in that column reads as data. At `tabular-nums` the en dash sits on the same advance as the digits it replaces, which is what keeps the log row's columns from shifting as sets are logged. Where the glyph sits in a column a screen reader walks, it is paired with visually hidden text naming what is not known — the glyph alone announces as "dash" or as nothing at all. It is a module rather than a line here because a constant is the only form of this rule that a screen cannot half-remember.
 
 ## Tailwind v4 integration
 

@@ -14,8 +14,10 @@ import { trainerNavLink } from './trainerControls'
 //     layout that stacks below sm:, not the shape the screen is built around.
 //   * DESIGN.md's --tap-min: 44px is binding here, with no carve-out. It is consumed by
 //     trainerControls.ts, so no screen sizes a control itself.
-//   * Padding is px-4 on a phone. px-8 spent 64px of a 390px viewport on margins — 16% of the
-//     screen, taken off the content width that the overflow defects were measured against.
+//   * Padding is px-6 at every width, which is the app's single gutter and not a trainer
+//     decision at all (#138). #135 had this at px-4/sm:px-8: px-8 spent 64px of a 390px
+//     viewport on margins, and px-4 fixed that by inventing a second gutter. The number that
+//     survived is the client screens', because their sticky footers are built on -mx-6/px-6.
 // Everything else in DESIGN.md still applies. The tokens, the single accent, the border-first
 // treatment, the ban on decorative cards: those are the visual system, not a client-screen
 // concession, and a trainer area with its own look would be a second design to maintain.
@@ -45,7 +47,12 @@ export function TrainerShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh">
-      <header className="border-b border-edge px-4 py-2 sm:px-8">
+      {/* px-6, the app's one gutter (#138, DESIGN.md §Container discipline). #135 set this to
+          px-4/sm:px-8 to claw back content width at 390px, which left a trainer on a 16px
+          margin and a client on 24px — the same hand, the same phone, two different pages. The
+          client screens were already the reference: their sticky footers and the day picker are
+          built on -mx-6/px-6 and would have had to move with any other number. */}
+      <header className="border-b border-edge px-6 py-2">
         {/* flex-wrap, because the product name and a two-item nav are one line at 390px only
             while both stay short. items-center rather than items-baseline: the nav links are
             44px boxes now, and baseline-aligning a text run against a box that is mostly
@@ -82,7 +89,7 @@ export function TrainerShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className="px-4 py-8 sm:px-8 sm:py-10">
+      <main className="px-6 py-8 sm:py-10">
         <div className="mx-auto w-full max-w-5xl">{children}</div>
       </main>
     </div>
