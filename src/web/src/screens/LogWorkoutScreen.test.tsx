@@ -603,6 +603,25 @@ describe('LogWorkoutScreen', () => {
     expect(setPosts(fetchMock)[3].body).toMatchObject({ setNumber: 3 })
   })
 
+  // #140. Saving a set needs no panel — it becomes a row directly above the inputs, which is a
+  // larger statement than a message could make, is the confirmation DESIGN.md §Log row already
+  // specifies, and would be twenty panels over a workout. Removing one is the opposite case:
+  // the evidence is an absence, and the rows below it renumber, which reads as a second mistake
+  // unless something says it was meant.
+  it('confirms a removed set, and says the renumbering was meant', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(3)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 2,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 2' }))
+
+    expect(await squat.findByRole('status')).toHaveTextContent(
+      'Set 2 removed. The rest are renumbered.',
+    )
+  })
+
   it('keeps the set and says so when removing it fails', async () => {
     // Same split as every other write on this screen: unreachable is worth another tap, a
     // refusal is not. A set that is still there must not look deleted.
@@ -663,7 +682,7 @@ describe('LogWorkoutScreen', () => {
     await logSet('Back Squat', '100', '8')
 
     const squat = await block('Back Squat')
-    expect(await squat.findByRole('alert')).toHaveTextContent('No connection. Nothing was saved — try again.')
+    expect(await squat.findByRole('alert')).toHaveTextContent('No connection. Nothing was saved, so try again.')
     expect(squat.getByLabelText(/set 1 weight/)).toHaveValue('100')
     expect(squat.getByLabelText(/set 1 reps/)).toHaveValue('8')
 
@@ -713,6 +732,16 @@ describe('LogWorkoutScreen', () => {
     await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
     // database.md: weight_kg is NULL for bodyweight, not 0.
     expect(setPosts(fetchMock)[0].body).toMatchObject({ weightKg: null, reps: 12 })
+
+    // ...and the saved row stands the absent weight in with NO_VALUE. This assertion is here
+    // because the glyph is the one thing about this row that nothing was checking: the screen
+    // rendered an em dash for two dozen tickets, which DESIGN.md §Absolute bans rules out of
+    // every rendered string, and no test read the cell. The row's accessible name says "12
+    // reps" and never mentions a weight, so the dash is invisible to a label assertion — it
+    // has to be read off the cell itself.
+    const row = await squat.findByRole('button', { name: 'Set 1, 12 reps' })
+    expect(row).toHaveTextContent('–')
+    expect(row).not.toHaveTextContent('—')
   })
 
   // -- Resume --

@@ -396,6 +396,73 @@ describe('ClientsScreen', () => {
     expect(JSON.parse(String((patches[0][1] as RequestInit).body))).toEqual({ isActive: false })
   })
 
+  // #140. The prompt rendered as `text-sm text-ink-bold` — bare ink on paper, in a row that
+  // already holds a name, an email, a date and a status word in the same two neutrals — so the
+  // question arming the roster's destructive write was the least visible thing in its own row.
+  // The panel is the fix and its tint is not assertable in jsdom; what is assertable is the role
+  // that carries the same split, and the wiring that makes the two buttons answers to it.
+  it('renders the deactivate prompt as a message, with the answers wired to the question', async () => {
+    mockApi({ clients: [ada] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Deactivate Ada' }))
+
+    const prompt = screen.getByRole('alert')
+    expect(prompt).toHaveTextContent('Deactivate Ada? Their reminder emails stop too.')
+    // The glyph, which is the axis that survives greyscale and deuteranopia. Its absence is how
+    // a panel quietly reverts to colour-only.
+    expect(prompt.querySelector('[aria-hidden="true"]')).toHaveTextContent('!')
+
+    expect(screen.getByRole('group')).toHaveAccessibleName(
+      'Deactivate Ada? Their reminder emails stop too.',
+    )
+    expect(screen.getByRole('button', { name: 'Deactivate' })).toHaveAttribute(
+      'aria-describedby',
+      prompt.id,
+    )
+  })
+
+  // The other half of #140: every write says it worked. A deactivate that landed used to report
+  // itself only by one word changing in a column the trainer is not looking at — and on a phone
+  // that column is not even beside the button they pressed.
+  it('confirms a deactivate, naming the side effect on the way out as well as in', async () => {
+    mockApi({
+      clients: [ada],
+      onPatch: () => ({ json: async () => ({ ...ada, isActive: false }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Deactivate Ada' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Deactivate' }))
+
+    // status, not alert: a confirmation waits its turn rather than interrupting, because the
+    // trainer already knows they pressed the button.
+    const confirmation = await screen.findByRole('status')
+    expect(confirmation).toHaveTextContent('Ada is deactivated. Their reminder emails have stopped.')
+    expect(confirmation.querySelector('[aria-hidden="true"]')).toHaveTextContent('✓')
+    expect(screen.getByRole('button', { name: 'Reactivate Ada' })).toHaveAttribute(
+      'aria-describedby',
+      confirmation.id,
+    )
+  })
+
+  it('confirms a reactivate, and says the reminders do not come back with it', async () => {
+    // The asymmetry #25 leaves behind: deactivating disables the schedule and reactivating does
+    // not re-enable it. A confirmation that only said "reactivated" would imply otherwise.
+    const deactivated = { ...ada, isActive: false }
+    mockApi({
+      clients: [deactivated],
+      onPatch: () => ({ json: async () => ({ ...ada, isActive: true }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Reactivate Ada' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Ada is active again. Their reminders stay off until you turn them back on.',
+    )
+  })
+
   it('lets the confirmation be cancelled without writing anything', async () => {
     const fetchMock = mockApi({ clients: [ada] })
     renderScreen()

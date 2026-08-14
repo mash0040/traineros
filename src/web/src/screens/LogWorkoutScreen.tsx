@@ -18,8 +18,11 @@ import {
   logSet,
   updateSessionComment,
 } from '../lib/api'
+import { NO_VALUE } from '../lib/glyphs'
 import { targetLine } from '../lib/prescription'
 import { clearDraft, readDraft, todayIn, writeDraft } from '../lib/workoutDraft'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -523,6 +526,10 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
     // the fix demanded was to delete digits she never typed. Asking keeps the guarantee —
     // nothing is dropped without her saying so — and spends one tap instead of a cleanup.
     if (unsavedNames.length > 0) {
+      // The failure from an earlier Finish goes with the question that replaced it. Left set, it
+      // would come back the moment she cancelled — a message about an attempt she has since
+      // typed over, resurrected by a dismissal.
+      setFinishError(null)
       setDiscardAsked(true)
       return
     }
@@ -654,26 +661,52 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
 
       <div className="sticky bottom-0 -mx-6 mt-10 border-t border-edge bg-surface px-6 pb-8 pt-4 shadow-[var(--shadow-sticky)]">
         <div className="mx-auto grid w-full max-w-lg gap-2">
-          {finishError !== null && (
-            <p className="text-sm text-danger" id="finish-error" role="alert">
-              {finishError}
-            </p>
+          {/* This footer's one message, and it is *derived* rather than stored — the case
+              DESIGN.md §Messages carves out. The prompt has to disappear the moment she saves
+              the unsaved row, and that row is in a different block entirely, so the question of
+              whether to ask is not this block's to remember. `confirmingDiscard` is #46's
+              derivation and this is the same idea one level up.
+
+              The prompt wins over a finish failure: a dropped Finish that she has since typed
+              into is no longer the live question. Stacked, which is what they did before, they
+              were two panels in a bar with no room for one.
+
+              The panel, in the footer that raised it. The prompt was --ink-bold body text with
+              no border and no glyph, on the one bar in the app that is already --surface over
+              --surface — so the question standing between a client and a lost set had less
+              visual weight than the two buttons answering it. The failure tone is right and not
+              a compromise: this prompt is about work about to be thrown away.
+
+              It drops from --text-base to the panel's --text-sm, which DESIGN.md fixes for
+              every tone so a message cannot change the height of the block it appears in. In a
+              sticky footer that rule earns its keep twice over: the bar is pinned to the bottom,
+              so anything that grows it pushes the whole thing up over the row she was last
+              looking at. */}
+          {confirmingDiscard ? (
+            <Message id="finish-message" tone="prompt">
+              {discardPrompt(unsavedNames)}
+            </Message>
+          ) : (
+            finishError !== null && (
+              <Message id="finish-message" tone="failure">
+                {finishError}
+              </Message>
+            )
           )}
+
           {/* Inline, in the bar the tap came from, rather than a dialog over the screen —
               DESIGN.md bans the modal as the first answer and #105 settled the same question
               for removing a set. The two choices replace the button that raised them, so there
               is never a Finish control on screen that does something other than what it says. */}
           {confirmingDiscard ? (
-            <div aria-labelledby="discard-prompt" className="grid gap-2" role="group">
-              <p className="text-base text-ink-bold" id="discard-prompt" role="alert">
-                {discardPrompt(unsavedNames)}
-              </p>
+            <div aria-labelledby="finish-message" className="grid gap-2" role="group">
               {/* Cancel takes the bottom slot, where the thumb already is: Finish is the most
                   tapped control on this screen and a second tap out of habit has to land on
                   the harmless answer. Same reason the Remove control sits below its row. It
                   carries the accent for the same reason — amber is what to tap, and after this
                   question the safe answer is the one to reach for. */}
               <button
+                aria-describedby="finish-message"
                 className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md border border-edge px-4 text-base font-semibold text-danger"
                 onClick={() => void finishSession()}
                 type="button"
@@ -691,7 +724,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
             </div>
           ) : (
             <button
-              aria-describedby={finishError === null ? undefined : 'finish-error'}
+              aria-describedby={finishError === null ? undefined : 'finish-message'}
               className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
               disabled={finishing}
               onClick={() => void onFinish()}
@@ -722,7 +755,28 @@ const HISTORY_PAGE = 100
 // Unchanged from #47. #46 still owns the last-time column; the two input columns are #45's.
 // The first two columns are fixed and the inputs share the remainder, because the numbers on
 // the left are read and the controls on the right are tapped.
-const LOG_ROW_GRID = 'grid grid-cols-[2rem_5rem_1fr_1fr] items-end gap-3'
+//
+// ── Declared once, distributed by subgrid (#138) ───────────────────────────────────────────
+// This template used to be applied as a class to three independent grid containers: the header
+// row, every saved row, and the pending input row. That is the shape #137 found misaligning
+// the clients roster, where two containers holding one template string resolved it to two
+// different layouts.
+//
+// It was not misaligning anything here, and the reason is worth stating so nobody "restores"
+// it: every track is fixed or fr, and content-independent tracks resolve identically in any
+// container of equal width. The roster drifted because two of its tracks were `auto`.
+//
+// So this was a loaded gun rather than a wound, and it is pointed at the one screen this
+// document spends a whole section on. Adding a single `auto` track, or padding to any one of
+// the three rows, would have broken the column alignment that §Log row depends on — silently,
+// because nothing here would have looked wrong until a set was logged. One definition on the
+// block, subgrid on the rows, and the failure mode is gone rather than deferred.
+const LOG_BLOCK_GRID = 'grid grid-cols-[2rem_5rem_1fr_1fr] gap-x-3'
+
+// What each row wears instead of a copy of the template: span the four tracks, take their
+// sizes from the block. `items-end` stays per-row, because it is alignment within a row and
+// not a property of the columns.
+const LOG_ROW_GRID = 'col-span-4 grid grid-cols-subgrid items-end'
 
 function ExerciseBlock({
   block,
@@ -746,21 +800,56 @@ function ExerciseBlock({
   const target = targetLine(prescription)
   const nextSetNumber = block.saved.length + 1
 
+  // Per-block, because a session renders one of these per exercise and a bare "save-error"
+  // would be the same id four times over — at which point aria-describedby points every Save
+  // button at whichever block rendered first (#138, DESIGN.md §Messages).
+  const pendingErrorId = `pending-error-${prescription.id ?? name}`
+
   // Which saved row has its actions showing. One at a time, per exercise.
   const [openSetId, setOpenSetId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteFailure, setDeleteFailure] = useState<Failure | null>(null)
+
+  // The removal receipt, held by the block because the row it is about is gone by the time there
+  // is anything to say — and so is the disclosure the delete failure lives in.
+  //
+  // Only `done` is used. The save failure that shares this slot is `block.pending.failure`,
+  // which belongs to the screen because it also decides whether the Save button reads "Save set"
+  // or "Try again", so it cannot move in here without splitting that. The slot is therefore
+  // *derived* below rather than stored — DESIGN.md §Messages allows either, and this is the case
+  // it allows it for: one message, computed, when the block does not own all of its inputs.
+  const removal = useBlockMessage(`removed-${prescription.id ?? name}`)
+
+  // One message. The failure wins, because a set that would not save is the live problem and a
+  // receipt for a row deleted a moment ago is not.
+  const message: { tone: 'failure' | 'confirmation'; body: React.ReactNode; id: string } | null =
+    block.pending.failure !== null
+      ? { tone: 'failure', body: block.pending.failure.message, id: pendingErrorId }
+      : removal.message === null
+        ? null
+        : { tone: 'confirmation', body: removal.message.body, id: removal.id }
 
   async function remove(setId: string) {
     if (deleting) {
       return
     }
 
+    const setNumber = block.saved.find((candidate) => candidate.id === setId)?.setNumber
+
     setDeleting(true)
     setDeleteFailure(null)
+    removal.clear()
     try {
       await onDelete(setId)
       setOpenSetId(null)
+      // Names the renumbering rather than only the removal, because the server renumbers the
+      // sets above it (#105) and the local copy mirrors that: a client watching set 3 become
+      // set 2 needs to know that is the fix and not a second mistake.
+      removal.done(
+        setNumber === undefined
+          ? 'Set removed. The rest are renumbered.'
+          : `Set ${setNumber} removed. The rest are renumbered.`,
+      )
     } catch (caught) {
       setDeleteFailure(classify(caught))
     } finally {
@@ -770,6 +859,8 @@ function ExerciseBlock({
 
   function toggle(setId: string) {
     setDeleteFailure(null)
+    // Opening or closing a row is an action in this block, so the receipt goes with it.
+    removal.clear()
     setOpenSetId((previous) => (previous === setId ? null : setId))
   }
 
@@ -787,7 +878,11 @@ function ExerciseBlock({
         <p className="mt-1 text-sm text-ink">{prescription.note}</p>
       )}
 
-      <div className="mt-4 grid gap-3 border-t border-edge pt-4">
+      {/* The one place the four columns are defined. Every row below spans them via subgrid;
+          none of them restates the template. gap-y here rather than in LOG_BLOCK_GRID because
+          the column gap belongs to the columns and travels with them, while the row rhythm is
+          this block's own. */}
+      <div className={`mt-4 gap-y-3 border-t border-edge pt-4 ${LOG_BLOCK_GRID}`}>
         {/* One header row naming all four columns at the same height, rather than labels
             scattered down the block. aria-hidden throughout: every cell beneath already carries
             its own label — the values via visually-hidden text (see LastCell), the inputs via
@@ -839,17 +934,39 @@ function ExerciseBlock({
           />
         </div>
 
-        {block.pending.failure !== null && (
-          <p className="text-sm text-danger" role="alert">
-            {block.pending.failure.message}
-          </p>
+        {/* One slot: the set that would not save, or the receipt for the one that was removed.
+            The row vanishing is *nearly* the confirmation, and on the save path it genuinely is
+            one — a saved set turns into a row directly above the inputs, which is why there is
+            no panel there and why twenty of them per workout would be intolerable. Delete is the
+            other way round: the evidence is an absence, the rows below it renumber, and a client
+            who tapped Remove on a gym floor and looked up is being asked to notice which of
+            several rows is no longer there.
+
+            col-span-4: the block is a four-track grid and a panel is not a column. Left as a
+            grid item it would land in track 1 (the 2rem set-number column) and wrap to
+            nothing. */}
+        {message !== null && (
+          <Message className="col-span-4" id={message.id} tone={message.tone}>
+            {message.body}
+          </Message>
         )}
 
         {/* Full-width and 44px: the second-most-tapped control on the screen, and the one that
             has to be hittable without looking. Its label carries the failure state, because
-            "Try again" and "Save set" are different promises. */}
+            "Try again" and "Save set" are different promises.
+
+            `col-span-4` is not decoration, and its absence was a live defect at every width.
+            This button is a direct child of the four-track block grid, and a grid item with no
+            placement auto-flows into the next free slot — track 1, which is the `2rem`
+            set-number column. So `w-full` was 100% of 32px: the most important control on the
+            client's most important screen was a sliver with its label wrapped down the side of
+            it. #138 introduced it by moving the column template up from the individual rows
+            onto the block, which turned two plain siblings into grid items; nothing in the DOM
+            changed, so nothing in a test could see it. The pending-failure panel above had the
+            same defect and the same fix. */}
         <button
-          className="grid min-h-[var(--tap-min)] w-full place-items-center rounded-sm border border-edge bg-surface-sunk px-4 text-base font-semibold text-ink disabled:text-muted"
+          aria-describedby={block.pending.failure === null ? undefined : pendingErrorId}
+          className="col-span-4 grid min-h-[var(--tap-min)] w-full place-items-center rounded-sm border border-edge bg-surface-sunk px-4 text-base font-semibold text-ink disabled:text-muted"
           disabled={block.pending.saving}
           onClick={onSave}
           type="button"
@@ -893,7 +1010,10 @@ function SavedRow({
   set: SavedSet
 }) {
   return (
-    <div className="grid gap-2">
+    // A subgrid of the block, so the button inside it can be a subgrid in turn: a plain wrapper
+    // here would break the chain, since subgrid needs its parent to be the grid whose tracks it
+    // is borrowing. gap-y only — the column gap comes down from the block with the columns.
+    <div className="col-span-4 grid grid-cols-subgrid gap-y-2">
       {/* Labelled rather than read from its cells: "1 Last time – 100 8" is not a sentence, and
           the row's job here is to be one announceable thing that opens. */}
       <button
@@ -905,20 +1025,25 @@ function SavedRow({
       >
         <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
         <LastCell set={last} />
+        {/* NO_VALUE, not a literal em dash. DESIGN.md §Absolute bans rules em dashes out of
+            rendered strings, and this screen was rendering one for bodyweight while the roster
+            rendered an en dash for the same idea. One glyph, one constant (#138). */}
         <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
-          {set.weightKg === null ? '—' : set.weightKg}
+          {set.weightKg === null ? NO_VALUE : set.weightKg}
         </span>
         <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
       </button>
 
       {open && (
-        <div className="grid gap-2">
+        // Full width under the row it belongs to, not part of the column layout.
+        <div className="col-span-4 grid gap-2">
           {deleteFailure !== null && (
-            <p className="text-sm text-danger" role="alert">
+            <Message id={`delete-error-${set.id}`} tone="failure">
               {deleteFailure.message}
-            </p>
+            </Message>
           )}
           <button
+            aria-describedby={deleteFailure === null ? undefined : `delete-error-${set.id}`}
             className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge px-4 text-base font-semibold text-danger disabled:text-muted"
             disabled={deleting}
             onClick={onDelete}
@@ -967,7 +1092,10 @@ function LastCell({ set }: { set: LastSet | undefined }) {
     set === undefined ? (
       // One dash, at --muted. Not "no data yet" copy — and it holds the row's place so the
       // strip stays aligned to set number when last time ran to fewer sets than today.
-      <span className="text-base font-semibold text-muted tabular-nums">&ndash;</span>
+      // NO_VALUE rather than a literal `&ndash;`, so the three places this app says "nothing
+      // here" say it with one glyph (#138). The sr-only text this cell already carries is
+      // below, on the wrapper — the constant is the glyph only, never the label.
+      <span className="text-base font-semibold text-muted tabular-nums">{NO_VALUE}</span>
     ) : (
       <span className="text-base font-semibold text-ink tabular-nums">
         {set.weightKg === null || set.weightKg === undefined ? (
@@ -1189,7 +1317,7 @@ function classify(caught: unknown): Failure {
   if (caught instanceof ApiError && caught.status === 0) {
     // status 0 is api.ts's marker for "fetch itself threw" — offline, DNS, refused connection.
     // Nothing reached the server, so the same tap is worth making again.
-    return { kind: 'unreachable', message: 'No connection. Nothing was saved — try again.' }
+    return { kind: 'unreachable', message: 'No connection. Nothing was saved, so try again.' }
   }
 
   if (caught instanceof ApiError) {

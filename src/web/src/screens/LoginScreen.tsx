@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { ApiError, requestMagicLink } from '../lib/api'
+import { Message } from './Message'
 
 // ui-ux.md §Client screens, Login. One field, one button, then a state that tells the client
 // to go look at their inbox.
@@ -44,7 +45,7 @@ export function LoginScreen() {
 
       {/* content-end puts the form in the thumb zone on a phone (DESIGN.md §Thumb-reach);
           centered from sm: up, where reach stops mattering and bottom-anchored looks broken. */}
-      <div className="mx-auto grid w-full max-w-[26rem] content-end gap-10 sm:content-center">
+      <div className="mx-auto grid w-full max-w-lg content-end gap-10 sm:content-center">
         {sentTo === null ? (
           <>
             <div className="grid gap-2">
@@ -73,10 +74,16 @@ export function LoginScreen() {
                   onChange={(event) => setEmail(event.target.value)}
                   aria-describedby={error === null ? undefined : 'email-error'}
                 />
+                {/* The panel, not a line of --danger text. This screen is the reason DESIGN.md's
+                    old "client screens are single-purpose, so their messages are the whole view"
+                    carve-out did not hold: a rate-limit refusal here renders under a filled field,
+                    above a filled amber button, beside a heading and two paragraphs — the message
+                    is emphatically not the content of the view, and at 14px in one colour it was
+                    the quietest thing on a screen full of louder ones. */}
                 {error !== null && (
-                  <p className="text-sm text-danger" id="email-error" role="alert">
+                  <Message id="email-error" tone="failure">
                     {error}
-                  </p>
+                  </Message>
                 )}
               </div>
 

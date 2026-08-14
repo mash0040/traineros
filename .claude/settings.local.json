@@ -1,5 +1,27 @@
 {
-  "description": "Impeccable design detector: immediate-tier checks after Edit/Write/MultiEdit on UI files, full-rule deep pass on Stop.",
+  "permissions": {
+    "allow": [
+      "Bash(grep -v \"^\\\\s*//\")",
+      "Bash(cd \"c:/Users/masha/trainerOS/traineros\" && rm src/web/src/screens/TrainerMessage.tsx src/web/src/screens/TrainerMessage.test.tsx && echo removed)",
+      "Bash(sed -i \"s/'inline-flex min-h-\\\\[var\\(--tap-min\\)\\\\] min-w-\\\\[var\\(--tap-min\\)\\\\] cursor-pointer items-center ' +/'inline-flex min-h-[var\\(--tap-min\\)] min-w-[var\\(--tap-min\\)] items-center ' +/\" src/web/src/screens/trainerControls.ts)",
+      "Bash(sed -i \"s/'justify-center rounded-sm px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed'/'justify-center rounded-sm px-3 py-2 text-sm font-semibold'/\" src/web/src/screens/trainerControls.ts)",
+      "Bash(sed -i \"s/export const trainerLink = 'cursor-pointer font-semibold underline underline-offset-4 hover:text-ink-bold'/export const trainerLink = 'font-semibold underline underline-offset-4 hover:text-ink-bold'/\" src/web/src/screens/trainerControls.ts)",
+      "Bash(sed -i \"s/'group inline-flex cursor-pointer items-center gap-1 text-base font-semibold text-ink-bold ' +/'group inline-flex items-center gap-1 text-base font-semibold text-ink-bold ' +/\" src/web/src/screens/trainerControls.ts)",
+      "Bash(sed -i \"s/'inline-flex min-h-\\\\[var\\(--tap-min\\)\\\\] cursor-pointer items-center hover:text-ink-bold'/'inline-flex min-h-[var\\(--tap-min\\)] items-center hover:text-ink-bold'/\" src/web/src/screens/trainerControls.ts)",
+      "Bash(python3 -)",
+      "Bash(npx eslint *)",
+      "Bash(sed -i 's/className=\"flex min-h-\\\\[var\\(--tap-min\\)\\\\] cursor-pointer items-center gap-2 text-sm text-ink\"/className=\"flex min-h-[var\\(--tap-min\\)] items-center gap-2 text-sm text-ink\"/; s/className=\"size-5 cursor-pointer\"/className=\"size-5\"/g; s/className=\"flex min-h-\\\\[var\\(--tap-min\\)\\\\] cursor-pointer items-center gap-2 text-sm font-semibold text-ink\"/className=\"flex min-h-[var\\(--tap-min\\)] items-center gap-2 text-sm font-semibold text-ink\"/' src/web/src/screens/ClientDetailScreen.tsx)",
+      "Bash(sed -i 's/className=\"inline-flex min-h-\\\\[var\\(--tap-min\\)\\\\] cursor-pointer items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold\"/className=\"inline-flex min-h-[var\\(--tap-min\\)] items-center gap-1 text-sm font-semibold text-ink hover:text-ink-bold\"/' src/web/src/screens/ExercisesScreen.tsx)",
+      "Bash(perl -0pi -e ' *)",
+      "Bash(cd \"c:/Users/masha/trainerOS/traineros\" && cp src/web/src/screens/ProgramBuilderScreen.tsx /c/Users/masha/AppData/Local/Temp/claude/c--Users-masha-trainerOS-traineros/5d45c83f-e6bd-441a-a8be-d3673cf9b796/scratchpad/PB.broken.tsx && grep -n \"AMRAP, RPE 8\" src/web/src/screens/ProgramBuilderScreen.tsx | head -5; echo \"--- bytes of my new line ---\"; grep -n 'block.fail\\(\"Reps are required' src/web/src/screens/ProgramBuilderScreen.tsx | head -2; sed -n '777p' src/web/src/screens/ProgramBuilderScreen.tsx | od -c | head -4)",
+      "Bash(node \"/c/Users/masha/AppData/Local/Temp/claude/c--Users-masha-trainerOS-traineros/5d45c83f-e6bd-441a-a8be-d3673cf9b796/scratchpad/unmojibake.mjs\" src/web/src/screens/ProgramBuilderScreen.tsx)",
+      "Bash(node -e ' *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\masha\\trainerOS\\traineros\\src\\web\\src\\screens",
+      "C:\\Users\\masha\\AppData\\Local\\Temp\\claude\\c--Users-masha-trainerOS-traineros\\5d45c83f-e6bd-441a-a8be-d3673cf9b796\\scratchpad"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -26,5 +48,6 @@
         ]
       }
     ]
-  }
+  },
+  "description": "Impeccable design detector: immediate-tier checks after Edit/Write/MultiEdit on UI files, full-rule deep pass on Stop."
 }

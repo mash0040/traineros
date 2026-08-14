@@ -73,4 +73,44 @@
     outline: 2px solid var(--color-edge-strong);
     outline-offset: 2px;
   }
+
+  /* One pointer rule everywhere, for the same reason the focus ring is one rule: an affordance
+     restated per control is an affordance that drifts. It drifted — trainerControls.ts carried
+     `cursor-pointer` on six strings and the client screens carried it on none, so the login
+     button, "Use a different address", Continue, Pause reminders, Save set, Finish workout and
+     every history card were the app's only controls that did not say they were controls under
+     a pointer. Adding a seventh utility string would have re-created the split one screen later.
+     DESIGN.md §Controls records this as the app-wide rule.
+
+     Selectors are on *what a thing is*, never on a class, so a new control is covered the moment
+     it is written rather than the moment someone remembers. `a[href]` and not `a`: an anchor with
+     no destination is not a control. Bare `label` is deliberately excluded — a label for a text
+     field focuses an input that is already showing a text caret, and a pointer there is a lie
+     about what the click does. The two that *are* controls in their own right (a checkbox or
+     radio and its label, which is the 44px target on the schedule form) are named explicitly. */
+  button,
+  summary,
+  a[href],
+  select,
+  [role='button'],
+  input[type='checkbox'],
+  input[type='radio'],
+  input[type='file'],
+  input[type='range'],
+  input[type='color'],
+  input[type='submit'],
+  input[type='reset'],
+  label:has(input[type='checkbox']),
+  label:has(input[type='radio']) {
+    cursor: pointer;
+  }
+
+  /* A control that cannot be pressed must not promise it can. `:disabled` covers the real
+     attribute; `[aria-disabled='true']` covers a control kept focusable on purpose. */
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
 }

@@ -690,4 +690,181 @@ describe('ProgramBuilderScreen', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Sets must be a whole number above zero.')
     expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)
   })
+
+  // ── #140: every write says it worked ──────────────────────────────────────────────────────
+
+  it('confirms a status transition, which the inverted button cannot do on its own', async () => {
+    // The selected treatment states which status the program is *in*. It looks identical whether
+    // the trainer just moved it or opened the page with it already there, so the most
+    // consequential write on this screen was reporting nothing at all.
+    mockApi({ onPatch: () => ({ json: async () => ({ ...program, status: 'active' }) }) })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Active' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Active. Your client sees this program on their Today screen now.',
+    )
+  })
+
+  it('does not turn the dismissal gesture into a confirmation of a save that never happened', async () => {
+    // Clicking the status the program is already in is how a rejected transition gets dismissed,
+    // and that path deliberately records an attempt without writing anything. Deriving success
+    // from "no error" would confirm it.
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Draft' }))
+
+    expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('confirms a day rename, which the field cannot do by keeping what was typed', async () => {
+    mockApi({ onPatch: () => ({ json: async () => ({ id: 'day-1', title: 'Legs', position: 1 }) }) })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const card = within(dayCard('Lower'))
+    await userEvent.clear(card.getByLabelText('Day name'))
+    await userEvent.type(card.getByLabelText('Day name'), 'Legs')
+    await userEvent.click(card.getByRole('button', { name: 'Save name' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Name saved.')
+  })
+
+  it('confirms a deleted day from the section, since the card that would have said so is gone', async () => {
+    mockApi({})
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete Lower' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete day' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Lower deleted. Workouts your client already logged against it stay in their history.',
+    )
+    expect(screen.queryByDisplayValue('Lower')).not.toBeInTheDocument()
+  })
+
+  it('confirms a deleted prescription from the day, since the row that would have said so is gone', async () => {
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(row.getByRole('button', { name: 'Delete Back Squat' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Back Squat removed from this day. Sets your client already logged against it stay in their history.',
+    )
+  })
+
+  it('renders both delete prompts as messages, wired to the controls that answer them', async () => {
+    // Both were bare paragraphs — ink for the question, muted for the reassurance — arming the
+    // two destructive writes in the builder. The prescription row's reassurance rendered *after*
+    // its buttons, which is the placement rule broken as well as the treatment.
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+
+    const prompt = screen.getByRole('alert')
+    expect(prompt).toHaveTextContent('Delete Back Squat from this day?')
+    expect(prompt).toHaveTextContent(/Sets your client already logged against Back Squat stay/)
+    expect(row.getByRole('button', { name: 'Delete Back Squat' })).toHaveAttribute(
+      'aria-describedby',
+      prompt.id,
+    )
+  })
+
+  // ── #141: a block holds one message ───────────────────────────────────────────────────────
+
+  it('takes the delete prompt down when the trainer saves the row instead of answering it', async () => {
+    // The reported defect, exactly: open the delete prompt, change your mind, press Save. The
+    // row rendered "Saved." stacked on top of a prompt still offering to delete the exercise
+    // that had just been saved.
+    mockApi({ onPatch: () => ({ json: async () => ({ id: 'presc-1', targetSets: 3 }) }) })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Delete Back Squat from this day?')
+
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
+    expect(screen.queryByText(/Delete Back Squat from this day\?/)).not.toBeInTheDocument()
+    // The controls come down with the question, because they are read off the same slot. Left
+    // armed, the row would still be offering a one-tap delete under a "Saved.".
+    expect(row.queryByRole('button', { name: 'Delete Back Squat' })).not.toBeInTheDocument()
+    expect(row.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('takes an unanswered delete prompt down when the trainer edits the row', async () => {
+    // "Any action within the block dismisses an unanswered prompt": the question is moot once
+    // the trainer has done something else with the row.
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    await userEvent.type(row.getByLabelText('Load'), '5')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(row.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('clears a confirmation when a prompt opens, rather than showing both', async () => {
+    mockApi({ onPatch: () => ({ json: async () => ({ id: 'presc-1', targetSets: 3 }) }) })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
+
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Delete Back Squat from this day?')
+  })
+
+  it('writes nothing to the slot when a prompt is cancelled', async () => {
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    await userEvent.click(row.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(row.getByRole('button', { name: 'Keep it' }))
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('puts the add-day and add-exercise messages before their submit, not after it', async () => {
+    // The last two sites still rendering a message after the control that produced it. In a
+    // flex-wrap row "after" and "below" look identical until you read the DOM, which is how
+    // these two survived #138's pass over the other eighteen.
+    mockApi({})
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add day' }))
+
+    const message = screen.getByRole('alert')
+    const submit = screen.getByRole('button', { name: 'Add day' })
+    expect(message.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(submit).toHaveAttribute('aria-describedby', message.id)
+  })
 })

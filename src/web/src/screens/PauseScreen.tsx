@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { ApiError, checkPauseLink, pauseReminders } from '../lib/api'
+import { Message } from './Message'
 
 // The same five-way split the verify screen draws, for the same reasons, plus the terminal
 // state this flow ends in. 'unreachable' is not 'invalid': one means the link is spent, the
@@ -93,7 +94,7 @@ export function PauseScreen() {
     <main className="grid min-h-dvh grid-rows-[auto_1fr] px-6 pb-10 pt-10">
       <p className="text-sm font-semibold tracking-wide text-muted">TrainerOS</p>
 
-      <div className="mx-auto grid w-full max-w-[26rem] content-end gap-10 sm:content-center">
+      <div className="mx-auto grid w-full max-w-lg content-end gap-10 sm:content-center">
         {status === 'checking' ? (
           // No spinner, same as verify: the check is one request and a spinner for 80ms is
           // noise. Plain text, announced for screen readers.
@@ -156,9 +157,9 @@ export function PauseScreen() {
                 Nothing is paused until you tap. Your trainer can turn reminders back on.
               </p>
               {error !== null && (
-                <p className="text-sm text-danger" role="alert">
+                <Message id="pause-error" tone="failure">
                   {error}
-                </p>
+                </Message>
               )}
             </div>
 
@@ -167,6 +168,7 @@ export function PauseScreen() {
                 exactly one; not --danger, because pausing your own email is a preference the
                 trainer can reverse, not a destructive act. */}
             <button
+              aria-describedby={error === null ? undefined : 'pause-error'}
               className="min-h-[var(--tap-min)] rounded-md bg-accent px-4 text-base font-semibold text-accent-ink hover:bg-accent-hover disabled:bg-surface-sunk disabled:text-muted"
               disabled={status === 'pausing'}
               onClick={() => void onPause()}

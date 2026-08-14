@@ -177,9 +177,13 @@ describe('ExercisesScreen', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Retire Back Squat' }))
 
-    const prompt = screen.getByRole('group')
+    // The prompt is a Message panel (#140: a question that arms a write is a message), so it is
+    // the alert rather than the group — and the group of answers is labelled by it, which is
+    // what keeps the question and its two buttons one object for a screen reader.
+    const prompt = screen.getByRole('alert')
     expect(within(prompt).getByText(/Programs already using it keep it/)).toBeInTheDocument()
     expect(within(prompt).getByText(/logged sets stay exactly as they are/)).toBeInTheDocument()
+    expect(screen.getByRole('group')).toHaveAccessibleName(/Retire Back Squat\?/)
   })
 
   it('retires with a PATCH that touches nothing but isActive', async () => {
@@ -437,5 +441,115 @@ describe('ExercisesScreen', () => {
 
     expect(await screen.findByText(/No exercises yet/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add an exercise' })).toBeInTheDocument()
+  })
+
+  // #142. Arming swapped nothing: the card kept [Edit][Retire] in the header and *appended* a
+  // second [Retire][Cancel] row below its whole body. Two Retire buttons, only one of them live,
+  // and the answers separated from the question by everything the card had to say. The existing
+  // tests passed either way, because they only ever asked for a button named "Retire" and the
+  // inert original happened to be named "Retire Back Squat".
+  it('swaps the control row in place when armed, leaving one Retire on screen', async () => {
+    mockApi({ library: [squat] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retire Back Squat' }))
+
+    // The trigger does not linger after it has been answered — an inert control that still
+    // looks live reads as broken rather than as already-answered.
+    expect(screen.queryByRole('button', { name: 'Retire Back Squat' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /^Retir/ })).toHaveLength(1)
+
+    // Edit gives up its place to Cancel rather than sitting beside a second control row.
+    expect(screen.queryByRole('button', { name: 'Edit Back Squat' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+
+    // And the answers are where the trigger was: one control row in the card, not two.
+    expect(within(rowByHeading('Back Squat')).getAllByRole('group')).toHaveLength(1)
+  })
+
+  it('restores the resting control row when the prompt is cancelled', async () => {
+    mockApi({ library: [squat] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retire Back Squat' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.getByRole('button', { name: 'Edit Back Squat' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retire Back Squat' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps the question directly above the buttons that answer it', async () => {
+    // DESIGN.md §Messages placement, and the half #142 broke: the panel was above the *trigger*
+    // and the answers were below Details. Asserting DOM adjacency rather than classes, since
+    // jsdom loads no stylesheet.
+    mockApi({ library: [squat] })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retire Back Squat' }))
+
+    const prompt = screen.getByRole('alert')
+    const answers = screen.getByRole('group')
+    expect(prompt.compareDocumentPosition(answers) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Nothing of the card's own content sits between them: the group is inside the header block
+    // that directly follows the panel.
+    expect(prompt.nextElementSibling).toContainElement(answers)
+  })
+
+  // ── #140: every write says it worked ──────────────────────────────────────────────────────
+
+  it('confirms a retire by repeating what it does not touch', async () => {
+    // "Retired" appearing beside the heading and the button swapping to Restore are both true
+    // and neither is an answer to "did that go through" — and the three facts the prompt gives
+    // on the way in are exactly the ones a trainer wants repeated on the way out.
+    mockApi({
+      library: [squat],
+      onPatch: () => ({ json: async () => ({ ...squat, isActive: false }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retire Back Squat' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Retire' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Back Squat is retired. Programs already using it keep it, and logged sets are untouched.',
+    )
+  })
+
+  it('confirms a restore', async () => {
+    const retired = { ...squat, isActive: false }
+    mockApi({
+      library: [retired],
+      onPatch: () => ({ json: async () => ({ ...squat, isActive: true }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Restore Back Squat' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Back Squat is back in the library. You can prescribe it again.',
+    )
+  })
+
+  it('confirms an edit from the row, because saving closes the form that would have said so', async () => {
+    // The editor collapses on a successful save, so a message inside it unmounts with the write
+    // it is confirming. The row outlives it, which is why the row holds it.
+    mockApi({
+      library: [squat],
+      onPatch: () => ({ json: async () => ({ ...squat, name: 'Front Squat' }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Back Squat' }))
+    const name = screen.getByLabelText('Name')
+    await userEvent.clear(name)
+    await userEvent.type(name, 'Front Squat')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // Names the exercise, because a rename also re-sorts the list and the row the trainer was
+    // editing may have moved.
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved. Front Squat is up to date.')
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
   })
 })

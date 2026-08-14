@@ -4,10 +4,12 @@ import type { ClientResponse } from '../api/types.gen'
 import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
 import { looksLikeEmail } from '../lib/email'
+import { NO_VALUE } from '../lib/glyphs'
 import { formatSessionDate } from '../lib/history'
 import { todayIn } from '../lib/workoutDraft'
+import { useBlockMessage } from './blockMessage'
+import { Message } from './Message'
 import { RecordLink } from './RecordLink'
-import { TrainerMessage } from './TrainerMessage'
 import { TrainerShell } from './TrainerShell'
 import {
   trainerDanger,
@@ -326,12 +328,14 @@ function ClientRow({
   onUpdated: (client: ClientResponse) => void
   today: string
 }) {
-  const [confirming, setConfirming] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const active = client.isActive !== false
   const name = client.displayName ?? 'Client'
+
+  // This row's one slot. Per-row id, because a roster renders one of these per client and a
+  // shared one would point every row's control at the first row's message (#138).
+  const block = useBlockMessage(`client-message-${client.id ?? name}`)
 
   async function setActive(isActive: boolean) {
     if (client.id === undefined || saving) {
@@ -339,12 +343,22 @@ function ClientRow({
     }
 
     setSaving(true)
-    setError(null)
+    block.clear()
     try {
       onUpdated(await updateClient(client.id, { isActive }))
-      setConfirming(false)
+      // Lands in the slot the prompt was in, which is what closes the prompt: the row is armed
+      // exactly while the question is what is showing.
+      //
+      // Names the side effect on the way out for the same reason the prompt names it on the way
+      // in: #25 switches the reminder schedule off in the same transaction, and a trainer who
+      // reads "Deactivated" alone has no way to know that happened.
+      block.done(
+        isActive
+          ? `${name} is active again. Their reminders stay off until you turn them back on.`
+          : `${name} is deactivated. Their reminder emails have stopped.`,
+      )
     } catch (caught) {
-      setError(messageFor(caught, 'client'))
+      block.fail(messageFor(caught, 'client'))
     } finally {
       setSaving(false)
     }
@@ -356,6 +370,31 @@ function ClientRow({
     // of duplication that produced the misalignment. The row gap is this element's own business
     // (it separates the stacked cells on a phone, where there are no columns at all).
     <li className={`grid gap-y-1 py-3 sm:items-start ${trainerRecordRow} ${SUBGRID}`}>
+      {/* Before the trigger and full width, per DESIGN.md §Messages placement (#138). It used
+          to render after the button, inside the actions cell, with an mt-2 to hold it off.
+          Both were wrong: after, because the rule is before; and inside the cell, because the
+          actions track is `auto` and sized across every row at once, so one row's error panel
+          would have widened the actions column for the whole roster. Spanning all four tracks
+          keeps the message with its row and out of the column geometry. */}
+      {/* The row's one slot: the prompt that arms the deactivate, the refusal that came back, or
+          the receipt that it landed. Three separate renders before #141, which is how a
+          confirmation and an unanswered prompt could sit here together.
+
+          Up here rather than in the actions cell with the buttons, and not for placement reasons
+          — the rule is satisfied either way, since the row is the container that owns the
+          trigger. It is a column-geometry constraint: track 4 is `auto` and subgrid sizes it
+          across every row at once, so a panel inside that cell would set the actions column
+          width for the whole roster. */}
+      {block.message !== null && (
+        <Message
+          className={`${trainerRecordRowControl} sm:col-span-4`}
+          id={block.id}
+          tone={block.message.tone}
+        >
+          {block.message.body}
+        </Message>
+      )}
+
       <div className="min-w-0 sm:justify-self-start">
         {/* The way into the client detail screen (#51). The name is the link because it is what
             the trainer is already looking for when they scan the column; a separate "View"
@@ -389,39 +428,32 @@ function ClientRow({
           misreading is what produced the failed alignment attempt: justify-self is item
           placement inside a track, never track geometry. See COLUMNS. */}
       <div className={`sm:self-center sm:justify-self-start ${trainerRecordRowControl}`}>
-        {confirming ? (
+        {/* Read off the slot rather than a boolean beside it, so the row cannot be armed and
+            confirmed at the same time. */}
+        {block.prompting ? (
           // Inline, replacing the control that raised it, rather than a dialog over the page:
           // DESIGN.md calls the modal the lazy first answer, and #105/#108 settled the same
           // question for the client screens. The prompt names the side effect because it is
           // the part the trainer would not predict — deactivating also switches off their
-          // reminder emails, in the same transaction (#25).
-          <div className="grid justify-items-start gap-2" role="group">
-            <p className="text-sm text-ink-bold">
-              Deactivate {name}? Their reminder emails stop too.
-            </p>
-            <div className="flex gap-2">
-              <button
-                className={trainerDanger}
-                disabled={saving}
-                onClick={() => void setActive(false)}
-                type="button"
-              >
-                {saving ? 'Deactivating' : 'Deactivate'}
-              </button>
-              {/* Bordered, not amber. Dismissing is not committing, and a solid accent on the
-                  button that does nothing is the palette's one promise pointed at the wrong
-                  control. The confirmation prompt above is what makes this the safe exit. */}
-              <button
-                className={trainerSecondary}
-                onClick={() => {
-                  setConfirming(false)
-                  setError(null)
-                }}
-                type="button"
-              >
-                Cancel
-              </button>
-            </div>
+          // reminder emails, in the same transaction (#25). It is the panel at the top of this
+          // row; these are the two answers to it.
+          <div aria-labelledby={block.id} className="flex flex-wrap gap-2" role="group">
+            <button
+              aria-describedby={block.id}
+              className={trainerDanger}
+              disabled={saving}
+              onClick={() => void setActive(false)}
+              type="button"
+            >
+              {saving ? 'Deactivating' : 'Deactivate'}
+            </button>
+            {/* Bordered, not amber. Dismissing is not committing, and a solid accent on the
+                button that does nothing is the palette's one promise pointed at the wrong
+                control. The confirmation prompt above is what makes this the safe exit.
+                It writes nothing into the slot: a cancelled question needs no receipt. */}
+            <button className={trainerSecondary} onClick={block.clear} type="button">
+              Cancel
+            </button>
           </div>
         ) : (
           /* The headline defect in #132: one control, two opposite meanings, one appearance.
@@ -437,22 +469,21 @@ function ClientRow({
              get. A sighted trainer reads it off the name at the head of the row — which on a
              phone is directly above this button rather than four columns to the left. */
           <button
+            aria-describedby={block.describedBy}
             aria-label={
               saving ? `Saving ${name}` : active ? `Deactivate ${name}` : `Reactivate ${name}`
             }
             className={active ? trainerDanger : trainerSecondary}
             disabled={saving}
-            onClick={() => (active ? setConfirming(true) : void setActive(true))}
+            onClick={() =>
+              active
+                ? block.ask(<>Deactivate {name}? Their reminder emails stop too.</>)
+                : void setActive(true)
+            }
             type="button"
           >
             {saving ? 'Saving' : active ? 'Deactivate' : 'Reactivate'}
           </button>
-        )}
-
-        {error !== null && (
-          <TrainerMessage className="mt-2" tone="failure">
-            {error}
-          </TrainerMessage>
         )}
 
         {/* Reactivation is offered because the API has it and a one-way control would make a
@@ -488,7 +519,7 @@ function LastSession({
     return (
       <span className="text-base text-muted tabular-nums">
         <span className="sr-only">Last session not known</span>
-        <span aria-hidden="true">&ndash;</span>
+        <span aria-hidden="true">{NO_VALUE}</span>
       </span>
     )
   }
@@ -555,11 +586,24 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   const [displayName, setDisplayName] = useState('')
   const [timezone, setTimezone] = useState(browserTimezone)
   const [submitting, setSubmitting] = useState(false)
-  // Carries which field it is about, not just the words. Without that, "Enter their name" also
-  // marked the email input aria-invalid, so a screen reader announced the wrong field as the
-  // broken one — worse than no marking, because it sends someone to fix what is already right.
-  const [error, setError] = useState<{ message: string; field: 'name' | 'email' | null } | null>(null)
-  const [addedName, setAddedName] = useState<string | null>(null)
+  const block = useBlockMessage('add-client-message')
+
+  // Which field the message in the slot is about, when it is about one. Without it, "Enter their
+  // name" also marked the email input aria-invalid, so a screen reader announced the wrong field
+  // as the broken one — worse than no marking, because it sends someone to fix what is already
+  // right.
+  //
+  // Kept beside the slot rather than in it, and then *derived* back against it: the attribution
+  // only means anything while a failure is what is showing, so a stale value cannot mark a field
+  // invalid under a confirmation. That is the #141 rule applied to the one thing the slot does
+  // not itself carry.
+  const [field, setField] = useState<'name' | 'email' | null>(null)
+  const invalid = block.message?.tone === 'failure' ? field : null
+
+  function reject(message: string, about: 'name' | 'email' | null) {
+    setField(about)
+    block.fail(message)
+  }
 
   const emailRef = useRef<HTMLInputElement | null>(null)
   const nameRef = useRef<HTMLInputElement | null>(null)
@@ -574,8 +618,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
     const name = displayName.trim()
 
     if (name === '') {
-      setError({ message: 'Enter their name.', field: 'name' })
-      setAddedName(null)
+      reject('Enter their name.', 'name')
       nameRef.current?.focus()
       return
     }
@@ -594,18 +637,17 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
       // be able to tell which layer refused the address, because the distinction is ours, not
       // theirs: whether a typo is caught here or one round trip later is an implementation
       // detail of where the rules happen to differ in strictness.
-      setError({ message: 'Please enter a valid email address.', field: 'email' })
-      setAddedName(null)
+      reject('Please enter a valid email address.', 'email')
       emailRef.current?.focus()
       return
     }
 
     setSubmitting(true)
-    setError(null)
+    block.clear()
     try {
       const created = await createClient({ email: address, displayName: name, timezone })
       onAdded(created)
-      setAddedName(created.displayName ?? address)
+      block.done(`${created.displayName ?? address} added. Tell them to log in.`)
       setEmail('')
       setDisplayName('')
     } catch (caught) {
@@ -620,11 +662,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
         caught instanceof ApiError &&
         (caught.code === 'bad_request' || caught.code === 'email_taken')
 
-      setError({
-        message: messageFor(caught, 'client'),
-        field: aboutTheAddress ? 'email' : null,
-      })
-      setAddedName(null)
+      reject(messageFor(caught, 'client'), aboutTheAddress ? 'email' : null)
     } finally {
       setSubmitting(false)
     }
@@ -649,8 +687,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
       className={`mt-8 ${open ? trainerSecondary : trainerPrimary}`}
       onClick={() => {
         setOpen((previous) => !previous)
-        setError(null)
-        setAddedName(null)
+        block.clear()
       }}
       type="button"
     >
@@ -685,8 +722,8 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
               Name
             </label>
             <input
-              aria-describedby={error?.field === 'name' ? 'add-client-error' : undefined}
-              aria-invalid={error?.field === 'name'}
+              aria-describedby={invalid === 'name' ? block.id : undefined}
+              aria-invalid={invalid === 'name'}
               className={trainerField}
               id="client-name"
               name="displayName"
@@ -702,8 +739,8 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
               Email
             </label>
             <input
-              aria-describedby={error?.field === 'email' ? 'add-client-error' : undefined}
-              aria-invalid={error?.field === 'email'}
+              aria-describedby={invalid === 'email' ? block.id : undefined}
+              aria-invalid={invalid === 'email'}
               autoCapitalize="none"
               className={trainerField}
               id="client-email"
@@ -741,21 +778,25 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
             </select>
           </div>
 
-          {error !== null && (
-            <TrainerMessage id="add-client-error" tone="failure">
-              {error.message}
-            </TrainerMessage>
-          )}
-
-          {addedName !== null && error === null && (
-            <TrainerMessage tone="confirmation">
-              {addedName} added. Tell them to log in.
-            </TrainerMessage>
+          {block.message !== null && (
+            <Message id={block.id} tone={block.message.tone}>
+              {block.message.body}
+            </Message>
           )}
 
           {/* One button, because there is one way to finish this form. See `toggle` above for
-              why the second one is gone. */}
-          <button className={`justify-self-start ${trainerPrimary}`} disabled={submitting} type="submit">
+              why the second one is gone.
+
+              Described by whichever message is showing (#138). The failure already points the
+              offending field at itself; this is the other half, for someone who tabs back to
+              the submit rather than to the field. One slot means one id here rather than the
+              three-way ternary this was. */}
+          <button
+            aria-describedby={block.describedBy}
+            className={`justify-self-start ${trainerPrimary}`}
+            disabled={submitting}
+            type="submit"
+          >
             {submitting ? 'Adding' : 'Add client'}
           </button>
         </form>
