@@ -79,6 +79,16 @@ public static class ProgramDayExerciseEndpoints
             return Results.BadRequest(ApiError.Create("bad_request", "target_reps is required."));
         }
 
+        // Structural only — see PrescriptionText for exactly where the line is drawn. Both
+        // fields stay free text and neither is parsed or converted; this refuses what cannot be
+        // a phrase, not what it cannot understand.
+        var textProblem = PrescriptionText.Check(targetReps, PrescriptionText.Field.Reps)
+            ?? PrescriptionText.Check(body.TargetLoad, PrescriptionText.Field.Load);
+        if (textProblem is not null)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", textProblem));
+        }
+
         if (body.RestSeconds is { } rs && rs <= 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "rest_seconds must be a positive integer."));
@@ -148,6 +158,16 @@ public static class ProgramDayExerciseEndpoints
             {
                 return Results.BadRequest(ApiError.Create("bad_request", "target_reps cannot be blank."));
             }
+        }
+
+        // Only what the body actually carries: null on the wire means "leave alone", so an
+        // absent field is not re-checked. A blank target_load clears it to NULL and passes,
+        // which is the same answer the create path gives an omitted one.
+        var textProblem = PrescriptionText.Check(newTargetReps, PrescriptionText.Field.Reps)
+            ?? PrescriptionText.Check(body.TargetLoad, PrescriptionText.Field.Load);
+        if (textProblem is not null)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", textProblem));
         }
 
         if (body.RestSeconds is { } rs && rs <= 0)

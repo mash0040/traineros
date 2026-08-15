@@ -919,4 +919,104 @@ public class ProgramStructureEndpointsTests : IClassFixture<ProgramStructureEndp
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    // -- Free-text sanity check on target_reps and target_load (#99 follow-up) --
+    //
+    // The rules and their boundary live in PrescriptionTextTests, against a corpus shared with
+    // the SPA. These assert only that the endpoints actually apply them, on both fields and on
+    // both write paths — the guard exists here precisely because a browser-only one is a
+    // property of one browser rather than of the data.
+
+    [Theory]
+    [InlineData("AMRKJDNAK,M", "8-10")]
+    [InlineData("8-10", "70 lbsgjhm")]
+    public async Task Create_refuses_gibberish_in_either_free_text_field(string reps, string load)
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Lower");
+
+        var response = await SendAsync(HttpMethod.Post, $"/api/days/{dayId}/exercises", session, new
+        {
+            exerciseId = _app.ExerciseA_SquatId,
+            targetSets = 3,
+            targetReps = reps,
+            targetLoad = load,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+
+        // Nothing was written: a refused prescription must not leave half a row behind.
+        Assert.Empty(_app.WithDb(db => db.ProgramDayExercisesForTrainer(_app.TrainerAId)
+            .Where(e => e.ProgramDayId == dayId)
+            .ToList()));
+    }
+
+    [Theory]
+    [InlineData("AMRKJDNAK,M", null)]
+    [InlineData(null, "70 lbsgjhm")]
+    public async Task Patch_refuses_gibberish_in_either_free_text_field(string? reps, string? load)
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Lower");
+        var prescriptionId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
+
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/day-exercises/{prescriptionId}", session,
+            new { targetReps = reps, targetLoad = load });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        // The row is untouched — the check runs before anything is assigned.
+        var stored = _app.WithDb(db => db.ProgramDayExercisesForTrainer(_app.TrainerAId)
+            .First(e => e.Id == prescriptionId));
+        Assert.Equal("8-10", stored.TargetReps);
+        Assert.Null(stored.TargetLoad);
+    }
+
+    [Fact]
+    public async Task Still_stores_free_text_verbatim_on_both_fields()
+    {
+        // database.md's decision is intact: the endpoint understands neither field and converts
+        // neither. These are stored exactly as written.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Lower");
+
+        var response = await SendAsync(HttpMethod.Post, $"/api/days/{dayId}/exercises", session, new
+        {
+            exerciseId = _app.ExerciseA_SquatId,
+            targetSets = 3,
+            targetReps = "AMRAP -2",
+            targetLoad = "top set + backoffs",
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("AMRAP -2", body.GetProperty("targetReps").GetString());
+        Assert.Equal("top set + backoffs", body.GetProperty("targetLoad").GetString());
+    }
+
+    [Fact]
+    public async Task Patch_leaves_a_field_the_body_does_not_carry_unchecked()
+    {
+        // null on the wire means "leave alone", so an absent field is not re-validated. A row
+        // that predates this check keeps saving as long as the trainer is not editing the part
+        // that would now be refused.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Lower");
+        var prescriptionId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
+
+        _app.WithDb(db =>
+        {
+            db.ProgramDayExercisesForTrainer(_app.TrainerAId).First(e => e.Id == prescriptionId)
+                .TargetLoad = "70 lbsgjhm";
+            db.SaveChanges();
+        });
+
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/day-exercises/{prescriptionId}", session, new { targetSets = 5 });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }

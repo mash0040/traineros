@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 using Microsoft.AspNetCore.Builder;
@@ -427,5 +428,181 @@ public class MeEndpointsTests : IClassFixture<MeEndpointsTestApp>
             .Content.ReadAsStringAsync();
         Assert.DoesNotContain(_app.ProgramA_ActiveId.ToString(), raw);
         Assert.DoesNotContain(_app.ExerciseA_SquatId.ToString(), raw);
+    }
+
+    // -- PATCH /api/me (#99) --
+
+    private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");
+
+    private HttpRequestMessage PatchMe(string body, Guid? sessionId)
+    {
+        var request = Request(HttpMethod.Patch, "/api/me", sessionId);
+        request.Content = Json(body);
+        return request;
+    }
+
+    [Fact]
+    public async Task Anonymous_patch_me_is_401()
+    {
+        var response = await _app.Client.SendAsync(PatchMe("""{"weightUnit":"kg"}""", null));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trainer_role_patch_me_is_404_not_403()
+    {
+        // The same gate GET /api/me uses, and the SPA's trainer detection depends on it staying
+        // a 404 rather than becoming a 403.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await _app.Client.SendAsync(PatchMe("""{"weightUnit":"kg"}""", session));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Patch_me_sets_the_unit_and_returns_the_full_me_response()
+    {
+        var session = await _app.SignInAsync(_app.ClientA2Id);
+        var response = await _app.Client.SendAsync(PatchMe("""{"weightUnit":"kg"}""", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // The full shape, not 204: the SPA folds this straight into session state, so every
+        // field GET /api/me returns has to come back or the toggle would need a second read.
+        Assert.Equal(WeightUnits.Kg, body.GetProperty("weightUnit").GetString());
+        Assert.Equal(_app.ClientA2Id, body.GetProperty("id").GetGuid());
+        Assert.Equal("bob@example.com", body.GetProperty("email").GetString());
+        Assert.Equal("America/Toronto", body.GetProperty("timezone").GetString());
+        Assert.True(body.TryGetProperty("activeProgram", out _));
+
+        Assert.Equal(WeightUnits.Kg, _app.WithDb(db => db.Find<User>(_app.ClientA2Id)!.WeightUnit));
+
+        // Left as found, so the rest of the suite is order-independent.
+        _app.WithDb(db =>
+        {
+            db.Find<User>(_app.ClientA2Id)!.WeightUnit = WeightUnits.Default;
+            db.SaveChanges();
+        });
+    }
+
+    [Theory]
+    [InlineData("\"LB\"", WeightUnits.Lb)]
+    [InlineData("\" kg \"", WeightUnits.Kg)]
+    public async Task Patch_me_normalizes_before_validating(string raw, string expected)
+    {
+        // Trim-and-lowercase is a deliberate departure from how timezone is matched exactly:
+        // for a two-value enum "LB" is unambiguous, and a 400 there would be pedantry.
+        var session = await _app.SignInAsync(_app.ClientA2Id);
+        var response = await _app.Client.SendAsync(PatchMe($$"""{"weightUnit":{{raw}}}""", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(expected, body.GetProperty("weightUnit").GetString());
+
+        _app.WithDb(db =>
+        {
+            db.Find<User>(_app.ClientA2Id)!.WeightUnit = WeightUnits.Default;
+            db.SaveChanges();
+        });
+    }
+
+    [Theory]
+    [InlineData("\"pounds\"")]
+    [InlineData("\"\"")]
+    [InlineData("\"stone\"")]
+    public async Task Patch_me_rejects_anything_but_kg_or_lb(string raw)
+    {
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(PatchMe($$"""{"weightUnit":{{raw}}}""", session));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+
+        Assert.Equal(WeightUnits.Default, _app.WithDb(db => db.Find<User>(_app.ClientAId)!.WeightUnit));
+    }
+
+    [Fact]
+    public async Task Patch_me_with_no_fields_is_a_no_op_that_still_returns_the_row()
+    {
+        // Null means "don't touch", the convention UpdateClientRequest already sets.
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(PatchMe("""{}""", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(WeightUnits.Default, body.GetProperty("weightUnit").GetString());
+    }
+
+    [Theory]
+    [InlineData("email", "\"attacker@example.com\"")]
+    [InlineData("displayName", "\"Hacked\"")]
+    [InlineData("timezone", "\"Pacific/Auckland\"")]
+    [InlineData("isActive", "false")]
+    [InlineData("role", "\"trainer\"")]
+    [InlineData("trainerId", "\"00000000-0000-0000-0000-000000000001\"")]
+    public async Task Patch_me_refuses_the_fields_it_does_not_own(string field, string value)
+    {
+        // The narrowness guarantee, and it is enforced twice over: UpdateMeRequest has no such
+        // member, and ApiConventions sets JsonUnmappedMemberHandling.Disallow, so the field is
+        // refused at the wire rather than silently dropped. A client cannot move their own login
+        // identity, their reminder channel, or their own activation, even by accident.
+        var before = _app.WithDb(db =>
+        {
+            var a = db.Find<User>(_app.ClientAId)!;
+            return (a.WeightUnit, a.Email, a.DisplayName, a.Timezone, a.IsActive, a.Role, a.TrainerId);
+        });
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(
+            PatchMe($$"""{"weightUnit":"kg","{{field}}":{{value}}}""", session));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        // Refused whole: the weightUnit that rode along in the same body did not land either.
+        var after = _app.WithDb(db =>
+        {
+            var a = db.Find<User>(_app.ClientAId)!;
+            return (a.WeightUnit, a.Email, a.DisplayName, a.Timezone, a.IsActive, a.Role, a.TrainerId);
+        });
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task Patch_me_writes_only_the_session_user()
+    {
+        // The isolation test this route is owed. There is no id in the URL to tamper with — the
+        // row written is the session's user — so the assertion is that another client's row is
+        // untouched, rather than the 404-on-a-foreign-id shape the /api/clients/:id routes use.
+        var before = _app.WithDb(db =>
+        {
+            var b = db.Find<User>(_app.ClientBId)!;
+            return (b.WeightUnit, b.Email, b.DisplayName, b.Timezone, b.IsActive);
+        });
+
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(PatchMe("""{"weightUnit":"kg"}""", session));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var a = _app.WithDb(db => db.Find<User>(_app.ClientAId)!);
+        Assert.Equal(WeightUnits.Kg, a.WeightUnit);
+        // Everything else on their own row is left alone too — the handler assigns one property.
+        Assert.Equal("alice@example.com", a.Email);
+        Assert.Equal("Alice", a.DisplayName);
+        Assert.Equal("America/Toronto", a.Timezone);
+        Assert.True(a.IsActive);
+
+        var after = _app.WithDb(db =>
+        {
+            var b = db.Find<User>(_app.ClientBId)!;
+            return (b.WeightUnit, b.Email, b.DisplayName, b.Timezone, b.IsActive);
+        });
+        Assert.Equal(before, after);
+
+        _app.WithDb(db =>
+        {
+            db.Find<User>(_app.ClientAId)!.WeightUnit = WeightUnits.Default;
+            db.SaveChanges();
+        });
     }
 }

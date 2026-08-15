@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
+import type { MeResponse } from './api/types.gen'
 import { loadSession, type Session } from './lib/api'
 import { useClientSession } from './lib/session'
 import { ClientDetailScreen } from './screens/ClientDetailScreen'
@@ -36,9 +37,11 @@ export default function App() {
       <Route element={<RequireClientSession />}>
         <Route path="/" element={<TodayRoute />} />
         <Route path="/workout" element={<LogWorkoutRoute />} />
-        {/* No wrapper: History reads everything it shows from GET /api/me/history, so it needs
-            nothing from the session beyond being inside the gate. */}
-        <Route path="/history" element={<HistoryScreen />} />
+        {/* History reads its content from GET /api/me/history, but the weights in it are
+            stored in kilograms and have to be read in the client's own unit (#99), so it takes
+            `me` through the same wrapper shape the other two use. It read nothing from the
+            session before that. */}
+        <Route path="/history" element={<HistoryRoute />} />
       </Route>
 
       {/* The trainer's screens, behind their own gate (#50). Deliberately not under a /trainer
@@ -112,7 +115,18 @@ function RequireClientSession() {
     return <Navigate replace to="/clients" />
   }
 
-  return <Outlet context={{ me: session.me }} />
+  // onMeChanged folds a write's response back into the gate's state (#99: the log screen's
+  // unit toggle). Narrowed to the client case so the setter cannot be used to install a `me`
+  // on a session that has none — the gate's own state is a union, and this hands out only the
+  // branch that carries one.
+  return (
+    <Outlet
+      context={{
+        me: session.me,
+        onMeChanged: (me: MeResponse) => setSession({ kind: 'client', me }),
+      }}
+    />
+  )
 }
 
 // The trainer half of the same gate.
@@ -171,9 +185,15 @@ function TodayRoute() {
   return <TodayScreen me={me} />
 }
 
+function HistoryRoute() {
+  const { me } = useClientSession()
+  return <HistoryScreen me={me} />
+}
+
 function LogWorkoutRoute() {
   // Same shape as TodayRoute: context is read here, `me` goes in as a prop, so the screen
-  // renders in a test with only a router around it.
-  const { me } = useClientSession()
-  return <LogWorkoutScreen me={me} />
+  // renders in a test with only a router around it. `onMeChanged` rides along for the unit
+  // toggle (#99), which is the one control on this screen that writes to the profile.
+  const { me, onMeChanged } = useClientSession()
+  return <LogWorkoutScreen me={me} onMeChanged={onMeChanged} />
 }

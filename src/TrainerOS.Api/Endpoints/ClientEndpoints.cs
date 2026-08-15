@@ -11,14 +11,18 @@ namespace TrainerOS.Api.Endpoints;
 // not a lookup key, so a foreign trainer's client id is a 404 like a made-up one.
 public static class ClientEndpoints
 {
-    public sealed record CreateClientRequest(string? Email, string? DisplayName, string? Timezone);
-    public sealed record UpdateClientRequest(string? DisplayName, string? Timezone, bool? IsActive);
+    public sealed record CreateClientRequest(
+        string? Email, string? DisplayName, string? Timezone, string? WeightUnit);
+
+    public sealed record UpdateClientRequest(
+        string? DisplayName, string? Timezone, bool? IsActive, string? WeightUnit);
 
     public sealed record ClientResponse(
         Guid Id,
         string Email,
         string DisplayName,
         string Timezone,
+        string WeightUnit,
         bool IsActive,
         DateTimeOffset CreatedAt);
 
@@ -50,7 +54,8 @@ public static class ClientEndpoints
 
         var rows = await db.ClientsForTrainer(trainer.Id)
             .OrderBy(u => u.DisplayName)
-            .Select(u => new ClientResponse(u.Id, u.Email, u.DisplayName, u.Timezone, u.IsActive, u.CreatedAt))
+            .Select(u => new ClientResponse(
+                u.Id, u.Email, u.DisplayName, u.Timezone, u.WeightUnit, u.IsActive, u.CreatedAt))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
@@ -103,6 +108,19 @@ public static class ClientEndpoints
                 ApiError.Create("bad_request", $"'{timezone}' is not a recognized IANA timezone."));
         }
 
+        // Optional on create (#99): omitted means the default, which is what the trainer wants
+        // in the overwhelming majority of cases. Sent-but-wrong is still a 400 — silently
+        // falling back to lb for a client the trainer said thinks in kg is the worse failure.
+        var weightUnit = WeightUnits.Default;
+        if (body.WeightUnit is not null)
+        {
+            if (WeightUnits.Normalize(body.WeightUnit) is not { } normalized)
+            {
+                return Results.BadRequest(InvalidWeightUnit());
+            }
+            weightUnit = normalized;
+        }
+
         // Pre-check on the citext-unique email index. The DbUpdateException catch below
         // is the honest backstop for the race between check and insert.
         var conflict = await db.UserByEmail(email).AnyAsync(cancellationToken);
@@ -119,6 +137,7 @@ public static class ClientEndpoints
             DisplayName = displayName,
             TrainerId = trainer.Id,
             Timezone = timezone,
+            WeightUnit = weightUnit,
             IsActive = true,
             CreatedAt = clock.GetUtcNow(),
         };
@@ -134,7 +153,8 @@ public static class ClientEndpoints
         }
 
         var response = new ClientResponse(
-            client.Id, client.Email, client.DisplayName, client.Timezone, client.IsActive, client.CreatedAt);
+            client.Id, client.Email, client.DisplayName, client.Timezone, client.WeightUnit,
+            client.IsActive, client.CreatedAt);
         return Results.Created($"/api/clients/{client.Id}", response);
 
         static IResult EmailTaken() => Results.Json(
@@ -173,6 +193,20 @@ public static class ClientEndpoints
             }
         }
 
+        // The trainer sets the default when adding a client and can correct it here; the client
+        // corrects it for themselves through PATCH /api/me. Two writers, one column, and no
+        // ordering problem — whoever wrote last is right, because both of them are answering
+        // the same question about the same person.
+        string? weightUnit = null;
+        if (body.WeightUnit is not null)
+        {
+            weightUnit = WeightUnits.Normalize(body.WeightUnit);
+            if (weightUnit is null)
+            {
+                return Results.BadRequest(InvalidWeightUnit());
+            }
+        }
+
         var client = await db.ClientsForTrainer(trainer.Id)
             .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
         if (client is null)
@@ -203,6 +237,11 @@ public static class ClientEndpoints
             client.IsActive = body.IsActive.Value;
         }
 
+        if (weightUnit is not null)
+        {
+            client.WeightUnit = weightUnit;
+        }
+
         await db.SaveChangesAsync(cancellationToken);
 
         if (deactivating)
@@ -215,7 +254,8 @@ public static class ClientEndpoints
         }
 
         var response = new ClientResponse(
-            client.Id, client.Email, client.DisplayName, client.Timezone, client.IsActive, client.CreatedAt);
+            client.Id, client.Email, client.DisplayName, client.Timezone, client.WeightUnit,
+            client.IsActive, client.CreatedAt);
         return Results.Ok(response);
     }
 
@@ -243,4 +283,10 @@ public static class ClientEndpoints
 
         return Results.Ok(sessions);
     }
+
+    // One sentence for both write paths, so a trainer sending a bad unit to POST and to PATCH
+    // reads the same refusal. Worded identically to PATCH /api/me's, for the same reason the
+    // email rule is worded identically to the SPA's: it is one mistake, whoever catches it.
+    private static ApiError InvalidWeightUnit()
+        => ApiError.Create("bad_request", "weight_unit must be 'kg' or 'lb'.");
 }

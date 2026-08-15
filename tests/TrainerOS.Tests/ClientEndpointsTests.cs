@@ -591,4 +591,94 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
             await madeUpSessions.Content.ReadAsStringAsync(),
             await otherSessions.Content.ReadAsStringAsync());
     }
+
+    // -- weight_unit (#99) --
+
+    [Fact]
+    public async Task Create_defaults_the_weight_unit_when_omitted()
+    {
+        // Omitted is the overwhelmingly common case, and lb is the default because most
+        // Canadian gyms load pound plates.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = $"unit-default-{Guid.NewGuid():N}@example.com",
+            displayName = "Default Unit",
+            timezone = "America/Toronto",
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(WeightUnits.Lb, body.GetProperty("weightUnit").GetString());
+    }
+
+    [Fact]
+    public async Task Create_accepts_an_explicit_weight_unit()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = $"unit-kg-{Guid.NewGuid():N}@example.com",
+            displayName = "Kg Thinker",
+            timezone = "America/Toronto",
+            weightUnit = "kg",
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(WeightUnits.Kg, body.GetProperty("weightUnit").GetString());
+    }
+
+    [Fact]
+    public async Task Create_rejects_an_unrecognized_weight_unit_rather_than_defaulting()
+    {
+        // Sent-but-wrong is a 400, not a silent fallback to lb: quietly ignoring the trainer on
+        // a client they said thinks in kg is the worse of the two failures.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = $"unit-bad-{Guid.NewGuid():N}@example.com",
+            displayName = "Bad Unit",
+            timezone = "America/Toronto",
+            weightUnit = "stone",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Patch_updates_the_weight_unit()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/clients/{_app.ClientA1Id}", session, new { weightUnit = "KG" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        // Normalized, same as PATCH /api/me.
+        Assert.Equal(WeightUnits.Kg, body.GetProperty("weightUnit").GetString());
+
+        _app.WithDb(db =>
+        {
+            db.Find<User>(_app.ClientA1Id)!.WeightUnit = WeightUnits.Default;
+            db.SaveChanges();
+        });
+    }
+
+    [Fact]
+    public async Task Patch_cannot_set_another_trainers_client_unit()
+    {
+        // The mandatory isolation shape for a client-facing route with an id in the URL: a
+        // foreign id is the same 404 as a fabricated one, and nothing is written.
+        var before = _app.WithDb(db => db.Find<User>(_app.ClientB1Id)!.WeightUnit);
+
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/clients/{_app.ClientB1Id}", session, new { weightUnit = "kg" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(before, _app.WithDb(db => db.Find<User>(_app.ClientB1Id)!.WeightUnit));
+    }
 }

@@ -6,12 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HistoryResponse, LastResponse, MeProgramWrapper, MeResponse } from '../api/types.gen'
 import { LogWorkoutScreen } from './LogWorkoutScreen'
 
+// weightUnit is 'kg' here on purpose (#99). Every assertion in this file was written about
+// canonical kilograms, so pinning the fixture to kg keeps them testing what they were written
+// to test — set numbering, resume, last-time, the discard guard — rather than quietly becoming
+// assertions about the conversion. The lb path gets its own tests at the bottom.
 const me: MeResponse = {
   id: 'client-1',
   displayName: 'Ada',
   email: 'ada@example.com',
   timezone: 'America/Toronto',
+  weightUnit: 'kg',
 }
+
+const poundsMe: MeResponse = { ...me, weightUnit: 'lb' }
 
 const program: MeProgramWrapper = {
   program: {
@@ -62,8 +69,13 @@ function rejected(status: number, code: string, message: string): Reply {
 }
 
 describe('LogWorkoutScreen', () => {
+  // The session gate's setter, stubbed. The unit toggle is the one control on this screen that
+  // writes to the profile, and what it hands back is the caller's to install.
+  let onMeChanged: ReturnType<typeof vi.fn<(me: MeResponse) => void>>
+
   beforeEach(() => {
     localStorage.clear()
+    onMeChanged = vi.fn<(me: MeResponse) => void>()
   })
 
   afterEach(() => {
@@ -83,6 +95,7 @@ describe('LogWorkoutScreen', () => {
       onLast?: (exerciseId: string) => Reply
       onLogSet?: (attempt: number) => Reply
       onPatch?: (attempt: number) => Reply
+      onPatchMe?: () => Reply
       program?: MeProgramWrapper
     } = {},
   ) {
@@ -149,6 +162,12 @@ describe('LogWorkoutScreen', () => {
         return send(options.onDeleteSet?.(url) ?? { ok: true, status: 204, body: null })
       }
 
+      // The unit toggle's write (#99). Checked before the session PATCH below, which matches
+      // on method alone.
+      if (url === '/api/me' && method === 'PATCH') {
+        return send(options.onPatchMe?.() ?? ok({ ...me, weightUnit: body.weightUnit }))
+      }
+
       if (method === 'PATCH') {
         patches += 1
         return send(options.onPatch?.(patches) ?? ok({ id: SESSION_ID, comment: body.comment }))
@@ -180,12 +199,15 @@ describe('LogWorkoutScreen', () => {
   const setPosts = (f: ReturnType<typeof mockApi>) => callsTo(f, 'POST', /\/sets$/)
   const patches = (f: ReturnType<typeof mockApi>) => callsTo(f, 'PATCH', /\/api\/me\/sessions\//)
 
-  function renderScreen(day: string | null = 'day-1') {
+  function renderScreen(day: string | null = 'day-1', who: MeResponse = me) {
     const path = day === null ? '/workout' : `/workout?day=${day}`
     return render(
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route element={<LogWorkoutScreen me={me} />} path="/workout" />
+          <Route
+            element={<LogWorkoutScreen me={who} onMeChanged={onMeChanged} />}
+            path="/workout"
+          />
           <Route element={<h1>Today</h1>} path="/" />
         </Routes>
       </MemoryRouter>,
@@ -1350,6 +1372,144 @@ describe('LogWorkoutScreen', () => {
       await screen.findByRole('heading', { name: 'We couldn’t load your workout' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  // ── Weight unit (#99) ─────────────────────────────────────────────────────────────────────
+
+  it('sends canonical kilograms whatever unit she typed in', () => {
+    // The load-bearing assertion of the whole ticket: storage is one unit, so a set logged at
+    // 185 lb and a set logged at 83.91458845 kg are the same row.
+    return (async () => {
+      const fetchMock = mockApi()
+      renderScreen('day-1', poundsMe)
+      await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+      const squat = await block('Back Squat')
+      await userEvent.type(squat.getByLabelText(/set 1 weight/), '185')
+      await userEvent.type(squat.getByLabelText(/set 1 reps/), '5')
+      await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+
+      await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+      expect(setPosts(fetchMock)[0].body).toMatchObject({ weightKg: 83.91458845, reps: 5 })
+    })()
+  })
+
+  it('labels the weight column and the input in her unit, spelled out for the ear', async () => {
+    mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    // The visible column header is the abbreviation; the input's accessible name is not,
+    // because a screen reader renders "lb" unpredictably and this is read mid-set.
+    expect(squat.getByText('lbs')).toBeInTheDocument()
+    expect(squat.getByLabelText('Back Squat set 1 weight in pounds')).toBeInTheDocument()
+  })
+
+  it('reads a saved set back in her unit, and pre-fills the next row with it', async () => {
+    mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    await userEvent.type(squat.getByLabelText(/set 1 weight/), '185')
+    await userEvent.type(squat.getByLabelText(/set 1 reps/), '5')
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
+
+    // Back out of canonical kilograms with no drift — 185 in, 185 out, and the pre-fill that
+    // the next set inherits says 185 too.
+    expect(await squat.findByRole('button', { name: /^Set 1, 185 pounds by 5 reps/ })).toBeInTheDocument()
+    await waitFor(() => expect(squat.getByLabelText(/set 2 weight/)).toHaveValue('185'))
+  })
+
+  it('shows last time in her unit too, since it is the number she is comparing against', async () => {
+    // #46's column is the feature that beats the paper notebook, and it beats nothing if the
+    // number in it is in a unit she has to convert.
+    mockApi({
+      last: {
+        'ex-1': {
+          mostRecent: {
+            sessionId: 'session-old',
+            performedOn: '2026-08-01',
+            sets: [{ id: 'old-1', setNumber: 1, weightKg: 83.91458845, reps: 5, loggedAt: '2026-08-01T10:00:00Z' }],
+          },
+        },
+      },
+    })
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    // 83.91458845 kg is exactly 185 lb, and that is what the column has to say.
+    await waitFor(() => expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*185\s*×\s*5$/))
+  })
+
+  it('writes the unit through PATCH /api/me and hands the row back to the session', async () => {
+    const fetchMock = mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const group = within(screen.getByRole('group', { name: 'Weight unit' }))
+    await userEvent.click(group.getByRole('button', { name: 'kg' }))
+
+    await waitFor(() => expect(onMeChanged).toHaveBeenCalledTimes(1))
+    const patch = fetchMock.mock.calls.find(
+      ([url, init]) => String(url) === '/api/me' && (init as RequestInit | undefined)?.method === 'PATCH',
+    )
+    expect(patch).toBeDefined()
+    expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({ weightUnit: 'kg' })
+  })
+
+  it('does not write when she taps the unit she is already in', async () => {
+    const fetchMock = mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const group = within(screen.getByRole('group', { name: 'Weight unit' }))
+    await userEvent.click(group.getByRole('button', { name: 'lbs' }))
+
+    expect(onMeChanged).not.toHaveBeenCalled()
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url) === '/api/me'),
+    ).toHaveLength(0)
+  })
+
+  it('says so and stays put when the unit write fails, rather than flipping and reverting', async () => {
+    // Awaited rather than optimistic on purpose: an optimistic flip that silently reverts on
+    // gym wifi would tell her the unit changed while the server still disagreed, and the next
+    // set she typed would be stored as the wrong number.
+    mockApi({ onPatchMe: () => 'network' })
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const group = within(screen.getByRole('group', { name: 'Weight unit' }))
+    await userEvent.click(group.getByRole('button', { name: 'kg' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(onMeChanged).not.toHaveBeenCalled()
+    // Still reading in pounds, because nothing landed.
+    expect(group.getByRole('button', { name: 'lbs' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('labels the weight column "lbs" rather than the stored enum value', async () => {
+    mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    const squat = await block('Back Squat')
+    expect(squat.getByText('lbs')).toBeInTheDocument()
+    expect(squat.queryByText('lb')).not.toBeInTheDocument()
+  })
+
+  it('renders one toggle for the whole screen, not one per exercise', async () => {
+    // DESIGN.md §Controls: a control repeated per row in a list is how the accent budget dies,
+    // and six toggles writing one setting is that shape. The day fixture has two exercises.
+    mockApi()
+    renderScreen('day-1', poundsMe)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    expect(screen.getAllByRole('group', { name: 'Weight unit' })).toHaveLength(1)
+    expect(screen.getAllByRole('listitem').length).toBeGreaterThan(1)
   })
 })
 

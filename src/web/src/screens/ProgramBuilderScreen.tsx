@@ -21,6 +21,8 @@ import {
   updateProgram,
 } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
+import { checkPrescriptionText } from '../lib/prescriptionText'
+import { unitLabel, unitOf, type WeightUnit } from '../lib/weight'
 import { useBlockMessage } from './blockMessage'
 import { Message } from './Message'
 import { TrainerShell } from './TrainerShell'
@@ -166,6 +168,8 @@ export function ProgramBuilderScreen() {
   }
 
   const days = program.days ?? []
+  // Read once here and handed down, so the hint on every Load field says the same thing (#99).
+  const clientWeightUnit = unitOf(program.clientWeightUnit)
 
   return (
     <TrainerShell>
@@ -207,6 +211,7 @@ export function ProgramBuilderScreen() {
           <ul className="grid gap-6">
             {days.map((day) => (
               <Day
+                clientWeightUnit={clientWeightUnit}
                 day={day}
                 key={day.id}
                 library={selectable}
@@ -370,11 +375,14 @@ function ProgramStatus({
 }
 
 function Day({
+  clientWeightUnit,
   day,
   library,
   onChanged,
   onDeleted,
 }: {
+  /** Passed straight through to each prescription's Load hint (#99). */
+  clientWeightUnit: WeightUnit
   day: DayView
   library: ExerciseResponse[]
   onChanged: (day: DayView) => void
@@ -574,6 +582,7 @@ function Day({
             <Prescription
               canMoveDown={index < prescriptions.length - 1}
               canMoveUp={index > 0}
+              clientWeightUnit={clientWeightUnit}
               key={prescription.id}
               onChanged={(next) =>
                 onChanged({
@@ -683,6 +692,7 @@ function Day({
 function Prescription({
   canMoveDown,
   canMoveUp,
+  clientWeightUnit,
   onChanged,
   onDeleted,
   onMoveDown,
@@ -692,6 +702,8 @@ function Prescription({
 }: {
   canMoveDown: boolean
   canMoveUp: boolean
+  /** The unit this program's client reads in, for the Load field's hint only (#99). */
+  clientWeightUnit: WeightUnit
   onChanged: (prescription: PrescriptionView) => void
   onDeleted: () => void
   onMoveDown: () => void
@@ -748,6 +760,20 @@ function Prescription({
     const restValue = rest === '' ? null : Number.parseInt(rest, 10)
     if (restValue !== null && (!Number.isInteger(restValue) || restValue <= 0)) {
       block.fail('Rest must be a whole number of seconds, or empty.')
+      return
+    }
+
+    // Structural only, on both free-text fields — see lib/prescriptionText.ts for exactly where
+    // the line is drawn and why it is not further out. Reps takes the same class of value as
+    // Load (database.md: "8–10", "AMRAP", "5/3/1") and had the same exposure. Neither is parsed
+    // or converted; this refuses what cannot be a phrase, not what it cannot understand.
+    //
+    // The API runs the identical rules against the identical corpus, so this is the immediate
+    // answer rather than the only one.
+    const textProblem =
+      checkPrescriptionText(targetReps, 'Reps') ?? checkPrescriptionText(targetLoad, 'Load')
+    if (textProblem !== null) {
+      block.fail(textProblem)
       return
     }
 
@@ -843,7 +869,12 @@ function Prescription({
       </div>
 
       <form className="mt-3 grid gap-3" noValidate onSubmit={save}>
-        <div className="flex flex-wrap gap-3">
+        {/* items-start, because one field now carries a hint and the rest do not. A flex row
+            defaults to `align-items: stretch`, so the short fields were being stretched to the
+            tall one's height — and each Field is a grid of auto rows, which under the resulting
+            `align-content: normal` stretch made their labels and inputs grow with it. The
+            inputs stopped sharing a baseline the moment the hint appeared. */}
+        <div className="flex flex-wrap items-start gap-3">
           <Field label="Sets" name={`sets-${prescription.id}`}>
             <input
               className={`w-20 ${trainerField}`}
@@ -878,8 +909,20 @@ function Prescription({
           </Field>
 
           {/* Also text, and for the same reason: "70 kg", "bodyweight", "80% 1RM". */}
-          <Field label="Load" name={`load-${prescription.id}`}>
+          {/* The hint is the whole of #99's answer for prescribed loads. target_load is free
+              text and is never converted — see the module comment — so the only thing standing
+              between "70 kg" and a client who reads in pounds is telling the trainer which unit
+              they read in, at the moment they are typing it. The placeholder follows the same
+              unit so the two never disagree. */}
+          <Field
+            // Short, because it wraps inside a 128px field. It still has to carry both facts:
+            // that this is verbatim, and which unit the client reads.
+            hint={`Free text, as typed. They read in ${unitLabel(clientWeightUnit)}.`}
+            label="Load"
+            name={`load-${prescription.id}`}
+          >
             <input
+              aria-describedby={`load-${prescription.id}-hint`}
               className={`w-32 ${trainerField}`}
               id={`load-${prescription.id}`}
               name="targetLoad"
@@ -887,7 +930,7 @@ function Prescription({
                 setTargetLoad(event.target.value)
                 edited()
               }}
-              placeholder="70 kg"
+              placeholder={clientWeightUnit === 'kg' ? '70 kg' : '155 lbs'}
               type="text"
               value={targetLoad}
             />
@@ -1052,6 +1095,14 @@ function AddPrescription({
 
     if (targetReps.trim() === '') {
       block.fail('Reps are required. Anything goes: 8–10, AMRAP, RPE 8.')
+      return
+    }
+
+    // The add form has no Load field — that is the row editor's — so Reps is the only free text
+    // here. Same rules, same module, same corpus as the API's.
+    const textProblem = checkPrescriptionText(targetReps, 'Reps')
+    if (textProblem !== null) {
+      block.fail(textProblem)
       return
     }
 
@@ -1294,19 +1345,42 @@ function AddDay({
 
 function Field({
   children,
+  hint,
   label,
   name,
 }: {
   children: React.ReactNode
+  /** Optional helper text under the control, wired to it with aria-describedby. */
+  hint?: string
   label: string
   name: string
 }) {
+  const hintId = `${name}-hint`
+
   return (
     <div className="grid gap-1">
       <label className="text-xs text-muted" htmlFor={name}>
         {label}
       </label>
       {children}
+      {/* `w-0 min-w-full` is the whole fix for the alignment bug, and it is worth explaining
+          because it looks like a contradiction.
+
+          This div is a grid, and its column is sized to the max-content of its items. A hint
+          with any intrinsic width joins that calculation and wins — the previous `max-w-48`
+          made the Load field 192px wide against a 128px input, which shoved the Rest field
+          right and re-wrapped the whole row. `w-0` takes the hint out of the sizing pass
+          entirely, so the column is still exactly as wide as the label and the input; then
+          `min-w-full` lets it fill that column and wrap inside it.
+
+          The result is a hint that hangs below its own field and can never move it, at any
+          width and at any copy length. No per-field width has to be passed in and kept in step
+          with the input's. */}
+      {hint !== undefined && (
+        <p className="w-0 min-w-full text-xs text-muted" id={hintId}>
+          {hint}
+        </p>
+      )}
     </div>
   )
 }

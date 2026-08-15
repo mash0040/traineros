@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import type { HistoryItem } from '../api/types.gen'
+import type { HistoryItem, MeResponse } from '../api/types.gen'
 import { fetchHistory } from '../lib/api'
 import {
   exerciseOptions,
@@ -10,6 +10,7 @@ import {
   type HistoryExerciseGroup,
   type HistorySession,
 } from '../lib/history'
+import { spokenUnit, toDisplay, unitLabel, unitOf, type WeightUnit } from '../lib/weight'
 import { Message } from './Message'
 
 type Load = 'loading' | 'ready' | 'unreachable'
@@ -48,7 +49,11 @@ const PAGE = 50
 // the unit is bounded, it is meaningful as one object, and it is the thing being tapped. The
 // three-number hierarchy from the log row deliberately does not apply — there are no inputs
 // and no last-time column here, just recorded values.
-export function HistoryScreen() {
+// `me` arrives only for the weight unit (#99). Everything else on this screen comes from
+// GET /api/me/history, whose weights are canonical kilograms.
+export function HistoryScreen({ me }: { me: MeResponse }) {
+  const unit = unitOf(me.weightUnit)
+
   const [load, setLoad] = useState<Load>('loading')
   const [items, setItems] = useState<HistoryItem[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -205,6 +210,7 @@ export function HistoryScreen() {
                 }
                 open={openSessionId === session.id}
                 session={session}
+                unit={unit}
               />
             ))}
           </ul>
@@ -292,10 +298,12 @@ function SessionCard({
   onToggle,
   open,
   session,
+  unit,
 }: {
   onToggle: () => void
   open: boolean
   session: HistorySession
+  unit: WeightUnit
 }) {
   const date = formatSessionDate(session.performedOn)
   const summary = `${count(session.exercises.length, 'exercise', 'exercises')} · ${count(session.setCount, 'set', 'sets')}`
@@ -329,7 +337,7 @@ function SessionCard({
           )}
 
           {session.exercises.map((exercise) => (
-            <ExerciseSets exercise={exercise} key={exercise.id} />
+            <ExerciseSets exercise={exercise} key={exercise.id} unit={unit} />
           ))}
         </div>
       )}
@@ -341,17 +349,57 @@ function SessionCard({
 // where today's inputs outrank last time which outranks the prescription; none of those roles
 // exist here. So there is one rank: what she lifted, at --text-base / 600 / --ink-bold with
 // tabular-nums so successive sets line up, and a set number in --muted to count them off.
-function ExerciseSets({ exercise }: { exercise: HistoryExerciseGroup }) {
+function ExerciseSets({
+  exercise,
+  unit,
+}: {
+  exercise: HistoryExerciseGroup
+  unit: WeightUnit
+}) {
+  // Bodyweight sets carry no unit, so a group of nothing but them gets no label — "lbs" over a
+  // column of "8 reps" would be a unit for a number that is not there.
+  const anyWeighted = exercise.sets.some((set) => set.weightKg !== null)
+  const headingId = `history-exercise-${exercise.id}`
+
   return (
     <div className="grid gap-2">
-      <h3 className="text-base font-semibold text-ink-bold">{exercise.name}</h3>
-      <ul className="grid gap-1">
+      {/* The unit, named once per exercise rather than suffixed onto every row. This screen had
+          none at all, which left "22.05 × 3" as a number with no meaning — and it is exactly
+          the number that needs one, because it is what a client converted from. Once per group
+          is the same rule DESIGN.md §Log row applies on the log screen, where the unit lives in
+          the column header and is "never repeated per set row"; history has no header row, so
+          the exercise heading is the nearest thing that plays that part.
+
+          The per-set aria-label already spells it out on every row (see spokenSet) — a screen
+          reader has no column header to carry it, so there the repetition is the only option. */}
+      <div className="flex items-baseline justify-between gap-3">
+        {/* min-w-0 and wrap-break-word because this heading is a flex item now. A flex item's
+            default minimum is min-content, which for an unbroken exercise name is the whole
+            word — it was a plain block that wrapped for free before the unit sat beside it.
+            Same pair the exercise library already applies to its own row headings. */}
+        <h3
+          className="min-w-0 text-base font-semibold wrap-break-word text-ink-bold"
+          id={headingId}
+        >
+          {exercise.name}
+        </h3>
+        {anyWeighted && (
+          <span className="shrink-0 text-xs text-muted">{unitLabel(unit)}</span>
+        )}
+      </div>
+      {/* Labelled by its own heading. A session card holds several of these lists back to back,
+          so an unlabelled one leaves a screen reader to infer which exercise's sets it has
+          landed in from whatever it heard last. It also gives this group a name to scope to
+          that does not depend on the markup around it — the wrapper this heading now sits in
+          broke a test that was reaching for `closest('div')`, which is the same brittleness in
+          the other direction. */}
+      <ul aria-labelledby={headingId} className="grid gap-1">
         {exercise.sets.map((set) => (
           // Labelled, with the cells hidden behind it, for the same reason the log screen's
           // saved row is: the columns are laid out by the grid and nothing separates them in
           // the text stream, so read cell by cell "1" and "100 × 5" run together into "1100".
           <li
-            aria-label={spokenSet(set)}
+            aria-label={spokenSet(set, unit)}
             className="grid grid-cols-[2rem_1fr] items-baseline gap-3"
             key={set.id}
           >
@@ -365,7 +413,8 @@ function ExerciseSets({ exercise }: { exercise: HistoryExerciseGroup }) {
                 `${set.reps} reps`
               ) : (
                 <>
-                  {set.weightKg}
+                  {/* The display boundary (#99): stored kilograms, read in the client's unit. */}
+                  {toDisplay(set.weightKg, unit)}
                   <span className="text-muted"> × </span>
                   {set.reps}
                 </>
@@ -422,11 +471,18 @@ function HistorySkeleton() {
   )
 }
 
-/** "Set 2, 102.5 kilograms by 5 reps". Same wording the log screen reads a saved row with. */
-function spokenSet(set: { setNumber: number; weightKg: number | null; reps: number }): string {
+/**
+ * "Set 2, 102.5 kilograms by 5 reps". Same wording the log screen reads a saved row with, and
+ * the unit is spelled out there for the same reason (#99): screen readers render "kg" and "lb"
+ * unpredictably, and this is the only channel for someone who cannot see the column header.
+ */
+function spokenSet(
+  set: { setNumber: number; weightKg: number | null; reps: number },
+  unit: WeightUnit,
+): string {
   return set.weightKg === null
     ? `Set ${set.setNumber}, ${set.reps} reps`
-    : `Set ${set.setNumber}, ${set.weightKg} kilograms by ${set.reps} reps`
+    : `Set ${set.setNumber}, ${toDisplay(set.weightKg, unit)} ${spokenUnit(unit)} by ${set.reps} reps`
 }
 
 function count(value: number, singular: string, plural: string): string {

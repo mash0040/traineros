@@ -48,6 +48,7 @@ One table for both roles. v1 has 1 trainer + N clients.
 | display_name  | text        |                                         |
 | trainer_id    | uuid FK → users | NULL for the trainer; set for clients |
 | timezone      | text        | IANA tz, e.g. 'America/Toronto'. Needed for reminder scheduling. |
+| weight_unit   | text        | 'kg' \| 'lb', default 'lb'. Display/input only — storage is always kg. |
 | password_hash | text NULL   | Set only for trainer. Clients have none. |
 | is_active     | boolean     | Soft-deactivate clients who stop training. |
 | created_at    | timestamptz |                                         |
@@ -55,6 +56,20 @@ One table for both roles. v1 has 1 trainer + N clients.
 **Decision:** single `users` table with a role column, not separate `trainers`/`clients` tables. One auth path, one sessions table. (Rejected: separate tables — duplicates auth machinery for zero v1 benefit.)
 
 **Decision:** timezone lives on the user, captured at first login (browser tz) and editable. Reminders are meaningless without it.
+
+**Decision (#99):** `weight_unit` is a per-user *display* setting; `logged_sets.weight_kg` stays canonical kilograms whatever it says. One unit in the database means a set never carries an ambiguous number and `/api/me/last` can compare two sets logged months apart without asking what either of them meant. Default `'lb'`: most Canadian gyms load pound plates, and a client converting every set in their head loses to the paper notebook on the axis ui-ux.md says the app must win.
+
+Conversion happens only at the input and display boundary (`src/web/src/lib/weight.ts`). `1 lb = 0.45359237 kg` exactly — a terminating decimal — so lb→kg is lossless in decimal arithmetic, and `weight_kg` is `numeric` with no declared precision, so nothing is rounded on the way in. The SPA rounds the converted kilograms to 9 decimal places before sending, which is the smallest fixed precision at which any one-decimal pound value converts exactly, and exists only to keep float64 noise out of the column.
+
+Two writers, one column: the trainer sets the default when adding a client (`POST`/`PATCH /api/clients/:id`), and the client corrects it for themselves (`PATCH /api/me`). There is no ordering problem — both are answering the same question about the same person, so last write wins is the right rule.
+
+**Rejected:** a per-set unit column. It would make every historical comparison ask what the row meant, and `/api/me/last` — the feature that beats the notebook — would have to convert before comparing rather than after reading. Unit is a stable property of a person, not of a set.
+
+**Open for a future ticket — the trainer has no unit of their own.** When a trainer-side view of a client's logged sets exists (there is none today: `ClientSessionResponse` returns date, program day and comment, and no route returns another user's sets), those weights read in **the client's** unit, not the trainer's. There is no `weight_unit` preference for a trainer and this decision says there should not be one: the number a trainer is looking at is the number their client lifted and will lift again, so a trainer-side conversion would put two different numbers for one set into one conversation.
+
+That is also the only reason cross-unit display exists at all. A client sees their own unit for values they entered in it, which is the identity; the 2 dp display rule earns its keep on the trainer's screen, where a kg-thinking trainer reads a pound-thinking client's sets and the number genuinely is not round.
+
+Note that `unitLabel` renders `'lb'` as **"lbs"**. The stored value, the wire value and the enum stay `'lb'` — that is the symbol, and a column carries the symbol — but "lbs" is what is painted on the plates and what anyone in a gym says. Nothing renders a raw unit value.
 
 ### magic_link_tokens
 | column     | type        | notes                                        |
@@ -135,6 +150,15 @@ The prescription row.
 | note           | text NULL | per-exercise instruction              |
 
 **Decision:** `target_reps` and `target_load` are text. Coaching prescriptions are not integers ('8–12', 'RPE 7–8', 'top set + backoffs'). Structured numeric targets would either straitjacket real programming or require a mini-DSL. Parsing for analytics is a v2 problem; v1 displays them verbatim.
+
+**Amended (#99 follow-up): free text, but not *any* text.** The decision above says nothing is parsed; it did not say nothing is refused, and "70 lbsgjhm" and "AMRKJDNAK,M" both saved and reached a client as their prescription. Both fields now pass a **structural** sanity check that understands nothing about their contents: length ≤ 40, a character whitelist, an alphabetic run of 4+ letters must contain a vowel, and no run of 6+ consecutive consonants. Nothing is parsed, nothing is converted, and everything accepted is still stored and displayed verbatim — "70 furlongs" and "99999 kg" both save.
+
+Two things about it are load-bearing:
+
+- **The threshold is set by the worst legitimate input, not the best catch rate.** Six consonants, not five, because English tops out at five (`ngths` in "strengths"). Rejecting a trainer's real prescription is worse than letting a typo through, so pronounceable nonsense like "asdfgh" is deliberately accepted — catching it needs a dictionary, and a dictionary that does not know "backoffs" would start refusing real coaching language.
+- **It is enforced at the API, not only in the browser.** A guard that lives in one browser is a property of that browser rather than of the data. The SPA keeps its copy for immediate feedback.
+
+The rule is implemented twice — `src/TrainerOS.Api/PrescriptionText.cs` and `src/web/src/lib/prescriptionText.ts` — because there is no shared runtime between the two. What stops them drifting is `src/web/src/lib/prescriptionText.cases.json`: one corpus, read by both test suites, asserted against both fields.
 
 ### workout_sessions
 One row per gym visit.
