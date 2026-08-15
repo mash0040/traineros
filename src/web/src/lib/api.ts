@@ -496,6 +496,23 @@ export type Session =
  * that goes stale the moment a session is revoked server-side, and it would outlive logout.
  */
 /**
+ * PATCH /api/me. The one field a client may write about themselves: their weight unit (#99).
+ *
+ * The endpoint deliberately accepts nothing else — email is the login identity *and* the
+ * reminder channel, timezone drives the trainer's reminder schedule, and is_active is not
+ * self-service in either direction. See api.md; the API refuses unknown fields outright rather
+ * than dropping them, so a wider body here would be a 400 rather than a silent partial write.
+ *
+ * Returns the full MeResponse so the caller can replace session state without a second read.
+ */
+export function updateMyWeightUnit(weightUnit: 'kg' | 'lb'): Promise<MeResponse> {
+  return request<MeResponse>('/api/me', {
+    method: 'PATCH',
+    body: JSON.stringify({ weightUnit }),
+  })
+}
+
+/**
  * GET /api/me/program. The active program with its days and prescriptions, or
  * `{ program: null }` when there isn't one.
  */

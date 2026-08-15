@@ -17,6 +17,7 @@ const library: ExerciseResponse[] = [
 const program: ProgramDetailResponse = {
   id: 'program-1',
   clientId: 'client-ada',
+  clientWeightUnit: 'lb',
   title: 'Winter Block',
   status: 'draft',
   startsOn: null,
@@ -851,6 +852,108 @@ describe('ProgramBuilderScreen', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  // #99. target_load is free text and is never converted — a parser that handles "70 kg" and
+  // passes through "3×5 @ 70-80kg" would leave the client a screen of mixed units with no way
+  // to tell which numbers were rewritten, and a mis-parse changes a prescribed load. So the
+  // answer is to tell the trainer which unit the client reads in, where they are typing it.
+  it('names the client’s unit on the Load field rather than converting what was typed', async () => {
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const load = row.getByLabelText('Load')
+    expect(load).toHaveAccessibleDescription(/They read in lbs\./)
+    // Verbatim: the value the trainer wrote is the value on screen, untouched.
+    expect(load).toHaveValue('70 kg')
+  })
+
+  it('follows the client’s unit in the Load placeholder too, so the two never disagree', async () => {
+    mockApi({ tree: { ...program, clientWeightUnit: 'kg' } })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    expect(row.getByLabelText('Load')).toHaveAccessibleDescription(/They read in kg\./)
+  })
+
+  it('refuses obvious gibberish in the Reps field too, not just Load', async () => {
+    // Reps takes the same class of free text as Load (database.md: "8–10", "AMRAP", "5/3/1")
+    // and had the same exposure. "AMRKJDNAK,M" saved.
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const reps = row.getByLabelText('Reps')
+    await userEvent.clear(reps)
+    await userEvent.type(reps, 'AMRKJDNAK,M')
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/MRKJDN/)
+    expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)
+  })
+
+  it('refuses obvious gibberish in the Load field without becoming a parser', async () => {
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const load = row.getByLabelText('Load')
+    await userEvent.clear(load)
+    await userEvent.type(load, '70 lbsgjhm')
+    await userEvent.click(row.getByRole('button', { name: 'Save' }))
+
+    // Names the run rather than the whole value: the number is fine, the word is not.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/lbsgjhm/)
+    expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)
+  })
+
+  it('still takes every prescription database.md’s free-text decision covers', async () => {
+    // The check is structural. It must not become a units parser, which is what #99 refused —
+    // a mis-parse of a prescribed load is an injury.
+    const fetchMock = mockApi({ onPatch: () => ({ json: async () => ({ id: 'presc-1', targetSets: 3 }) }) })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+    const load = row.getByLabelText('Load')
+
+    for (const value of ['AMRAP', 'RPE 8', '80% 1RM', 'top set + backoffs', 'bodyweight']) {
+      await userEvent.clear(load)
+      await userEvent.type(load, value)
+      await userEvent.click(row.getByRole('button', { name: 'Save' }))
+      await screen.findByRole('status')
+    }
+
+    expect(callsOf(fetchMock, 'PATCH')).toHaveLength(5)
+  })
+
+  it('hangs the Load hint below its field without moving any of them', async () => {
+    // The reported alignment bug had two causes: the hint was wider than the input, which
+    // widened the field and re-wrapped the row, and the row stretched its short fields to the
+    // tall one's height. Asserting the classes that fix each, since jsdom computes no layout
+    // and there is no behavioural proxy for "the inputs share a baseline".
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    const row = within(prescriptionRow('Back Squat'))
+
+    const hint = row.getByText(/Free text, as typed\./)
+    // w-0 keeps the hint out of the grid column's max-content sizing; min-w-full lets it fill
+    // and wrap inside whatever the label and input made the column.
+    expect(hint).toHaveClass('w-0', 'min-w-full')
+
+    const fields = row.getByLabelText('Load').closest('div')?.parentElement
+    expect(fields).toHaveClass('items-start')
   })
 
   it('puts the add-day and add-exercise messages before their submit, not after it', async () => {

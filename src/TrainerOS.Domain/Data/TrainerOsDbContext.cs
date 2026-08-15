@@ -40,6 +40,10 @@ public class TrainerOsDbContext(DbContextOptions<TrainerOsDbContext> options) : 
             b.Property(u => u.DisplayName).HasColumnName("display_name");
             b.Property(u => u.TrainerId).HasColumnName("trainer_id");
             b.Property(u => u.Timezone).HasColumnName("timezone");
+            // No CHECK constraint, matching role and programs.status: this schema validates
+            // small text enums at the endpoint, and one constrained column would be a second
+            // convention rather than a stricter one.
+            b.Property(u => u.WeightUnit).HasColumnName("weight_unit").HasDefaultValue(WeightUnits.Default);
             b.Property(u => u.PasswordHash).HasColumnName("password_hash");
             b.Property(u => u.IsActive).HasColumnName("is_active");
             b.Property(u => u.CreatedAt).HasColumnName("created_at");

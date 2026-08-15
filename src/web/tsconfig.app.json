@@ -6,6 +6,10 @@
     "module": "esnext",
     "types": ["vite/client", "@testing-library/jest-dom"],
     "allowArbitraryExtensions": true,
+    // For the one shared test fixture (lib/prescriptionText.cases.json), which the API's test
+    // suite reads too. Deliberately this rather than adding "node" to `types` above: a test
+    // needing fs is not a reason to make fs importable from application code.
+    "resolveJsonModule": true,
     "skipLibCheck": true,
 
     /* Bundler mode */

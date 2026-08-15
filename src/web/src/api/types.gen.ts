@@ -24,6 +24,7 @@ export type ClientResponse = {
     email?: string | null;
     displayName?: string | null;
     timezone?: string | null;
+    weightUnit?: string | null;
     isActive?: boolean;
     createdAt?: string;
 };
@@ -40,6 +41,7 @@ export type CreateClientRequest = {
     email?: string | null;
     displayName?: string | null;
     timezone?: string | null;
+    weightUnit?: string | null;
 };
 
 export type CreateDayRequest = {
@@ -200,6 +202,7 @@ export type MeResponse = {
     email?: string | null;
     displayName?: string | null;
     timezone?: string | null;
+    weightUnit?: string | null;
     activeProgram?: ActiveProgramSummary;
 };
 
@@ -244,6 +247,7 @@ export type ProgramDayResponse = {
 export type ProgramDetailResponse = {
     id?: string;
     clientId?: string;
+    clientWeightUnit?: string | null;
     title?: string | null;
     status?: string | null;
     startsOn?: string | null;
@@ -293,6 +297,7 @@ export type UpdateClientRequest = {
     displayName?: string | null;
     timezone?: string | null;
     isActive?: boolean | null;
+    weightUnit?: string | null;
 };
 
 export type UpdateDayRequest = {
@@ -305,6 +310,10 @@ export type UpdateExerciseRequest = {
     videoUrl?: string | null;
     cues?: string | null;
     isActive?: boolean | null;
+};
+
+export type UpdateMeRequest = {
+    weightUnit?: string | null;
 };
 
 export type UpdatePrescriptionRequest = {
@@ -576,6 +585,22 @@ export type GetApiMeResponses = {
 };
 
 export type GetApiMeResponse = GetApiMeResponses[keyof GetApiMeResponses];
+
+export type PatchApiMeData = {
+    body: UpdateMeRequest;
+    path?: never;
+    query?: never;
+    url: '/api/me';
+};
+
+export type PatchApiMeResponses = {
+    /**
+     * OK
+     */
+    200: MeResponse;
+};
+
+export type PatchApiMeResponse = PatchApiMeResponses[keyof PatchApiMeResponses];
 
 export type GetApiMeProgramData = {
     body?: never;

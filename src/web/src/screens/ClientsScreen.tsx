@@ -6,6 +6,7 @@ import { messageFor } from '../lib/apiMessages'
 import { looksLikeEmail } from '../lib/email'
 import { NO_VALUE } from '../lib/glyphs'
 import { formatSessionDate } from '../lib/history'
+import { unitLabel, type WeightUnit } from '../lib/weight'
 import { todayIn } from '../lib/workoutDraft'
 import { useBlockMessage } from './blockMessage'
 import { Message } from './Message'
@@ -585,6 +586,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [timezone, setTimezone] = useState(browserTimezone)
+  const [weightUnit, setWeightUnit] = useState<WeightUnit>('lb')
   const [submitting, setSubmitting] = useState(false)
   const block = useBlockMessage('add-client-message')
 
@@ -645,7 +647,12 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
     setSubmitting(true)
     block.clear()
     try {
-      const created = await createClient({ email: address, displayName: name, timezone })
+      const created = await createClient({
+        email: address,
+        displayName: name,
+        timezone,
+        weightUnit,
+      })
       onAdded(created)
       block.done(`${created.displayName ?? address} added. Tell them to log in.`)
       setEmail('')
@@ -752,6 +759,32 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
               type="email"
               value={email}
             />
+          </div>
+
+          {/* #99. The trainer sets the default; the client corrects it themselves from the log
+              screen's toggle, which is where the question actually arises. Defaulted to lb
+              because most Canadian gyms load pound plates — the same reason the column's
+              default is lb — so this control is usually left alone. */}
+          <div className="grid gap-2">
+            <label className="text-sm font-semibold text-ink" htmlFor="client-weight-unit">
+              Weight unit
+            </label>
+            <select
+              className={`justify-self-start ${trainerField}`}
+              id="client-weight-unit"
+              name="weightUnit"
+              onChange={(event) => setWeightUnit(event.target.value === 'kg' ? 'kg' : 'lb')}
+              value={weightUnit}
+            >
+              {/* The value is the stored enum, the label is what a person reads. See
+                  unitLabel: 'lb' is the symbol the column carries, "lbs" is what is painted
+                  on the plates. */}
+              <option value="lb">{unitLabel('lb')}</option>
+              <option value="kg">{unitLabel('kg')}</option>
+            </select>
+            <p className="text-xs text-muted">
+              What they log and read weights in. They can change it themselves.
+            </p>
           </div>
 
           <div className="grid gap-2">

@@ -13,6 +13,7 @@ import {
 import { messageFor } from '../lib/apiMessages'
 import { formatSessionDate } from '../lib/history'
 import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
+import { unitLabel, unitOf } from '../lib/weight'
 import { useBlockMessage } from './blockMessage'
 import { Message } from './Message'
 import { RecordLink } from './RecordLink'
@@ -168,7 +169,13 @@ export function ClientDetailScreen() {
         {!active && <p className="text-sm font-semibold text-danger">Deactivated</p>}
       </div>
 
-      <p className="mt-1 text-sm text-muted">{client.timezone}</p>
+      {/* Two facts the trainer set when adding them, and the two that decide what this client
+          actually sees: which clock their reminders run on, and which unit their weights read
+          in (#99). The unit is stated rather than made editable here — the client owns it from
+          their own log screen, and POST/PATCH /api/clients is where a trainer corrects it. */}
+      <p className="mt-1 text-sm text-muted">
+        {client.timezone} · logs in {unitLabel(unitOf(client.weightUnit))}
+      </p>
 
       <Programs clientId={clientId} programs={programs} />
 

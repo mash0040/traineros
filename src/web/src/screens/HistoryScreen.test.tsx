@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { HistoryItem, HistoryResponse } from '../api/types.gen'
+import type { HistoryItem, HistoryResponse, MeResponse } from '../api/types.gen'
 import { HistoryScreen } from './HistoryScreen'
 
 function set(overrides: {
@@ -67,10 +67,20 @@ describe('HistoryScreen', () => {
     return fetchMock
   }
 
-  function renderScreen() {
+  // kg, for the same reason the log screen's fixture is (#99): every assertion here was written
+  // about canonical kilograms. The lb path has its own test at the bottom.
+  const me: MeResponse = {
+    id: 'client-1',
+    displayName: 'Ada',
+    email: 'ada@example.com',
+    timezone: 'America/Toronto',
+    weightUnit: 'kg',
+  }
+
+  function renderScreen(who: MeResponse = me) {
     return render(
       <MemoryRouter>
-        <HistoryScreen />
+        <HistoryScreen me={who} />
       </MemoryRouter>,
     )
   }
@@ -125,7 +135,9 @@ describe('HistoryScreen', () => {
     ).toEqual(['Back Squat', 'Bench Press'])
     // Each row is announced as one set rather than as two adjacent numbers, which is what
     // "1" beside "100 × 5" reads as when the grid is the only thing separating them.
-    const squat = within(session).getByRole('heading', { level: 3, name: 'Back Squat' }).closest('div')!
+    // Scoped by the set list's own accessible name rather than by walking up to `closest('div')`
+    // — the markup around the heading is not the test's business, and it changed once already.
+    const squat = within(session).getByRole('list', { name: 'Back Squat' })
     expect(within(squat).getAllByRole('listitem').map((row) => row.getAttribute('aria-label'))).toEqual([
       'Set 1, 100 kilograms by 5 reps',
       'Set 2, 102.5 kilograms by 5 reps',
@@ -326,5 +338,91 @@ describe('HistoryScreen', () => {
 
     expect(screen.getByRole('listitem', { name: 'Set 1, 8 reps' })).toBeInTheDocument()
     expect(screen.getByText('8 reps')).toBeInTheDocument()
+  })
+
+  // ── Weight unit (#99) ─────────────────────────────────────────────────────────────────────
+
+  it('reads history in the client’s unit, from the same canonical kilograms', async () => {
+    // The stored row is identical either way — that is the point of one unit in the database.
+    // 83.91458845 kg is exactly 185 lb, so nothing is lost in the reading.
+    stubHistory(() => ({
+      items: [
+        set({ id: 's1', session: 'fri', performedOn: '2026-07-31', exercise: 'squat', exerciseName: 'Back Squat', setNumber: 1, weightKg: 83.91458845, reps: 5 }),
+      ],
+      nextCursor: null,
+    }))
+    renderScreen({ ...me, weightUnit: 'lb' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    // The spoken form spells the unit out; the visible form is the bare number beside a ×.
+    expect(screen.getByRole('listitem', { name: 'Set 1, 185 pounds by 5 reps' })).toBeInTheDocument()
+  })
+
+  it('says kilograms for a client who reads in kilograms', async () => {
+    stubHistory(() => ({
+      items: [
+        set({ id: 's1', session: 'fri', performedOn: '2026-07-31', exercise: 'squat', exerciseName: 'Back Squat', setNumber: 1, weightKg: 102.5, reps: 5 }),
+      ],
+      nextCursor: null,
+    }))
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    expect(
+      screen.getByRole('listitem', { name: 'Set 1, 102.5 kilograms by 5 reps' }),
+    ).toBeInTheDocument()
+  })
+
+  it('names the unit once per exercise, so a bare number is never left unexplained', async () => {
+    // The reported bug: "22.05 × 3" with nothing saying what 22.05 is — and it is exactly the
+    // number that needs saying, because it is what the client converted from.
+    stubHistory(() => ({
+      items: [
+        set({ id: 's1', session: 'fri', performedOn: '2026-07-31', exercise: 'squat', exerciseName: 'Back Squat', setNumber: 1, weightKg: 10, reps: 3 }),
+        set({ id: 's2', session: 'fri', performedOn: '2026-07-31', exercise: 'squat', exerciseName: 'Back Squat', setNumber: 2, weightKg: 10, reps: 3 }),
+      ],
+      nextCursor: null,
+    }))
+    renderScreen({ ...me, weightUnit: 'lb' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    // "lbs", not "lb" — the display label, not the stored enum.
+    expect(screen.getByText('lbs')).toBeInTheDocument()
+    // Once for the group, not once per row: two sets, one label. Same rule DESIGN.md §Log row
+    // applies to the log screen's column header.
+    expect(screen.getAllByText('lbs')).toHaveLength(1)
+  })
+
+  it('leaves the unit off a group with nothing but bodyweight sets', async () => {
+    // A unit over a column of "8 reps" would be a unit for a number that is not there.
+    stubHistory(() => ({
+      items: [
+        set({ id: 'c1', session: 'fri', performedOn: '2026-07-31', exercise: 'chin', exerciseName: 'Chin-up', setNumber: 1, weightKg: null, reps: 8 }),
+      ],
+      nextCursor: null,
+    }))
+    renderScreen({ ...me, weightUnit: 'lb' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    expect(screen.queryByText('lbs')).not.toBeInTheDocument()
+  })
+
+  it('leaves a bodyweight set alone in either unit', async () => {
+    // weight_kg NULL has no unit to convert, and inventing a zero would be a claim.
+    stubHistory(() => ({
+      items: [
+        set({ id: 'c1', session: 'fri', performedOn: '2026-07-31', exercise: 'chin', exerciseName: 'Chin-up', setNumber: 1, weightKg: null, reps: 8 }),
+      ],
+      nextCursor: null,
+    }))
+    renderScreen({ ...me, weightUnit: 'lb' })
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    expect(screen.getByRole('listitem', { name: 'Set 1, 8 reps' })).toBeInTheDocument()
   })
 })

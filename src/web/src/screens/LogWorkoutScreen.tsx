@@ -20,9 +20,19 @@ import {
 } from '../lib/api'
 import { NO_VALUE } from '../lib/glyphs'
 import { targetLine } from '../lib/prescription'
+import {
+  spokenUnit,
+  toDisplay,
+  toDisplayText,
+  toKg,
+  unitLabel,
+  unitOf,
+  type WeightUnit,
+} from '../lib/weight'
 import { clearDraft, readDraft, todayIn, writeDraft } from '../lib/workoutDraft'
 import { useBlockMessage } from './blockMessage'
 import { Message } from './Message'
+import { WeightUnitToggle } from './WeightUnitToggle'
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
@@ -96,10 +106,21 @@ const EMPTY_PENDING: Pending = { weight: '', reps: '', dirty: false, saving: fal
 //   3. Resuming re-reads what is already logged (GET /api/me/history filtered to the session).
 //      Without it the screen would restart set numbering at 1 and write duplicate set_numbers,
 //      which the schema has no constraint against either.
-export function LogWorkoutScreen({ me }: { me: MeResponse }) {
+export function LogWorkoutScreen({
+  me,
+  onMeChanged,
+}: {
+  me: MeResponse
+  onMeChanged: (me: MeResponse) => void
+}) {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const dayId = searchParams.get('day')
+
+  // The display/input unit for this whole screen (#99). Everything below stays in canonical
+  // kilograms — SavedSet.weightKg, the blocks, what goes on the wire — and this is consumed
+  // only where a number is rendered or read back off an input.
+  const unit = unitOf(me.weightUnit)
 
   const [load, setLoad] = useState<Load>('loading')
   const [program, setProgram] = useState<MeProgramDetails | null>(null)
@@ -132,6 +153,13 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
   // be rebuilt when it changes — a new callback identity mid-flight would not share `creating`.
   const programRef = useRef<MeProgramDetails | null>(null)
   programRef.current = program
+
+  // Same reasoning for the unit, which ensureSession's read-back needs to pre-fill the pending
+  // row: putting it in the dependency array would rebuild the callback the moment the toggle
+  // fires, and a rebuilt callback is a second `creating` promise, which is the duplicate
+  // session guard 2 exists to prevent.
+  const unitRef = useRef<WeightUnit>(unit)
+  unitRef.current = unit
 
   // Loading and resuming are one operation. Splitting them let the persist effect fire between
   // the two and overwrite a real draft with the empty initial state.
@@ -172,7 +200,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
       const restored =
         resumedSession === null
           ? {}
-          : rebuildBlocks(items, resumedSession, wrapper.program ?? null, dayId)
+          : rebuildBlocks(items, resumedSession, wrapper.program ?? null, dayId, unit)
 
       // The note already on the row, when there is no local draft to prefer. Without it a client
       // reopening a finished day sees an empty box, and anything she types there replaces a note
@@ -339,7 +367,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
       }
 
       const history = await fetchHistory({ limit: HISTORY_PAGE })
-      const restored = rebuildBlocks(history.items ?? [], session.id, programRef.current, dayId)
+      const restored = rebuildBlocks(history.items ?? [], session.id, programRef.current, dayId, unitRef.current)
 
       setBlocks((previous) => {
         const merged = { ...previous }
@@ -434,12 +462,18 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
       return
     }
 
+    // The input boundary (#99). What she typed is in her unit; what goes on the wire is
+    // canonical kilograms, and nothing between here and the request sees the display number.
+    // Validated before converting, so the message is about what she typed rather than about a
+    // NaN that came out of a multiplication.
     const weightText = block.pending.weight.trim()
-    const weightKg = weightText === '' ? null : Number(weightText)
-    if (weightKg !== null && (!Number.isFinite(weightKg) || weightKg < 0)) {
+    const typedWeight = weightText === '' ? null : Number(weightText)
+    if (typedWeight !== null && (!Number.isFinite(typedWeight) || typedWeight < 0)) {
       updatePending(key, { failure: { kind: 'rejected', message: 'Weight must be a number, or empty for bodyweight.' } })
       return
     }
+
+    const weightKg = typedWeight === null ? null : toKg(typedWeight, unit)
 
     updatePending(key, { saving: true, failure: null })
 
@@ -471,7 +505,7 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
           ...previous,
           // ui-ux.md: the next set pre-fills from this one, because most sets repeat the weight
           // and editing is the exception path.
-          [key]: { saved: [...current.saved, row], pending: prefillFrom(row) },
+          [key]: { saved: [...current.saved, row], pending: prefillFrom(row, unit) },
         }
       })
     } catch (caught) {
@@ -639,22 +673,35 @@ export function LogWorkoutScreen({ me }: { me: MeResponse }) {
       {prescriptions.length === 0 ? (
         <p className="mt-8 text-base text-muted">There&rsquo;s nothing prescribed for this day.</p>
       ) : (
-        <ul className="mt-8 grid gap-6">
-          {prescriptions.map((prescription) => (
-            <ExerciseBlock
-              block={blockFor(prescription.id ?? '')}
-              key={prescription.id}
-              lastSets={lastTimes[prescription.exercise?.id ?? ''] ?? null}
-              onChangeReps={(reps) => updatePending(prescription.id ?? '', { reps, dirty: true, failure: null })}
-              onChangeWeight={(weight) =>
-                updatePending(prescription.id ?? '', { weight, dirty: true, failure: null })
-              }
-              onDelete={(setId) => onDeleteSet(prescription.id ?? '', setId)}
-              onSave={() => void onSaveSet(prescription)}
-              prescription={prescription}
-            />
-          ))}
-        </ul>
+        <>
+          {/* Once, above the first block, right-aligned over the weight columns (#99). Not per
+              block: that would be one control per exercise all writing one setting, and the
+              column header it would sit in is aria-hidden. See WeightUnitToggle. */}
+          <WeightUnitToggle onMeChanged={onMeChanged} unit={unit} />
+
+          {/* mt-3 rather than the mt-8 this list used to carry. The toggle took that gap over
+              — it is what sits below the day title now — and 12px here keeps it reading as a
+              label for the columns below rather than as a floating control. Net cost of the
+              whole row is about 44px above the first exercise, which is the price of putting
+              the setting where the question is asked. */}
+          <ul className="mt-3 grid gap-6">
+            {prescriptions.map((prescription) => (
+              <ExerciseBlock
+                block={blockFor(prescription.id ?? '')}
+                key={prescription.id}
+                lastSets={lastTimes[prescription.exercise?.id ?? ''] ?? null}
+                onChangeReps={(reps) => updatePending(prescription.id ?? '', { reps, dirty: true, failure: null })}
+                onChangeWeight={(weight) =>
+                  updatePending(prescription.id ?? '', { weight, dirty: true, failure: null })
+                }
+                onDelete={(setId) => onDeleteSet(prescription.id ?? '', setId)}
+                onSave={() => void onSaveSet(prescription)}
+                prescription={prescription}
+                unit={unit}
+              />
+            ))}
+          </ul>
+        </>
       )}
 
       <SessionComment onChange={setComment} resumed={resumed} value={comment} />
@@ -786,6 +833,7 @@ function ExerciseBlock({
   onDelete,
   onSave,
   prescription,
+  unit,
 }: {
   block: Block
   lastSets: LastSet[] | null
@@ -794,6 +842,7 @@ function ExerciseBlock({
   onDelete: (setId: string) => Promise<void>
   onSave: () => void
   prescription: PrescriptionView
+  unit: WeightUnit
 }) {
   const exercise = prescription.exercise
   const name = exercise?.name ?? 'Exercise'
@@ -894,7 +943,7 @@ function ExerciseBlock({
         <div className={LOG_ROW_GRID} aria-hidden="true">
           <span />
           <span className="text-xs font-normal text-muted">Last</span>
-          <span className="text-right text-xs font-normal text-muted">kg</span>
+          <span className="text-right text-xs font-normal text-muted">{unitLabel(unit)}</span>
           <span className="text-right text-xs font-normal text-muted">Reps</span>
         </div>
 
@@ -908,6 +957,7 @@ function ExerciseBlock({
             onToggle={() => toggle(set.id)}
             open={openSetId === set.id}
             set={set}
+            unit={unit}
           />
         ))}
 
@@ -918,11 +968,11 @@ function ExerciseBlock({
 
           {/* Rank 2. Its own column, left of the inputs, so successive sets stack into a
               vertical strip of last-time values (DESIGN.md §Log row). */}
-          <LastCell set={lastTimeFor(lastSets, nextSetNumber)} />
+          <LastCell set={lastTimeFor(lastSets, nextSetNumber)} unit={unit} />
 
           <NumberField
             inputMode="decimal"
-            name={`${name} set ${nextSetNumber} weight in kilograms`}
+            name={`${name} set ${nextSetNumber} weight in ${spokenUnit(unit)}`}
             onChange={onChangeWeight}
             value={block.pending.weight}
           />
@@ -1000,6 +1050,7 @@ function SavedRow({
   onToggle,
   open,
   set,
+  unit,
 }: {
   deleteFailure: Failure | null
   deleting: boolean
@@ -1008,6 +1059,7 @@ function SavedRow({
   onToggle: () => void
   open: boolean
   set: SavedSet
+  unit: WeightUnit
 }) {
   return (
     // A subgrid of the block, so the button inside it can be a subgrid in turn: a plain wrapper
@@ -1018,18 +1070,21 @@ function SavedRow({
           the row's job here is to be one announceable thing that opens. */}
       <button
         aria-expanded={open}
-        aria-label={savedRowLabel(set, last)}
+        aria-label={savedRowLabel(set, last, unit)}
         className={`${LOG_ROW_GRID} w-full rounded-sm text-left ${open ? 'bg-surface-sunk' : ''}`}
         onClick={onToggle}
         type="button"
       >
         <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
-        <LastCell set={last} />
+        <LastCell set={last} unit={unit} />
         {/* NO_VALUE, not a literal em dash. DESIGN.md §Absolute bans rules em dashes out of
             rendered strings, and this screen was rendering one for bodyweight while the roster
-            rendered an en dash for the same idea. One glyph, one constant (#138). */}
+            rendered an en dash for the same idea. One glyph, one constant (#138).
+
+            The display boundary (#99): the row holds canonical kilograms and reads out in the
+            client's unit. Bodyweight is null in both units and keeps its dash. */}
         <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
-          {set.weightKg === null ? NO_VALUE : set.weightKg}
+          {set.weightKg === null ? NO_VALUE : toDisplay(set.weightKg, unit)}
         </span>
         <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
       </button>
@@ -1059,11 +1114,15 @@ function SavedRow({
 
 // What the row announces. Includes last-time because the button's own contents stop being read
 // separately once it carries a label, and that number is the reason the column exists.
-function savedRowLabel(set: SavedSet, last: LastSet | undefined): string {
+function savedRowLabel(set: SavedSet, last: LastSet | undefined, unit: WeightUnit): string {
+  // Spelled out rather than "kg"/"lb": a screen reader renders those unpredictably, and this
+  // string is heard mid-set by someone who is not looking at the screen (#99).
+  const spoken = spokenUnit(unit)
+
   const performed =
     set.weightKg === null
       ? `${set.reps} reps`
-      : `${set.weightKg} kilograms by ${set.reps} reps`
+      : `${toDisplay(set.weightKg, unit)} ${spoken} by ${set.reps} reps`
 
   if (last === undefined) {
     return `Set ${set.setNumber}, ${performed}`
@@ -1072,7 +1131,7 @@ function savedRowLabel(set: SavedSet, last: LastSet | undefined): string {
   const previously =
     last.weightKg === null || last.weightKg === undefined
       ? `${last.reps} reps`
-      : `${last.weightKg} kilograms by ${last.reps} reps`
+      : `${toDisplay(last.weightKg, unit)} ${spoken} by ${last.reps} reps`
 
   return `Set ${set.setNumber}, ${performed}. Last time ${previously}`
 }
@@ -1087,7 +1146,7 @@ function savedRowLabel(set: SavedSet, last: LastSet | undefined): string {
 // be dropped: a column header sits in a sibling row with no programmatic association to these
 // cells, so a screen reader moving down the block would announce a bare "72.5 × 8" with nothing
 // saying what it is. Hidden text costs sighted users nothing and keeps that context.
-function LastCell({ set }: { set: LastSet | undefined }) {
+function LastCell({ set, unit }: { set: LastSet | undefined; unit: WeightUnit }) {
   const value =
     set === undefined ? (
       // One dash, at --muted. Not "no data yet" copy — and it holds the row's place so the
@@ -1104,7 +1163,7 @@ function LastCell({ set }: { set: LastSet | undefined }) {
           set.reps
         ) : (
           <>
-            {set.weightKg}
+            {toDisplay(set.weightKg, unit)}
             <span className="text-muted"> × </span>
             {set.reps}
           </>
@@ -1129,7 +1188,9 @@ function lastTimeFor(lastSets: LastSet[] | null, setNumber: number): LastSet | u
 // 44px minimum. inputMode per ui-ux.md — a full keyboard for a number is a gym-floor failure.
 //
 // type="text" with an inputMode rather than type="number": number inputs scroll-wheel their own
-// value, reject a locale's decimal comma, and put spinners inside a 44px target.
+// value, reject a locale's decimal comma, and put spinners inside a 44px target. That decision
+// still holds, and it is what rules out step increments here — see ui-ux.md §Gym-floor
+// constraints for the attempt and why it came out.
 //
 // The visible unit is in the block's header row. `name` still spells it out ("… weight in
 // kilograms") because the header is aria-hidden and this is the input's only accessible name.
@@ -1215,9 +1276,11 @@ function Problem({
   )
 }
 
-function prefillFrom(set: SavedSet): Pending {
+// Takes the unit because the pending row is the one piece of state on this screen that is not
+// canonical: it is what someone is typing, so it has to be in the unit they type in (#99).
+function prefillFrom(set: SavedSet, unit: WeightUnit): Pending {
   return {
-    weight: set.weightKg === null ? '' : String(set.weightKg),
+    weight: toDisplayText(set.weightKg, unit),
     reps: String(set.reps),
     // Suggested, not entered. See Pending.
     dirty: false,
@@ -1272,6 +1335,8 @@ function rebuildBlocks(
   sessionId: string,
   program: MeProgramDetails | null,
   dayId: string | null,
+  // Only for the pending pre-fill it builds. The SavedSets it returns stay canonical.
+  unit: WeightUnit,
 ): Record<string, Block> {
   const byExercise = new Map<string, SavedSet[]>()
   for (const item of items) {
@@ -1307,7 +1372,7 @@ function rebuildBlocks(
     claimed.add(exerciseId)
     // History comes back newest-first; the row order here is the set order.
     saved.sort((left, right) => left.setNumber - right.setNumber)
-    blocks[prescription.id] = { saved, pending: prefillFrom(saved[saved.length - 1]) }
+    blocks[prescription.id] = { saved, pending: prefillFrom(saved[saved.length - 1], unit) }
   }
 
   return blocks

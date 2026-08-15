@@ -55,8 +55,8 @@ Revokes current session row.
 | Method & path | Purpose | Notes |
 |---|---|---|
 | GET /api/clients | list clients | includes is_active |
-| POST /api/clients | create client | body: email, display_name, timezone. Sends nothing; invite = trainer tells them to log in via magic link |
-| PATCH /api/clients/:id | edit / deactivate | is_active=false also disables their schedules (single transaction) |
+| POST /api/clients | create client | body: email, display_name, timezone, weight_unit? ('kg'\|'lb', default 'lb'). Sends nothing; invite = trainer tells them to log in via magic link |
+| PATCH /api/clients/:id | edit / deactivate | body: display_name?, timezone?, is_active?, weight_unit?. is_active=false also disables their schedules (single transaction) |
 | GET /api/clients/:id/sessions | client's workout history | trainer view of logs |
 | GET/POST /api/exercises, PATCH /api/exercises/:id | exercise library | delete = PATCH is_active=false (soft-delete per database.md) |
 | GET/POST /api/programs | list/create (client_id in body on create) | create enforces one-active-per-client via partial unique index; 409 on conflict |
@@ -76,8 +76,15 @@ Revokes current session row.
 
 | Method & path | Purpose | Notes |
 |---|---|---|
-| GET /api/me | identity, timezone, active program summary | the dashboard bootstrap call |
+| GET /api/me | identity, timezone, weight_unit, active program summary | the dashboard bootstrap call |
+| PATCH /api/me | the client's own weight_unit | body: weight_unit ('kg'\|'lb'). Returns the full MeResponse. **One field on purpose** — see below |
 | GET /api/me/program | full active program: days → prescriptions → exercise (name, video_url, cues) | one response, no N+1 waterfall from the client |
+(Recorded in #99: PATCH /api/me accepts `weight_unit` and nothing else, and the exclusions are the point. **email** is the login identity *and* the reminder channel, so a client editing it would silently redirect their own magic links with no recovery path — the new address is where the recovery link would go. **timezone** exists to schedule reminders, which is the trainer's job per notifications.md. **display_name** is trainer-owned; it is how the roster reads. **is_active** must never be self-service in either direction. Widening this route later should be a decision someone makes, not one they inherit.
+
+The exclusions are enforced twice, which is worth recording because only one of them is obvious: `UpdateMeRequest` has no such member, *and* ApiConventions sets `JsonUnmappedMemberHandling.Disallow`, so `{"weightUnit":"kg","email":"..."}` is a 400 for the whole body rather than a silent drop of the field that does not belong. A client cannot move their own login identity even by accident, and the refusal is visible rather than quiet.
+
+There is no id in the URL, so the row written is the session's user and the IDOR surface is structurally zero — the property this whole namespace is built on. That is also why its isolation test asserts another client's row is *untouched* rather than asserting a 404 on a foreign id: there is no foreign id to ask for. Bad values are 400 bad_request; the value is trimmed and lowercased first, a deliberate departure from timezone's exact match, because "LB" is unambiguous and refusing it would be pedantry rather than safety.)
+
 (Recorded in #30: both /api/me and /api/me/program express "no active program" as an explicit null in the response shape (activeProgram: null on /api/me, program: null on /api/me/program) — 200 with null, not 404. 404 is reserved for genuine not-found; empty-state is not an error. Consistency reduces per-endpoint SPA branching.)
 | POST /api/me/sessions | start/record a workout session | body: performed_on, program_day_id (nullable), comment. Resumes the existing row for (client, performed_on, program_day_id) — 200 rather than 201 — instead of creating a second |
 | POST /api/me/sessions/:id/sets | log a set | body: exercise_id, program_day_exercise_id?, set_number, weight_kg?, reps. Ownership of :id verified by join |

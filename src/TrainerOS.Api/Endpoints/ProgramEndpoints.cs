@@ -54,6 +54,10 @@ public static class ProgramEndpoints
     public sealed record ProgramDetailResponse(
         Guid Id,
         Guid ClientId,
+        // The client's weight unit (#99), carried so the builder can tell the trainer which
+        // unit to write a prescribed load in. target_load is free text and is never converted,
+        // so this is the only thing standing between "70 kg" and a client who reads in lb.
+        string ClientWeightUnit,
         string Title,
         string Status,
         DateOnly? StartsOn,
@@ -182,6 +186,14 @@ public static class ProgramEndpoints
             {
                 p.Id,
                 p.ClientId,
+                // Correlated subquery rather than a navigation property: Program deliberately
+                // has no Client nav (its FKs are configured without one), and ClientsForTrainer
+                // is the sanctioned path to a client row. EF folds this into the same statement,
+                // so the endpoint still costs the two round trips its comment below promises.
+                ClientWeightUnit = db.ClientsForTrainer(trainer.Id)
+                    .Where(u => u.Id == p.ClientId)
+                    .Select(u => u.WeightUnit)
+                    .FirstOrDefault(),
                 p.Title,
                 p.Status,
                 p.StartsOn,
@@ -246,7 +258,8 @@ public static class ProgramEndpoints
                 .ToDictionaryAsync(e => e.Id, cancellationToken);
 
         var response = new ProgramDetailResponse(
-            program.Id, program.ClientId, program.Title, program.Status,
+            program.Id, program.ClientId, program.ClientWeightUnit ?? WeightUnits.Default,
+            program.Title, program.Status,
             program.StartsOn, program.Notes, program.CreatedAt, program.UpdatedAt,
             program.Days.Select(d => new DayView(
                 d.Id, d.Title, d.Position,

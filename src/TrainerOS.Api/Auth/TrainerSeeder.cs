@@ -59,6 +59,8 @@ public static class TrainerSeeder
             Email = email.Trim(),
             DisplayName = "Trainer",
             Timezone = "America/Toronto",
+            // weight_unit is left to its default: the trainer has no logging surface, so the
+            // value is never read for this row.
             PasswordHash = Passwords.Hash(password),
             IsActive = true,
             CreatedAt = clock.GetUtcNow(),
