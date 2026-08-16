@@ -17,9 +17,11 @@ import {
   fetchMyProgram,
   logSet,
   updateSessionComment,
+  updateSet,
 } from '../lib/api'
 import { NO_VALUE } from '../lib/glyphs'
 import { targetLine } from '../lib/prescription'
+import { dismissRowHint, rowHintDismissed } from '../lib/rowHint'
 import {
   spokenUnit,
   toDisplay,
@@ -136,6 +138,26 @@ export function LogWorkoutScreen({
   // Keyed by exercise id. Absent means still in flight, null means nothing to show — both
   // render the same dash, which is why the screen never waits on them.
   const [lastTimes, setLastTimes] = useState<Record<string, LastSet[] | null>>({})
+
+  /**
+   * The one-time "rows are tappable" hint (#107).
+   *
+   * Read once at mount rather than on every render: `localStorage` is synchronous and this sits
+   * in the render path of the screen DESIGN.md protects hardest. State, because dismissing has
+   * to re-render, and the storage write is the durable half rather than the live one.
+   */
+  const [hintSeen, setHintSeen] = useState(rowHintDismissed)
+
+  function dismissHint() {
+    // Guarded, because `toggle` calls this on every open and close of every row: without it a
+    // workout of twenty sets would write to localStorage on every tap to say the same thing.
+    if (hintSeen) {
+      return
+    }
+
+    dismissRowHint()
+    setHintSeen(true)
+  }
 
   const [finishing, setFinishing] = useState(false)
   const [finishError, setFinishError] = useState<string | null>(null)
@@ -404,6 +426,25 @@ export function LogWorkoutScreen({
     return blocks[prescriptionId] ?? { saved: [], pending: EMPTY_PENDING }
   }
 
+  /**
+   * Which block carries the hint: the first one that actually has a saved row (#107).
+   *
+   * "On a client's first saved set", read literally. Once, not once per exercise — the lesson is
+   * about rows in general, and a workout of six exercises would otherwise teach it six times.
+   * The first block *with a row in it* rather than simply the first block, because the hint has
+   * to point at something: on a screen where Bench is done and Squat is untouched, a line under
+   * Squat's empty list describes rows that are not there.
+   *
+   * Derived, not stored. A set removed back to none takes the hint with it, and the block that
+   * carries it moves with the rows rather than being remembered from whichever one was first.
+   * Restored sets count: reopening a session mid-workout is a client who has saved sets.
+   */
+  const hintFor = hintSeen
+    ? null
+    : (prescriptions.find(
+        (prescription) => blockFor(prescription.id ?? '').saved.length > 0,
+      )?.id ?? null)
+
   // Exercises with a set she typed and never saved — the one place a set could still vanish
   // silently at Finish.
   //
@@ -513,6 +554,55 @@ export function LogWorkoutScreen({
       // matters: she believes it saved, it did not, and she finds out never.
       updatePending(key, { saving: false, failure: classify(caught) })
     }
+  }
+
+  /**
+   * Fix a set that is already saved (#107).
+   *
+   * PATCH /api/me/sets/:id has existed since #32 and nothing called it, so a client who typed
+   * 100 for 10 had to remove the set and log it again. Editing is the commoner mistake.
+   *
+   * `weightKg` arrives canonical — the caller converted what was typed, the same boundary the
+   * pending row's save crosses (#99) — and the local row is rebuilt from the *response*, not
+   * from what was typed, so anything the server normalised is what ends up on screen.
+   *
+   * No renumbering here, unlike the delete beside it: editing a set changes what is in it, not
+   * how many there are. `set_number` is deliberately not sent at all, even though the endpoint
+   * accepts it — this screen numbers sets by position and nothing on it can reorder them.
+   */
+  async function onEditSet(
+    prescriptionId: string,
+    setId: string,
+    weightKg: number | null,
+    reps: number,
+  ) {
+    const updated = await updateSet(setId, { weightKg, reps })
+
+    setBlocks((previous) => {
+      const current = previous[prescriptionId]
+      if (current === undefined) {
+        return previous
+      }
+
+      return {
+        ...previous,
+        [prescriptionId]: {
+          ...current,
+          saved: current.saved.map((candidate) =>
+            candidate.id === setId
+              ? {
+                  ...candidate,
+                  weightKg: updated.weightKg ?? null,
+                  reps: updated.reps ?? candidate.reps,
+                }
+              : candidate,
+          ),
+          // The pending row is left alone on purpose. It pre-fills from the last saved set, but
+          // she may be part-way through typing the next one while correcting an earlier row, and
+          // rewriting a field under a moving thumb is worse than a stale suggestion.
+        },
+      }
+    })
   }
 
   // Mirrors the server's renumbering (#105) onto the local copy: sets above the removed one
@@ -695,8 +785,13 @@ export function LogWorkoutScreen({
                   updatePending(prescription.id ?? '', { weight, dirty: true, failure: null })
                 }
                 onDelete={(setId) => onDeleteSet(prescription.id ?? '', setId)}
+                onEdit={(setId, weightKg, reps) =>
+                  onEditSet(prescription.id ?? '', setId, weightKg, reps)
+                }
+                onHintSeen={dismissHint}
                 onSave={() => void onSaveSet(prescription)}
                 prescription={prescription}
+                showHint={hintFor === prescription.id}
                 unit={unit}
               />
             ))}
@@ -831,8 +926,11 @@ function ExerciseBlock({
   onChangeReps,
   onChangeWeight,
   onDelete,
+  onEdit,
+  onHintSeen,
   onSave,
   prescription,
+  showHint,
   unit,
 }: {
   block: Block
@@ -840,8 +938,11 @@ function ExerciseBlock({
   onChangeReps: (value: string) => void
   onChangeWeight: (value: string) => void
   onDelete: (setId: string) => Promise<void>
+  onEdit: (setId: string, weightKg: number | null, reps: number) => Promise<void>
+  onHintSeen: () => void
   onSave: () => void
   prescription: PrescriptionView
+  showHint: boolean
   unit: WeightUnit
 }) {
   const exercise = prescription.exercise
@@ -856,61 +957,179 @@ function ExerciseBlock({
 
   // Which saved row has its actions showing. One at a time, per exercise.
   const [openSetId, setOpenSetId] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteFailure, setDeleteFailure] = useState<Failure | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  // The removal receipt, held by the block because the row it is about is gone by the time there
-  // is anything to say — and so is the disclosure the delete failure lives in.
+  /**
+   * The open row's one slot, shared by Edit and Remove (#107).
+   *
+   * It was `deleteFailure` when Remove was the only action. The two cannot both be in flight —
+   * the row is one block and each control disables while the other is working — so a second
+   * slot would be a slot that is always empty, and #141's rule is that a block holds one
+   * message.
+   */
+  const [actionFailure, setActionFailure] = useState<Failure | null>(null)
+
+  /**
+   * What is being typed into a saved row, or null if none is (#107).
+   *
+   * Held here rather than in SavedRow so that opening an edit *is* the row's state rather than
+   * something the row remembers alongside it: there is one of these per block, so two rows
+   * cannot be in edit mode at once and a stale draft cannot survive the row closing. Same
+   * reasoning as `openSetId` directly above, and the two are cleared together.
+   *
+   * Strings, and in the client's display unit, exactly like `Pending.weight` — this is what
+   * someone is typing, which is the one thing lib/weight.ts's header says is never canonical.
+   */
+  const [edit, setEdit] = useState<{ setId: string; weight: string; reps: string } | null>(null)
+
+  // The receipt for a row action, held by the block because the row's own slot may be gone by
+  // the time there is anything to say — after a removal the row itself is, and after an edit the
+  // disclosure closes.
   //
   // Only `done` is used. The save failure that shares this slot is `block.pending.failure`,
   // which belongs to the screen because it also decides whether the Save button reads "Save set"
   // or "Try again", so it cannot move in here without splitting that. The slot is therefore
   // *derived* below rather than stored — DESIGN.md §Messages allows either, and this is the case
   // it allows it for: one message, computed, when the block does not own all of its inputs.
-  const removal = useBlockMessage(`removed-${prescription.id ?? name}`)
+  const receipt = useBlockMessage(`receipt-${prescription.id ?? name}`)
 
   // One message. The failure wins, because a set that would not save is the live problem and a
-  // receipt for a row deleted a moment ago is not.
+  // receipt for a row changed a moment ago is not.
   const message: { tone: 'failure' | 'confirmation'; body: React.ReactNode; id: string } | null =
     block.pending.failure !== null
       ? { tone: 'failure', body: block.pending.failure.message, id: pendingErrorId }
-      : removal.message === null
+      : receipt.message === null
         ? null
-        : { tone: 'confirmation', body: removal.message.body, id: removal.id }
+        : { tone: 'confirmation', body: receipt.message.body, id: receipt.id }
 
   async function remove(setId: string) {
-    if (deleting) {
+    if (busy) {
       return
     }
 
     const setNumber = block.saved.find((candidate) => candidate.id === setId)?.setNumber
 
-    setDeleting(true)
-    setDeleteFailure(null)
-    removal.clear()
+    setBusy(true)
+    setActionFailure(null)
+    receipt.clear()
     try {
       await onDelete(setId)
       setOpenSetId(null)
+      setEdit(null)
       // Names the renumbering rather than only the removal, because the server renumbers the
       // sets above it (#105) and the local copy mirrors that: a client watching set 3 become
       // set 2 needs to know that is the fix and not a second mistake.
-      removal.done(
+      receipt.done(
         setNumber === undefined
           ? 'Set removed. The rest are renumbered.'
           : `Set ${setNumber} removed. The rest are renumbered.`,
       )
     } catch (caught) {
-      setDeleteFailure(classify(caught))
+      setActionFailure(classifyRowAction(caught))
     } finally {
-      setDeleting(false)
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Commit an edit. Returns whether it landed, so the row knows where to put focus.
+   *
+   * Validation mirrors the pending row's, field for field, because it is the same two fields
+   * with the same rules — and mirrors the endpoint's, so a rejection costs no round trip on gym
+   * wifi.
+   */
+  async function saveEdit(): Promise<boolean> {
+    if (busy || edit === null) {
+      return false
+    }
+
+    const set = block.saved.find((candidate) => candidate.id === edit.setId)
+    if (set === undefined) {
+      return false
+    }
+
+    const reps = Number.parseInt(edit.reps.trim(), 10)
+    if (!Number.isInteger(reps) || reps <= 0) {
+      setActionFailure({ kind: 'rejected', message: 'Enter how many reps you did.' })
+      return false
+    }
+
+    const weightText = edit.weight.trim()
+    const typedWeight = weightText === '' ? null : Number(weightText)
+    if (typedWeight !== null && (!Number.isFinite(typedWeight) || typedWeight < 0)) {
+      setActionFailure({
+        kind: 'rejected',
+        message: 'Weight must be a number, or empty for bodyweight.',
+      })
+      return false
+    }
+
+    // The one edit this endpoint cannot express. PATCH reads `weight_kg: null` as "leave it
+    // alone" rather than "clear it", which MeSessionEndpoints records as a deliberate v1
+    // decision — so emptying the field on a set that has a weight would send a request that
+    // succeeds and changes nothing, and she would watch the old number come back. Refused here
+    // with the workaround named, rather than sent and silently ignored. Tracked as its own
+    // issue; widening the endpoint to tell absent from explicitly-null is a contract decision.
+    //
+    // A set that is *already* bodyweight is unaffected: its field starts empty, null means
+    // "leave alone", and leaving null alone is exactly right.
+    if (typedWeight === null && set.weightKg !== null) {
+      setActionFailure({
+        kind: 'rejected',
+        message: 'To change this to bodyweight, remove the set and log it again without a weight.',
+      })
+      return false
+    }
+
+    setBusy(true)
+    setActionFailure(null)
+    receipt.clear()
+    try {
+      // The input boundary (#99), the same crossing the pending row's save makes: what she typed
+      // is in her unit, what goes on the wire is canonical kilograms.
+      await onEdit(edit.setId, typedWeight === null ? null : toKg(typedWeight, unit), reps)
+      setOpenSetId(null)
+      setEdit(null)
+      receipt.done(`Set ${set.setNumber} updated.`)
+      return true
+    } catch (caught) {
+      setActionFailure(classifyRowAction(caught))
+      return false
+    } finally {
+      setBusy(false)
     }
   }
 
   function toggle(setId: string) {
-    setDeleteFailure(null)
+    setActionFailure(null)
     // Opening or closing a row is an action in this block, so the receipt goes with it.
-    removal.clear()
+    receipt.clear()
+    // A row that closes takes any half-typed edit with it. Reopening starts from what is saved,
+    // which is the only value that is true of the set.
+    setEdit(null)
     setOpenSetId((previous) => (previous === setId ? null : setId))
+    // Opening a row is proof the hint landed, so it stops being shown from here on — on this
+    // device, permanently. A client who has found the gesture does not need to be taught it, and
+    // a hint that outlives its lesson is decoration.
+    onHintSeen()
+  }
+
+  function startEdit(set: SavedSet) {
+    setActionFailure(null)
+    receipt.clear()
+    // Seeded from the stored kilograms through the display boundary, so the field opens showing
+    // exactly the number the row was showing a moment ago (#99). Bodyweight seeds empty, which
+    // is what it reads as everywhere else.
+    setEdit({
+      setId: set.id,
+      weight: toDisplayText(set.weightKg, unit),
+      reps: String(set.reps),
+    })
+  }
+
+  function cancelEdit() {
+    setActionFailure(null)
+    setEdit(null)
   }
 
   return (
@@ -949,17 +1168,51 @@ function ExerciseBlock({
 
         {block.saved.map((set) => (
           <SavedRow
-            deleteFailure={openSetId === set.id ? deleteFailure : null}
-            deleting={deleting}
+            actionFailure={openSetId === set.id ? actionFailure : null}
+            busy={busy}
+            edit={edit !== null && edit.setId === set.id ? edit : null}
             key={set.id}
             last={lastTimeFor(lastSets, set.setNumber)}
+            onCancelEdit={cancelEdit}
+            onChangeEdit={(patch) => setEdit((previous) => (previous === null ? previous : { ...previous, ...patch }))}
             onDelete={() => void remove(set.id)}
+            onSaveEdit={saveEdit}
+            onStartEdit={() => startEdit(set)}
             onToggle={() => toggle(set.id)}
             open={openSetId === set.id}
             set={set}
             unit={unit}
           />
         ))}
+
+        {/* The one-time hint (#107), directly under the rows it is about and above the row she
+            is typing into, so it reads as a note on what is above rather than a label for what
+            is below.
+
+            Muted body text, not a Message. Message.tsx draws the line and it is the right one:
+            a panel means something happened. Nothing happened here — this is an instruction, and
+            giving it a tinted panel with a glyph would put it in the same visual class as a set
+            that would not save.
+
+            col-span-4 for the reason everything else in this grid carries it: a plain child auto
+            flows into track 1, which is the 2rem set-number column, and this sentence would wrap
+            down a 32px gutter. */}
+        {showHint && (
+          <p className="col-span-4 flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
+            Tap a set to change or remove it.
+            {/* An explicit dismissal as well as the automatic one in `toggle`, because a client
+                who is never going to edit a set would otherwise carry this line through every
+                workout until she happened to tap a row. Quiet: it is not an action on the
+                workout, and DESIGN.md's accent belongs to the thing to tap. */}
+            <button
+              className="min-h-[var(--tap-min)] rounded-sm px-2 font-semibold text-ink underline underline-offset-4"
+              onClick={onHintSeen}
+              type="button"
+            >
+              Got it
+            </button>
+          </p>
+        )}
 
         <div className={LOG_ROW_GRID}>
           {/* No bottom padding any more: with the unit labels moved to the header row every
@@ -1043,69 +1296,209 @@ function ExerciseBlock({
 //     second tap in the same place collapses it rather than landing on Delete — the finger has
 //     to move to do damage.
 function SavedRow({
-  deleteFailure,
-  deleting,
+  actionFailure,
+  busy,
+  edit,
   last,
+  onCancelEdit,
+  onChangeEdit,
   onDelete,
+  onSaveEdit,
+  onStartEdit,
   onToggle,
   open,
   set,
   unit,
 }: {
-  deleteFailure: Failure | null
-  deleting: boolean
+  actionFailure: Failure | null
+  busy: boolean
+  /** Non-null while this row is being edited; the strings are in the display unit. */
+  edit: { weight: string; reps: string } | null
   last: LastSet | undefined
+  onCancelEdit: () => void
+  onChangeEdit: (patch: { weight?: string; reps?: string }) => void
   onDelete: () => void
+  onSaveEdit: () => Promise<boolean>
+  onStartEdit: () => void
   onToggle: () => void
   open: boolean
   set: SavedSet
   unit: WeightUnit
 }) {
+  const editing = edit !== null
+  const failureId = `row-error-${set.id}`
+
+  const rowRef = useRef<HTMLButtonElement | null>(null)
+  const editRef = useRef<HTMLButtonElement | null>(null)
+  const weightRef = useRef<HTMLInputElement | null>(null)
+
+  /**
+   * Focus, which this row has to manage because it swaps the element under the client's finger.
+   *
+   * The row is a `<button>` at rest and a pair of inputs while editing — interactive content
+   * cannot nest inside a button, so entering edit mode does not decorate the row, it replaces
+   * it. Whatever had focus is unmounted at each of the three transitions, and focus left alone
+   * falls back to `<body>`: a keyboard user is returned to the top of the document, and a screen
+   * reader loses its place, in the middle of a workout.
+   *
+   * Requested as a target rather than called inline, because at each of these moments the
+   * element being focused does not exist yet — it renders in the commit the same tap causes.
+   */
+  const [focusTarget, setFocusTarget] = useState<'row' | 'edit' | 'weight' | null>(null)
+  useEffect(() => {
+    if (focusTarget === null) {
+      return
+    }
+
+    const target =
+      focusTarget === 'row' ? rowRef.current : focusTarget === 'edit' ? editRef.current : weightRef.current
+    target?.focus()
+    setFocusTarget(null)
+  }, [focusTarget])
+
   return (
     // A subgrid of the block, so the button inside it can be a subgrid in turn: a plain wrapper
     // here would break the chain, since subgrid needs its parent to be the grid whose tracks it
     // is borrowing. gap-y only — the column gap comes down from the block with the columns.
     <div className="col-span-4 grid grid-cols-subgrid gap-y-2">
-      {/* Labelled rather than read from its cells: "1 Last time – 100 8" is not a sentence, and
-          the row's job here is to be one announceable thing that opens. */}
-      <button
-        aria-expanded={open}
-        aria-label={savedRowLabel(set, last, unit)}
-        className={`${LOG_ROW_GRID} w-full rounded-sm text-left ${open ? 'bg-surface-sunk' : ''}`}
-        onClick={onToggle}
-        type="button"
-      >
-        <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
-        <LastCell set={last} unit={unit} />
-        {/* NO_VALUE, not a literal em dash. DESIGN.md §Absolute bans rules em dashes out of
-            rendered strings, and this screen was rendering one for bodyweight while the roster
-            rendered an en dash for the same idea. One glyph, one constant (#138).
+      {editing ? (
+        // The same four tracks, so the fields land exactly where the numbers were and exactly
+        // where the pending row's fields are: set number and last-time do not move, and the two
+        // inputs are the same width, in the same columns, as the ones directly below. That is
+        // the whole argument for editing in place rather than in the strip — a second pair of
+        // fields somewhere else on this screen is a second thing to aim at mid-set.
+        //
+        // A div, not the button above. An <input> inside a <button> is invalid content, and the
+        // row is not a toggle while it is a field.
+        <div className={`${LOG_ROW_GRID} rounded-sm bg-surface-sunk`}>
+          <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
+          <LastCell set={last} unit={unit} />
+          <NumberField
+            inputMode="decimal"
+            name={`Set ${set.setNumber} weight in ${spokenUnit(unit)}`}
+            onChange={(weight) => onChangeEdit({ weight })}
+            ref={weightRef}
+            value={edit.weight}
+          />
+          <NumberField
+            inputMode="numeric"
+            name={`Set ${set.setNumber} reps`}
+            onChange={(reps) => onChangeEdit({ reps })}
+            value={edit.reps}
+          />
+        </div>
+      ) : (
+        /* Labelled rather than read from its cells: "1 Last time – 100 8" is not a sentence, and
+           the row's job here is to be one announceable thing that opens. */
+        <button
+          aria-expanded={open}
+          aria-label={savedRowLabel(set, last, unit)}
+          className={`${LOG_ROW_GRID} w-full rounded-sm text-left ${open ? 'bg-surface-sunk' : ''}`}
+          onClick={onToggle}
+          ref={rowRef}
+          type="button"
+        >
+          <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
+          <LastCell set={last} unit={unit} />
+          {/* NO_VALUE, not a literal em dash. DESIGN.md §Absolute bans rules em dashes out of
+              rendered strings, and this screen was rendering one for bodyweight while the roster
+              rendered an en dash for the same idea. One glyph, one constant (#138).
 
-            The display boundary (#99): the row holds canonical kilograms and reads out in the
-            client's unit. Bodyweight is null in both units and keeps its dash. */}
-        <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
-          {set.weightKg === null ? NO_VALUE : toDisplay(set.weightKg, unit)}
-        </span>
-        <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
-      </button>
+              The display boundary (#99): the row holds canonical kilograms and reads out in the
+              client's unit. Bodyweight is null in both units and keeps its dash. */}
+          <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">
+            {set.weightKg === null ? NO_VALUE : toDisplay(set.weightKg, unit)}
+          </span>
+          <span className="text-right text-lg font-semibold text-ink-bold tabular-nums">{set.reps}</span>
+        </button>
+      )}
 
       {open && (
         // Full width under the row it belongs to, not part of the column layout.
         <div className="col-span-4 grid gap-2">
-          {deleteFailure !== null && (
-            <Message id={`delete-error-${set.id}`} tone="failure">
-              {deleteFailure.message}
+          {/* One slot for the row, shared by both actions (#141). Above the controls that write
+              to it, per DESIGN.md §Messages. */}
+          {actionFailure !== null && (
+            <Message id={failureId} tone="failure">
+              {actionFailure.message}
             </Message>
           )}
-          <button
-            aria-describedby={deleteFailure === null ? undefined : `delete-error-${set.id}`}
-            className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge px-4 text-base font-semibold text-danger disabled:text-muted"
-            disabled={deleting}
-            onClick={onDelete}
-            type="button"
-          >
-            {deleting ? 'Removing' : `Remove set ${set.setNumber}`}
-          </button>
+
+          {/* Two controls side by side rather than stacked: at 390px the block's own p-4 leaves
+              about 326px here, which fits both comfortably, and stacking would put Remove a
+              thumb-width below Edit on a screen where the row above is already the target of the
+              tap that opened this. flex-1 keeps them equal so neither reads as the default. */}
+          <div className="flex flex-wrap gap-2">
+            {editing ? (
+              <>
+                <button
+                  aria-describedby={actionFailure === null ? undefined : failureId}
+                  className="min-h-[var(--tap-min)] flex-1 rounded-sm bg-accent px-4 text-base font-semibold text-accent-ink disabled:bg-surface-sunk disabled:text-muted"
+                  disabled={busy}
+                  onClick={() => {
+                    void onSaveEdit().then((saved) => {
+                      // Saved, so the disclosure closes and the fields are gone. Focus goes to
+                      // the row itself, which is the surviving control and now shows the new
+                      // numbers. Not to the confirmation: it is role="status", so it is spoken
+                      // without stealing the caret from where she is working.
+                      //
+                      // Failed, so the fields stay exactly as typed and focus stays in them. The
+                      // panel is role="alert" and announces itself; moving focus out of the
+                      // field she has to correct would be taking her away from the fix.
+                      if (saved) {
+                        setFocusTarget('row')
+                      }
+                    })
+                  }}
+                  type="button"
+                >
+                  {busy ? 'Saving' : 'Save changes'}
+                </button>
+                <button
+                  className="min-h-[var(--tap-min)] flex-1 rounded-sm border border-edge px-4 text-base font-semibold text-ink disabled:text-muted"
+                  disabled={busy}
+                  onClick={() => {
+                    onCancelEdit()
+                    // Back to the control that opened the fields, which is the standard return
+                    // for a reveal and leaves her one tap from trying again.
+                    setFocusTarget('edit')
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="min-h-[var(--tap-min)] flex-1 rounded-sm border border-edge px-4 text-base font-semibold text-ink disabled:text-muted"
+                  disabled={busy}
+                  onClick={() => {
+                    onStartEdit()
+                    // The weight field, not the row: it is the first of the two and the likelier
+                    // of them to be wrong, since it is the number that changes between sets.
+                    setFocusTarget('weight')
+                  }}
+                  ref={editRef}
+                  type="button"
+                >
+                  {`Edit set ${set.setNumber}`}
+                </button>
+                {/* --danger, and the only one of the four that carries it. Bordered at rest for
+                    the reason trainerControls.ts records: a filled red block in every open row
+                    reads as an alert about the row rather than a control in it. */}
+                <button
+                  aria-describedby={actionFailure === null ? undefined : failureId}
+                  className="min-h-[var(--tap-min)] flex-1 rounded-sm border border-danger px-4 text-base font-semibold text-danger disabled:border-edge disabled:text-muted"
+                  disabled={busy}
+                  onClick={onDelete}
+                  type="button"
+                >
+                  {busy ? 'Removing' : `Remove set ${set.setNumber}`}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -1198,11 +1591,14 @@ function NumberField({
   inputMode,
   name,
   onChange,
+  ref,
   value,
 }: {
   inputMode: 'decimal' | 'numeric'
   name: string
   onChange: (value: string) => void
+  /** #107 needs to put the caret in one of these on Edit. React 19 takes ref as a plain prop. */
+  ref?: React.Ref<HTMLInputElement>
   value: string
 }) {
   return (
@@ -1212,6 +1608,7 @@ function NumberField({
       className="min-h-[var(--tap-min)] w-full rounded-sm border border-edge bg-surface px-2 text-right text-lg font-semibold text-ink-bold tabular-nums"
       inputMode={inputMode}
       onChange={(event) => onChange(event.target.value)}
+      ref={ref}
       type="text"
       value={value}
     />
@@ -1392,6 +1789,36 @@ function classify(caught: unknown): Failure {
   }
 
   return { kind: 'rejected', message: 'Something went wrong. Try again.' }
+}
+
+/**
+ * `classify`, plus the one thing only this screen can know (#107).
+ *
+ * Both row actions run against endpoints whose same-day window rejects with a **404**, shaped
+ * deliberately like a set that never existed so the timing rule cannot be probed (api.md #32).
+ * `classify` shows an ApiError's own message because api.md keeps them written for a person —
+ * and this is the one where that breaks down, because the server's message is the bare HTTP
+ * reason phrase. A client who removed a set after midnight was shown **"Not Found"** mid-workout,
+ * which has been live since #105 shipped the delete.
+ *
+ * The screen is the layer that can do better, and for the reason lib/apiMessages.ts gives on the
+ * trainer side: the server answers about an id, while this row was on screen a second ago and
+ * came out of this session's own history. The likely cause is the window, and the other one
+ * (removed on another device) is covered by the same sentence, so it names the rule rather than
+ * guessing which happened.
+ *
+ * Only for the two row actions. A 404 elsewhere on this screen — logging into a session that has
+ * gone, say — means something else entirely.
+ */
+function classifyRowAction(caught: unknown): Failure {
+  if (caught instanceof ApiError && caught.status === 404) {
+    return {
+      kind: 'rejected',
+      message: 'This set can no longer be changed. Sets can only be edited on the day they were logged.',
+    }
+  }
+
+  return classify(caught)
 }
 
 /**
