@@ -285,6 +285,22 @@ export function updateProgram(
   })
 }
 
+/**
+ * DELETE /api/programs/:id. 204, or 409 `program_has_history` (#118).
+ *
+ * The refusal is the endpoint's real content. Its days and their prescriptions cascade, and
+ * both references into them are ON DELETE SET NULL, so the database would take this delete on
+ * a trained program and leave every logged session and set standing but pointing at nothing.
+ * Archive is the disposal path for a program that has been trained against, and it keeps those
+ * references intact; this exists for the other case, the program built by mistake.
+ *
+ * The 409's message names which reference exists (sessions against its days, or sets against
+ * its prescriptions) and points at archive, so it is rendered as-is rather than remapped.
+ */
+export async function deleteProgram(programId: string): Promise<void> {
+  await request<null>(`/api/programs/${encodeURIComponent(programId)}`, { method: 'DELETE' })
+}
+
 /** POST /api/programs/:id/days. Position is server-assigned to the end; reordering is #54. */
 export function createDay(
   programId: string,

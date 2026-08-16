@@ -78,6 +78,9 @@ public static class ProgramEndpoints
             .Produces<ProgramDetailResponse>();
         programs.MapPatch("/{id:guid}", UpdateProgram)
             .Produces<ProgramResponse>();
+        programs.MapDelete("/{id:guid}", DeleteProgram)
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces<ApiError>(StatusCodes.Status409Conflict);
         return api;
     }
 
@@ -344,12 +347,111 @@ public static class ProgramEndpoints
         return Results.Ok(ToResponse(program));
     }
 
+    /// <summary>
+    /// DELETE /api/programs/:id — 204, or 409 if the client has trained against it (#118).
+    /// </summary>
+    // ── Why this refuses rather than relying on SET NULL ───────────────────────────────────
+    // It could rely on it. workout_sessions.program_day_id and logged_sets.program_day_exercise_id
+    // are both ON DELETE SET NULL, so the database would take this delete without complaint and
+    // every logged row would survive it. That behaviour exists for a narrower reason than it looks:
+    // database.md principle 4 needed a session to survive its program being *edited*, so removing
+    // one day of four leaves the sessions logged against it standing. DELETE /api/days/:id is
+    // exactly that, and the builder can promise a trainer their client's history stays put.
+    //
+    // The same promise is not true of a whole program. After this delete there is nothing left for
+    // the history to have pointed at: every session and set that named this program's days is
+    // loose, permanently, from one press. And nothing is gained by allowing it, which is what
+    // settles the question — `archived` is already the disposal path for a trained program and it
+    // keeps every reference intact. Refusing costs the trainer no capability, only one wrong route
+    // to the same place.
+    //
+    // The case this endpoint is for is the other one: a program created by mistake, never trained
+    // against, with no way out of the client's list before now.
+    //
+    // ── Both foreign keys, not just sessions ───────────────────────────────────────────────
+    // Two columns reference a program's rows, and they can disagree. POST /api/me/sessions/:id/sets
+    // validates program_day_exercise_id against ProgramDayExercisesForClient — the client's whole
+    // library of programs — not against the session's own day. So a set may name a prescription in
+    // this program while its session names a day in another, or no day at all. The log screen never
+    // does that today; the API is what decides what is reachable, not the screen that happens to
+    // keep the two in step. Asking only about sessions would let a delete cut real logged sets
+    // loose through the gap.
+    private static async Task<IResult> DeleteProgram(
+        Guid id, HttpContext http, TrainerOsDbContext db, CancellationToken cancellationToken)
+    {
+        var trainer = http.GetCurrentUser()!;
+
+        // Scoped through ProgramsForTrainer, so another trainer's program id finds nothing and
+        // gets the same 404 a fabricated one does.
+        var program = await db.ProgramsForTrainer(trainer.Id)
+            .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+        if (program is null)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        // Subqueries rather than materialised id lists: a program with five days and forty
+        // prescriptions should not become forty parameters. EF folds each into its own statement.
+        var dayIds = db.ProgramDaysForTrainer(trainer.Id)
+            .Where(d => d.ProgramId == id)
+            .Select(d => d.Id);
+
+        // Asked first, and answered separately from the sets below, because the two facts read
+        // differently to a trainer and this ordering gets the distinction for free: a program with
+        // sessions against it never runs the second query.
+        var hasSessions = await db.WorkoutSessionsForTrainer(trainer.Id)
+            .AnyAsync(
+                s => s.ProgramDayId != null && dayIds.Contains(s.ProgramDayId.Value),
+                cancellationToken);
+        if (hasSessions)
+        {
+            return HistoryConflict(
+                "Your client has logged workouts against this program. Archive it instead, " +
+                "which keeps their history pointing at it.");
+        }
+
+        var prescriptionIds = db.ProgramDayExercisesForTrainer(trainer.Id)
+            .Where(e => e.ProgramDay.ProgramId == id)
+            .Select(e => e.Id);
+
+        var hasSets = await db.LoggedSetsForTrainer(trainer.Id)
+            .AnyAsync(
+                s => s.ProgramDayExerciseId != null
+                    && prescriptionIds.Contains(s.ProgramDayExerciseId.Value),
+                cancellationToken);
+        if (hasSets)
+        {
+            // Deliberately not "workouts": in this case no session names a day of this program, so
+            // claiming otherwise would send the trainer looking for something their history does
+            // not show. What exists is sets keyed to its exercises.
+            return HistoryConflict(
+                "Your client has logged sets against this program's exercises. Archive it instead, " +
+                "which keeps their history pointing at it.");
+        }
+
+        // Days cascade, and their prescriptions cascade from those (database.md §program_days,
+        // §program_day_exercises). Nothing above is left dangling, because the checks just
+        // established there is nothing pointing in.
+        db.Remove(program);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return Results.NoContent();
+    }
+
     private static ProgramResponse ToResponse(ProgramEntity program) => new(
         program.Id, program.ClientId, program.Title, program.Status,
         program.StartsOn, program.Notes, program.CreatedAt, program.UpdatedAt);
 
     private static IResult ActiveConflict() => Results.Json(
         ApiError.Create("program_active_conflict", "This client already has an active program."),
+        statusCode: StatusCodes.Status409Conflict);
+
+    // One code, two sentences. The code is the contract a consumer branches on; the sentence names
+    // which of the two references exists, which is the half a trainer can act on. The SPA
+    // deliberately does not remap this one — see lib/apiMessages.ts on why a map entry here would
+    // replace the specific sentence with a vaguer one.
+    private static IResult HistoryConflict(string message) => Results.Json(
+        ApiError.Create("program_has_history", message),
         statusCode: StatusCodes.Status409Conflict);
 
     private static string? NullIfBlank(string? value)
