@@ -17,6 +17,7 @@ import type {
   PatchApiExercisesByIdData,
   PatchApiDaysByIdData,
   PatchApiMeSessionsByIdData,
+  PatchApiMeSetsByIdData,
   PatchApiProgramsByIdData,
   PatchApiSchedulesByIdData,
   PostApiAuthMagicLinkData,
@@ -595,6 +596,29 @@ export function logSet(
 ): Promise<LoggedSetResponse> {
   return request<LoggedSetResponse>(`/api/me/sessions/${encodeURIComponent(sessionId)}/sets`, {
     method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/me/sets/:id (#32), called from the log screen since #107.
+ *
+ * Same-day window measured on `logged_at` in the client's own timezone, and missing it is a
+ * 404 shaped exactly like a set that never existed — api.md's rule, so timing cannot be
+ * probed. The caller is what knows the row was on screen a moment ago, so the caller is what
+ * turns that 404 into a sentence.
+ *
+ * `weightKg: null` on the wire means **leave it alone**, not "clear it": MeSessionEndpoints
+ * records that as deliberate for v1, so a weighted set cannot be corrected to bodyweight
+ * through this route. The log screen refuses that edit itself rather than sending a request
+ * that would silently do nothing.
+ */
+export function updateSet(
+  setId: string,
+  body: PatchApiMeSetsByIdData['body'],
+): Promise<LoggedSetResponse> {
+  return request<LoggedSetResponse>(`/api/me/sets/${encodeURIComponent(setId)}`, {
+    method: 'PATCH',
     body: JSON.stringify(body),
   })
 }

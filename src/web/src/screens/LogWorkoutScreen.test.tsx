@@ -96,6 +96,7 @@ describe('LogWorkoutScreen', () => {
       onLogSet?: (attempt: number) => Reply
       onPatch?: (attempt: number) => Reply
       onPatchMe?: () => Reply
+      onPatchSet?: (body: Record<string, unknown>) => Reply
       program?: MeProgramWrapper
     } = {},
   ) {
@@ -160,6 +161,16 @@ describe('LogWorkoutScreen', () => {
 
       if (method === 'DELETE') {
         return send(options.onDeleteSet?.(url) ?? { ok: true, status: 204, body: null })
+      }
+
+      // Editing a saved set (#107). Like the toggle below, this has to be matched before the
+      // session PATCH at the bottom, which matches on method alone. Echoes the body back by
+      // default, which is what the endpoint does.
+      if (url.startsWith('/api/me/sets/') && method === 'PATCH') {
+        return send(
+          options.onPatchSet?.(body) ??
+            ok({ id: url.split('/').pop(), weightKg: body.weightKg, reps: body.reps }),
+        )
       }
 
       // The unit toggle's write (#99). Checked before the session PATCH below, which matches
@@ -663,8 +674,12 @@ describe('LogWorkoutScreen', () => {
     expect(deletes(fetchMock)).toHaveLength(1)
   })
 
-  it('reports what the server said when it refuses to remove a set', async () => {
-    // Past the same-day window the API answers 404, the same shape as a set that never existed.
+  it('names the same-day rule when the server refuses to remove a set', async () => {
+    // Past the same-day window the API answers 404, the same shape as a set that never existed
+    // — deliberately, so the timing rule cannot be probed (api.md #32). Its message is therefore
+    // the bare HTTP reason phrase, and this screen used to render it: a client who removed a set
+    // after midnight was shown "Not Found" mid-workout, live since #105. The row was on screen a
+    // second ago, so the screen is the layer that can say what actually happened (#107).
     mockApi({ onDeleteSet: () => rejected(404, 'not_found', 'Not Found') })
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
@@ -673,9 +688,26 @@ describe('LogWorkoutScreen', () => {
     await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
     await userEvent.click(squat.getByRole('button', { name: 'Remove set 1' }))
 
-    expect(await squat.findByRole('alert')).toHaveTextContent('Not Found')
+    const refusal = await squat.findByRole('alert')
+    expect(refusal).toHaveTextContent('This set can no longer be changed.')
+    expect(refusal).toHaveTextContent('only be edited on the day they were logged')
+    expect(refusal).not.toHaveTextContent('Not Found')
     expect(squat.queryByText(/No connection/)).not.toBeInTheDocument()
     expect(squat.getByRole('button', { name: /^Set 1,/ })).toBeInTheDocument()
+  })
+
+  it('still shows the server’s own sentence when a removal fails for another reason', async () => {
+    // The translation above is scoped to 404. Everything else the API says is written for the
+    // person reading it, and replacing those with a house string would say strictly less.
+    mockApi({ onDeleteSet: () => rejected(429, 'rate_limited', 'Too many requests. Slow down.') })
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 1' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent('Too many requests. Slow down.')
   })
 
   it('announces the row with its numbers rather than its cells', async () => {
@@ -1510,6 +1542,283 @@ describe('LogWorkoutScreen', () => {
 
     expect(screen.getAllByRole('group', { name: 'Weight unit' })).toHaveLength(1)
     expect(screen.getAllByRole('listitem').length).toBeGreaterThan(1)
+  })
+
+  // -- #107: editing a saved set --
+
+  /** Log one set, open its strip, and start editing it. */
+  async function startEditing(who: MeResponse = me) {
+    renderScreen('day-1', who)
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Edit set 1' }))
+    return squat
+  }
+
+  it('offers Edit alongside Remove, and only once the row is open', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    // Nothing per-row at rest: #107 rules out a permanent glyph on every row, so the strip is
+    // the whole affordance.
+    expect(squat.queryByRole('button', { name: 'Edit set 1' })).not.toBeInTheDocument()
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+
+    expect(squat.getByRole('button', { name: 'Edit set 1' })).toBeInTheDocument()
+    expect(squat.getByRole('button', { name: 'Remove set 1' })).toBeInTheDocument()
+  })
+
+  it('turns the row itself into fields, seeded with what is saved', async () => {
+    mockApi()
+    const squat = await startEditing()
+
+    // The saved row stops being a toggle while it is a field: an input cannot live inside a
+    // button, so editing replaces the row rather than decorating it.
+    expect(squat.queryByRole('button', { name: /^Set 1,/ })).not.toBeInTheDocument()
+    expect(squat.getByLabelText('Set 1 weight in kilograms')).toHaveValue('100')
+    expect(squat.getByLabelText('Set 1 reps')).toHaveValue('8')
+    // The pending row is still there and still its own thing — two rows of fields, one saved
+    // and one being typed.
+    expect(squat.getByLabelText(/Back Squat set 2 weight/)).toBeInTheDocument()
+  })
+
+  it('puts the caret in the weight field on Edit, and back on the row after saving', async () => {
+    // The row swaps element on every transition, so focus left alone falls to <body>: a keyboard
+    // user is returned to the top of the document mid-workout.
+    mockApi()
+    const squat = await startEditing()
+
+    expect(squat.getByLabelText('Set 1 weight in kilograms')).toHaveFocus()
+
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(squat.getByRole('button', { name: /^Set 1,/ })).toHaveFocus())
+  })
+
+  it('returns focus to Edit when the edit is cancelled, changing nothing', async () => {
+    const fetchMock = mockApi()
+    const squat = await startEditing()
+
+    await userEvent.clear(squat.getByLabelText('Set 1 weight in kilograms'))
+    await userEvent.type(squat.getByLabelText('Set 1 weight in kilograms'), '60')
+    await userEvent.click(squat.getByRole('button', { name: 'Cancel' }))
+
+    expect(squat.getByRole('button', { name: 'Edit set 1' })).toHaveFocus()
+    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)).toHaveLength(0)
+    // The row is back to what is saved, not to what was typed and abandoned.
+    expect(squat.getByRole('button', { name: /^Set 1, 100 kilograms/ })).toBeInTheDocument()
+  })
+
+  it('sends the edit in canonical kilograms and confirms it in the block’s one slot', async () => {
+    const fetchMock = mockApi()
+    const squat = await startEditing()
+
+    const weight = squat.getByLabelText('Set 1 weight in kilograms')
+    await userEvent.clear(weight)
+    await userEvent.type(weight, '90')
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(squat.getByRole('status')).toHaveTextContent('Set 1 updated.'),
+    )
+    const [patch] = callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)
+    expect(patch.url).toBe('/api/me/sets/set-1')
+    expect(patch.body).toEqual({ weightKg: 90, reps: 8 })
+    // set_number is deliberately absent: this screen numbers by position and cannot reorder.
+    expect(patch.body).not.toHaveProperty('setNumber')
+    expect(squat.getByRole('button', { name: /^Set 1, 90 kilograms by 8 reps/ })).toBeInTheDocument()
+  })
+
+  it('converts an edit typed in pounds before sending it', async () => {
+    // #99's boundary, on the edit path: what she typed is in her unit, what goes on the wire is
+    // canonical kilograms, and 185 lb is exactly 83.91458845 kg.
+    const fetchMock = mockApi()
+    const squat = await startEditing(poundsMe)
+
+    const weight = squat.getByLabelText('Set 1 weight in pounds')
+    await userEvent.clear(weight)
+    await userEvent.type(weight, '185')
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(squat.getByRole('status')).toBeInTheDocument())
+    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)[0].body).toEqual({
+      weightKg: 83.91458845,
+      reps: 8,
+    })
+    expect(squat.getByRole('button', { name: /^Set 1, 185 pounds by 8 reps/ })).toBeInTheDocument()
+  })
+
+  it('refuses to clear a weight to bodyweight, naming the way round it', async () => {
+    // PATCH reads weight_kg: null as "leave it alone" rather than "clear it", which
+    // MeSessionEndpoints records as deliberate for v1. Sent anyway, the request would succeed
+    // and change nothing, and she would watch the old number come back.
+    const fetchMock = mockApi()
+    const squat = await startEditing()
+
+    await userEvent.clear(squat.getByLabelText('Set 1 weight in kilograms'))
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent(
+      'remove the set and log it again without a weight',
+    )
+    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)).toHaveLength(0)
+  })
+
+  it('lets a bodyweight set have its reps corrected', async () => {
+    // The mirror of the case above, and the reason the refusal is scoped to sets that *have* a
+    // weight: here the field is empty because the set is bodyweight, null means "leave alone",
+    // and leaving null alone is exactly right.
+    const fetchMock = mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logSet('Back Squat', '', '12')
+    const squat = await block('Back Squat')
+
+    await userEvent.click(await squat.findByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Edit set 1' }))
+
+    const reps = squat.getByLabelText('Set 1 reps')
+    await userEvent.clear(reps)
+    await userEvent.type(reps, '10')
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(squat.getByRole('status')).toHaveTextContent('Set 1 updated.'))
+    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)[0].body).toEqual({
+      weightKg: null,
+      reps: 10,
+    })
+  })
+
+  it('keeps the typed values and the fields open when the edit fails', async () => {
+    mockApi({ onPatchSet: () => 'network' })
+    const squat = await startEditing()
+
+    const weight = squat.getByLabelText('Set 1 weight in kilograms')
+    await userEvent.clear(weight)
+    await userEvent.type(weight, '90')
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent('No connection')
+    // Losing what she typed here is the failure that matters: she believes it saved, it did not.
+    expect(squat.getByLabelText('Set 1 weight in kilograms')).toHaveValue('90')
+    expect(squat.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
+  })
+
+  it('names the same-day rule when the server refuses an edit', async () => {
+    mockApi({ onPatchSet: () => rejected(404, 'not_found', 'Not Found') })
+    const squat = await startEditing()
+
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    const refusal = await squat.findByRole('alert')
+    expect(refusal).toHaveTextContent('This set can no longer be changed.')
+    expect(refusal).not.toHaveTextContent('Not Found')
+  })
+
+  it('refuses an edit with no reps without asking the server', async () => {
+    const fetchMock = mockApi()
+    const squat = await startEditing()
+
+    await userEvent.clear(squat.getByLabelText('Set 1 reps'))
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    expect(await squat.findByRole('alert')).toHaveTextContent('Enter how many reps you did.')
+    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)).toHaveLength(0)
+  })
+
+  it('holds one message per block, so an edit receipt replaces a removal receipt', async () => {
+    // #141: a block holds one message. The two receipts and the two failures share one slot each
+    // because two of them on screen at once is the defect that rule exists to make impossible.
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(2)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 2,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Remove set 2' }))
+    await waitFor(() => expect(squat.getByRole('status')).toHaveTextContent('Set 2 removed'))
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    await userEvent.click(squat.getByRole('button', { name: 'Edit set 1' }))
+    await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(squat.getByRole('status')).toHaveTextContent('Set 1 updated.'))
+    expect(squat.getAllByRole('status')).toHaveLength(1)
+    expect(squat.queryByText(/Set 2 removed/)).not.toBeInTheDocument()
+  })
+
+  // -- #107: the one-time hint --
+
+  const HINT = /Tap a set to change or remove it/
+
+  it('teaches the tap gesture on the first saved set, not before', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    // Nothing to point at yet: a hint under an empty list describes rows that are not there.
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+
+    await logRun(1)
+
+    expect(screen.getByText(HINT)).toBeInTheDocument()
+  })
+
+  it('shows the hint once for the screen rather than once per exercise', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logRun(1)
+    await logSet('Leg Curl', '40', '12')
+
+    await waitFor(() => expect(screen.getAllByText(HINT)).toHaveLength(1))
+    // On the block that has the first saved row, so it sits next to what it is about.
+    const squat = await block('Back Squat')
+    expect(squat.getByText(HINT)).toBeInTheDocument()
+  })
+
+  it('stops showing the hint for good once a row has been opened', async () => {
+    mockApi()
+    const { unmount } = renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    // Opening a row is proof the lesson landed.
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+
+    // And it survives the tab being evicted between sets, which is the whole reason it is stored
+    // rather than held in React state.
+    unmount()
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logRun(1)
+
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
+
+  it('dismisses the hint permanently on Got it, without opening anything', async () => {
+    mockApi()
+    const { unmount } = renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logRun(1)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Got it' }))
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+
+    unmount()
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logRun(1)
+
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 })
 
