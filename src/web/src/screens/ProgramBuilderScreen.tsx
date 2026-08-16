@@ -13,6 +13,7 @@ import {
   createPrescription,
   deleteDay,
   deletePrescription,
+  deleteProgram,
   fetchExercises,
   fetchProgram,
   reorderDayExercises,
@@ -35,7 +36,9 @@ import {
   trainerSelected,
 } from './trainerControls'
 
-type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
+// 'deleted' is a terminal state, not a step on the way to one. See DeleteProgram for why the
+// screen becomes a receipt rather than navigating away.
+type Load = 'loading' | 'ready' | 'missing' | 'unreachable' | 'deleted'
 
 const STATUSES = ['draft', 'active', 'archived']
 
@@ -140,8 +143,12 @@ export function ProgramBuilderScreen() {
     return (
       <TrainerShell>
         <h1 className="text-xl font-semibold text-ink-bold">Program not found</h1>
+        {/* "Deleted" leads, because since #118 it is the likeliest way a trainer reaches this
+            screen: delete a program, then reload the URL or come back to an open tab. The other
+            two reasons stay, and listing three possibilities is what keeps this from being an
+            existence oracle — a cross-tenant id and a fabricated one read identically here. */}
         <p className="mt-2 text-base text-muted">
-          It may belong to another trainer, or the link may be wrong.
+          It may have been deleted, it may belong to another trainer, or the link may be wrong.
         </p>
         <Link className={`mt-6 inline-block text-base text-ink ${trainerLink}`} to="/clients">
           Back to clients
@@ -167,6 +174,44 @@ export function ProgramBuilderScreen() {
     )
   }
 
+  /**
+   * The receipt (#118).
+   *
+   * Every other write on this screen is acknowledged in the slot of the block that made it, and
+   * this one has no such block to go back to: the program is the screen, so a delete takes the
+   * Days section, the status control and its own cluster with it. Navigating to the client
+   * instead would drop the only acknowledgement of the most destructive write in the builder,
+   * and a program that was never in that client's list looks exactly like one just removed from
+   * it.
+   *
+   * So the screen becomes the receipt. It is a terminal state rather than a slot, which is why
+   * #141's auto-dismiss does not apply: a confirmation expires because the block it sits in
+   * outlives it and has other work to do. There is nothing left here to get back to.
+   *
+   * Reloading this URL does not land here — this state is held in memory, and the fetch on mount
+   * gets the 404 the row is now gone, which is the `missing` screen above. That is the correct
+   * destination for a second visit: by then the trainer is not being told what happened, they
+   * are asking for something that does not exist.
+   */
+  if (load === 'deleted') {
+    return (
+      <TrainerShell>
+        <h1 className="text-xl font-semibold text-ink-bold">{program.title} is deleted</h1>
+        <Message className="mt-6" tone="confirmation">
+          Its days and exercises went with it. Nothing had been logged against it.
+        </Message>
+        {program.clientId != null && (
+          <Link
+            className={`mt-6 inline-block text-base text-ink ${trainerLink}`}
+            to={`/clients/${program.clientId}`}
+          >
+            Back to client
+          </Link>
+        )}
+      </TrainerShell>
+    )
+  }
+
   const days = program.days ?? []
   // Read once here and handed down, so the hint on every Load field says the same thing (#99).
   const clientWeightUnit = unitOf(program.clientWeightUnit)
@@ -179,7 +224,18 @@ export function ProgramBuilderScreen() {
         </Link>
       )}
 
+      {/* The saved title, and the page's heading. It is deliberately not the input below: while
+          the trainer is typing, this is what the program is still called, which is the same
+          relationship the day cards already have between `day.title` and their name field. */}
       <h1 className="mt-4 text-xl font-semibold text-ink-bold">{program.title}</h1>
+
+      <ProgramName
+        onChanged={(updated) =>
+          setProgram((previous) => (previous === null ? previous : { ...previous, title: updated.title }))
+        }
+        programId={programId}
+        title={program.title ?? ''}
+      />
 
       <ProgramStatus
         onChanged={(updated) =>
@@ -245,7 +301,225 @@ export function ProgramBuilderScreen() {
           programId={programId}
         />
       </section>
+
+      <DeleteProgram
+        onDeleted={() => setLoad('deleted')}
+        programId={programId}
+        title={program.title ?? 'this program'}
+      />
     </TrainerShell>
+  )
+}
+
+/**
+ * Renaming the program (#118).
+ *
+ * PATCH /api/programs/:id has accepted `title` since #27 and `updateProgram` has passed it
+ * through since the builder was built; nothing ever called it. The title was set once on the
+ * New program screen and then rendered as a dead heading, so a typo was permanent and the only
+ * way to correct one was to build the program again — which is the workaround #118's delete
+ * exists to make possible, arriving at a problem it should not have to solve.
+ *
+ * The day cards' rename form, in the same shape and for the same reason: same endpoint
+ * convention, same one-field block, same "the message goes when the field moves" rule.
+ */
+function ProgramName({
+  onChanged,
+  programId,
+  title,
+}: {
+  onChanged: (program: { title?: string | null }) => void
+  programId: string
+  title: string
+}) {
+  const [draft, setDraft] = useState(title)
+  const [saving, setSaving] = useState(false)
+
+  const block = useBlockMessage('program-name-message')
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saving) {
+      return
+    }
+
+    // Mirrors the API's own check, which says "title cannot be blank" — true, and written for
+    // whoever is reading a response body rather than for the person holding the phone.
+    if (draft.trim() === '') {
+      block.fail('A program needs a name.')
+      return
+    }
+
+    setSaving(true)
+    block.clear()
+    try {
+      onChanged(await updateProgram(programId, { title: draft.trim() }))
+      block.done('Name saved.')
+    } catch (caught) {
+      block.fail(messageFor(caught, 'program'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="mt-4 flex flex-wrap items-end gap-3" noValidate onSubmit={onSubmit}>
+      <div className="grid gap-2">
+        <label className="text-sm font-semibold text-ink" htmlFor="program-title">
+          Program name
+        </label>
+        <input
+          className={trainerField}
+          id="program-title"
+          name="title"
+          onChange={(event) => {
+            setDraft(event.target.value)
+            block.clear()
+          }}
+          value={draft}
+        />
+      </div>
+
+      {/* w-full, so the panel takes its own line in the flex-wrap row and lands between the field
+          and the submit rather than beside them (DESIGN.md §Messages). */}
+      {block.message !== null && (
+        <Message className="w-full" id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
+      {/* "Save program name", not the day cards' "Save name". A program of four days renders
+          five rename forms, and the day cards were already the ambiguous set among themselves;
+          adding a fifth identical control at the top would make the *screen-level* one
+          indistinguishable from them by ear. Same finding ui-ux.md records for the library rows,
+          answered in the visible label rather than an aria-label, because there is room for it
+          here and a visible label that differs from the accessible name is its own problem. */}
+      <button
+        aria-describedby={block.describedBy}
+        className={trainerPrimary}
+        disabled={saving}
+        type="submit"
+      >
+        {saving ? 'Saving' : 'Save program name'}
+      </button>
+    </form>
+  )
+}
+
+/**
+ * Deleting the program (#118), and the one refusal it can hit.
+ *
+ * At the foot of the screen, below the days, per ui-ux.md §Gym-floor constraints: the action
+ * that commits sits at the end of the flow it belongs to. This one belongs to the whole screen
+ * rather than to any block in it, which is also why it is the last thing on it.
+ *
+ * ── What the prompt says, and what it deliberately does not ────────────────────────────────
+ * The day and prescription prompts both end with a reassurance: the client's logged history
+ * survives, keyed by what it points at. That promise is true of one day and false of a whole
+ * program, and this prompt does not make it. The API is what makes it true instead — a program
+ * with anything logged against it is refused with a 409 that names the reason and points at
+ * archive, so the only program that reaches a successful delete here is one nothing points at.
+ *
+ * ── Why the button is not disabled on a trained program ────────────────────────────────────
+ * The builder could be told at load time whether the program has history, and then this control
+ * could be hidden. It would be wrong twice: the answer is stale the moment the client logs a
+ * set, and a control that vanishes explains nothing. The refusal is a message the trainer can
+ * act on, with the Archived button a few hundred pixels above it.
+ */
+function DeleteProgram({
+  onDeleted,
+  programId,
+  title,
+}: {
+  onDeleted: () => void
+  programId: string
+  title: string
+}) {
+  const [deleting, setDeleting] = useState(false)
+
+  const block = useBlockMessage('program-delete-message')
+
+  async function remove() {
+    if (deleting) {
+      return
+    }
+
+    setDeleting(true)
+    try {
+      await deleteProgram(programId)
+      onDeleted()
+    } catch (caught) {
+      // Replaces the question rather than stacking under it, and disarms the cluster with it —
+      // the same rule the prescription row follows. A 409 here is the endpoint's real content,
+      // and the server's sentence is rendered as written: it names which reference blocks the
+      // delete, and lib/apiMessages.ts records why remapping it would say less.
+      block.fail(messageFor(caught, 'program'))
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <section className="mt-10 grid justify-items-start gap-2 border-t border-edge pt-6">
+      {/* One slot: the question, or the refusal that replaced it (#141). */}
+      {block.message !== null && (
+        <Message id={block.id} tone={block.message.tone}>
+          {block.message.body}
+        </Message>
+      )}
+
+      {/* Arming swaps the control row in place, rather than adding a second row below the
+          trigger — so there is one Delete on screen and the answers sit directly under the
+          question they answer. */}
+      {block.prompting ? (
+        <div aria-labelledby={block.id} className="flex flex-wrap gap-2" role="group">
+          <button
+            aria-describedby={block.id}
+            className={trainerDanger}
+            disabled={deleting}
+            onClick={() => void remove()}
+            type="button"
+          >
+            {deleting ? 'Deleting' : 'Delete program'}
+          </button>
+          <button className={trainerSecondary} onClick={block.clear} type="button">
+            Cancel
+          </button>
+        </div>
+      ) : (
+        /* "Delete this program", not "Delete {title}" — which is what the day card directly
+           above does, and which does not survive being given a program's title. A button label
+           cannot shrink: `flex-wrap` wraps *between* controls, and a single item wider than the
+           viewport overflows it, which is #135's finding on the library rows. Day titles are
+           "Lower" and "Push"; program titles are "Hypertrophy Block, February to April" —
+           database.md's own example runs to four words.
+
+           #135's answer for a long label is to move the naming form into `aria-label`, and it
+           deliberately is not applied here. That rule exists because a library of forty rows
+           offers forty buttons called "Retire" with nothing to tell them apart by ear. There is
+           exactly one of these on the screen, so there is no ambiguity for a name to resolve,
+           and the title is in the prompt a line above — inside a panel that wraps, which is
+           where an unbounded string belongs. */
+        <button
+          className={trainerDanger}
+          onClick={() =>
+            block.ask(
+              <>
+                <p>Delete {title}? Its days and exercises go with it.</p>
+                {/* Names archive here as well as in the refusal, because a trainer who wants
+                    the program out of the way and has not thought about history should meet the
+                    alternative before pressing rather than only after being refused. */}
+                <p className="font-normal">
+                  This cannot be undone. If your client has trained on it, archive it instead.
+                </p>
+              </>,
+            )
+          }
+          type="button"
+        >
+          Delete this program
+        </button>
+      )}
+    </section>
   )
 }
 

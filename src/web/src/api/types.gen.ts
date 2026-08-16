@@ -1042,6 +1042,33 @@ export type PostApiProgramsResponses = {
 
 export type PostApiProgramsResponse = PostApiProgramsResponses[keyof PostApiProgramsResponses];
 
+export type DeleteApiProgramsByIdData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/programs/{id}';
+};
+
+export type DeleteApiProgramsByIdErrors = {
+    /**
+     * Conflict
+     */
+    409: ApiError;
+};
+
+export type DeleteApiProgramsByIdError = DeleteApiProgramsByIdErrors[keyof DeleteApiProgramsByIdErrors];
+
+export type DeleteApiProgramsByIdResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type DeleteApiProgramsByIdResponse = DeleteApiProgramsByIdResponses[keyof DeleteApiProgramsByIdResponses];
+
 export type GetApiProgramsByIdData = {
     body?: never;
     path: {

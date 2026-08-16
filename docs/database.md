@@ -126,6 +126,8 @@ A program belongs directly to one client. There is no template/assignment layer 
 
 **Rule:** at most one `active` program per client (partial unique index on `(client_id) WHERE status = 'active'`).
 
+**Rule (#118):** a program that has been trained against is disposed of by `status = 'archived'`, never by deletion; a program with nothing logged against it may be deleted outright. Enforced in the API rather than the schema — the FKs that reach into a program are ON DELETE SET NULL per principle 4, so the database would accept either. Principle 4 is about a program being *edited*: a session survives losing the day it was logged against. It is not a licence to unlink a client's whole history at once, and archiving already does the same job without doing that. See api.md for the check (both `workout_sessions.program_day_id` and `logged_sets.program_day_exercise_id`).
+
 ### program_days
 | column     | type    | notes                          |
 |------------|---------|--------------------------------|

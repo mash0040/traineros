@@ -87,6 +87,13 @@ const COPY: Record<string, string> = {
   // inline against the server's sentence.
   program_active_conflict:
     'This client already has an active program. Archive that one first, then activate this.',
+  // `program_has_history` (#118) is deliberately absent, and it is the closest call in this file.
+  // There is something the SPA knows: the Archived button is a few hundred pixels up the same
+  // screen, which no server string can know to mention. But that code carries *two* sentences —
+  // the API says whether the block is workouts logged against the program's days or sets logged
+  // against its exercises — and a map entry keys on the code, so it would replace both with one
+  // vaguer line. The specific reason is worth more to a trainer than the pointer to a control
+  // already in front of them, and it is the half only the server can compute.
   schedule_exists: 'This client already has a reminder schedule. Reload the page to edit it.',
   email_taken: 'That email is already in use. Check whether they are already on your roster.',
 

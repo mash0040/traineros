@@ -970,4 +970,197 @@ describe('ProgramBuilderScreen', () => {
     expect(message.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(submit).toHaveAttribute('aria-describedby', message.id)
   })
+
+  // ── #118: renaming the program ────────────────────────────────────────────────────────────
+
+  it('renames the program, which nothing on this screen could do', async () => {
+    // PATCH accepted `title` from the start and the builder never sent one: the title was a dead
+    // heading, so a typo on the New program screen was permanent.
+    const fetchMock = mockApi({
+      onPatch: (_url, body) => ({ json: async () => ({ ...program, ...(body as object) }) }),
+    })
+    renderScreen()
+
+    const field = await screen.findByLabelText('Program name')
+    await userEvent.clear(field)
+    await userEvent.type(field, 'Spring Block')
+    await userEvent.click(screen.getByRole('button', { name: 'Save program name' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Name saved.')
+    expect(bodyOf(callsOf(fetchMock, 'PATCH')[0])).toEqual({ title: 'Spring Block' })
+    // The heading is the saved title, so it follows the write rather than the keystrokes.
+    expect(screen.getByRole('heading', { level: 1, name: 'Spring Block' })).toBeInTheDocument()
+  })
+
+  it('refuses a blank program name without asking the server', async () => {
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    const field = await screen.findByLabelText('Program name')
+    await userEvent.clear(field)
+    await userEvent.click(screen.getByRole('button', { name: 'Save program name' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A program needs a name.')
+    expect(callsOf(fetchMock, 'PATCH')).toHaveLength(0)
+  })
+
+  // ── #118: deleting the program ────────────────────────────────────────────────────────────
+
+  /**
+   * The delete cluster, found through whichever of its two states is on screen.
+   *
+   * The swap is the thing under test, so the helper cannot anchor on either label alone: armed,
+   * "Delete Winter Block" is gone by design, and that is the property the exercise library got
+   * wrong by leaving its trigger in place beside the answers.
+   */
+  function deleteCluster() {
+    const anchor =
+      screen.queryByRole('button', { name: 'Delete program' }) ??
+      screen.getByRole('button', { name: 'Delete this program' })
+    return anchor.closest('section')!
+  }
+
+  it('arms the program delete by swapping the control row in place', async () => {
+    // The shape the exercise library got wrong and this ticket must not repeat: one Delete on
+    // screen, the answers directly under the question, no second row below a lingering trigger.
+    mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete this program' }))
+
+    const prompt = screen.getByRole('alert')
+    expect(prompt).toHaveTextContent('Delete Winter Block? Its days and exercises go with it.')
+    expect(prompt).toHaveTextContent(/If your client has trained on it, archive it instead\./)
+
+    const cluster = within(deleteCluster())
+    expect(cluster.queryByRole('button', { name: 'Delete this program' })).not.toBeInTheDocument()
+    expect(cluster.getByRole('button', { name: 'Delete program' })).toHaveAttribute(
+      'aria-describedby',
+      prompt.id,
+    )
+    expect(cluster.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+  })
+
+  it('sends nothing when the program delete prompt is cancelled', async () => {
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete this program' }))
+    await userEvent.click(within(deleteCluster()).getByRole('button', { name: 'Cancel' }))
+
+    expect(callsOf(fetchMock, 'DELETE')).toHaveLength(0)
+    // Cancelling a question needs no receipt of its own.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete this program' })).toBeInTheDocument()
+  })
+
+  it('turns the screen into the receipt once the program is gone', async () => {
+    // There is no block left to hold a confirmation — the delete takes the Days section, the
+    // status control and its own cluster with it — and navigating away would drop the only
+    // acknowledgement of the most destructive write in the builder.
+    const fetchMock = mockApi({})
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete this program' }))
+    await userEvent.click(within(deleteCluster()).getByRole('button', { name: 'Delete program' }))
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Winter Block is deleted' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Its days and exercises went with it.')
+    expect(screen.getByRole('link', { name: 'Back to client' })).toHaveAttribute(
+      'href',
+      '/clients/client-ada',
+    )
+    // Nothing editable survives a subject that no longer exists.
+    expect(screen.queryByLabelText('Program name')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 2, name: 'Days' })).not.toBeInTheDocument()
+
+    expect(callsOf(fetchMock, 'DELETE')).toHaveLength(1)
+    expect(callsOf(fetchMock, 'DELETE')[0][0]).toBe('/api/programs/program-1')
+  })
+
+  it('lands on the missing screen, not the receipt, when the deleted URL is loaded again', async () => {
+    // The receipt is state held in memory. A reload asks the API for a row that is gone, which is
+    // a 404 — and by then the trainer is not being told what happened, they are asking for
+    // something that does not exist.
+    mockApi({ treeStatus: 404 })
+    renderScreen()
+
+    expect(
+      await screen.findByRole('heading', { name: 'Program not found', level: 1 }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/It may have been deleted/)).toBeInTheDocument()
+    expect(screen.queryByText(/is deleted$/)).not.toBeInTheDocument()
+  })
+
+  it('shows the refusal verbatim and leaves the builder standing', async () => {
+    // The 409 is the endpoint's real content. Its sentence names which reference blocks the
+    // delete and points at archive, and lib/apiMessages.ts deliberately does not remap it — a
+    // map entry keys on the code and would replace both of the server's sentences with one.
+    mockApi({
+      onDelete: () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'program_has_history',
+            message:
+              'Your client has logged workouts against this program. Archive it instead, which keeps their history pointing at it.',
+          },
+        }),
+      }),
+    })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete this program' }))
+    await userEvent.click(within(deleteCluster()).getByRole('button', { name: 'Delete program' }))
+
+    const refusal = await screen.findByRole('alert')
+    expect(refusal).toHaveTextContent('Your client has logged workouts against this program.')
+    expect(refusal).toHaveTextContent('Archive it instead')
+
+    // The way out is still on screen, and so is everything else: nothing was taken.
+    expect(screen.getByRole('button', { name: 'Archived' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Days' })).toBeInTheDocument()
+    // The refusal replaces the question and disarms the cluster with it, rather than leaving a
+    // one-tap delete under a message the trainer has stopped looking at.
+    expect(screen.getByRole('button', { name: 'Delete this program' })).toBeInTheDocument()
+    expect(
+      within(deleteCluster()).queryByRole('button', { name: 'Delete program' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the sets wording the API chose when no session references a day', async () => {
+    // Two sentences behind one code, and this is the one the SPA would have flattened: no
+    // session names a day of this program, so "workouts" would send the trainer looking for
+    // something their client's history does not show.
+    mockApi({
+      onDelete: () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'program_has_history',
+            message:
+              "Your client has logged sets against this program's exercises. Archive it instead, which keeps their history pointing at it.",
+          },
+        }),
+      }),
+    })
+    renderScreen()
+
+    await screen.findByDisplayValue('Lower')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete this program' }))
+    await userEvent.click(within(deleteCluster()).getByRole('button', { name: 'Delete program' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Your client has logged sets against this program's exercises.",
+    )
+  })
 })

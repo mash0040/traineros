@@ -47,6 +47,10 @@ public sealed class ProgramEndpointsTestApp : IAsyncLifetime
     public Guid ProgramA_Draft_Id { get; } = Guid.NewGuid();
     public Guid ProgramB_Active_Id { get; } = Guid.NewGuid();
 
+    // One exercise, for the delete tests (#118): a prescription and a logged set both carry a
+    // RESTRICT foreign key to exercises, so neither can be seeded without a row to point at.
+    public Guid ExerciseAId { get; } = Guid.NewGuid();
+
     public async Task InitializeAsync()
     {
         _keepAlive = new SqliteConnection(_connectionString);
@@ -125,6 +129,12 @@ public sealed class ProgramEndpointsTestApp : IAsyncLifetime
                 Id = ProgramB_Active_Id, TrainerId = TrainerBId, ClientId = ClientB1Id,
                 Title = "B's Block", Status = ProgramStatuses.Active,
                 CreatedAt = Clock.Now, UpdatedAt = Clock.Now,
+            });
+
+            db.Add(new Exercise
+            {
+                Id = ExerciseAId, TrainerId = TrainerAId, Name = "Back Squat",
+                IsActive = true, CreatedAt = Clock.Now,
             });
 
             db.SaveChanges();
@@ -839,5 +849,212 @@ public class ProgramEndpointsTests : IClassFixture<ProgramEndpointsTestApp>
 
         var untouched = _app.WithDb(db => db.Find<ProgramEntity>(_app.ProgramB_Active_Id)!);
         Assert.Equal("B's Block", untouched.Title);
+    }
+
+    // -- DELETE /api/programs/:id (#118) --
+
+    /// <summary>A day with one prescription on it, so a delete has a tree to take with it.</summary>
+    private (Guid DayId, Guid PrescriptionId) SeedDay(Guid programId)
+    {
+        return _app.WithDb(db =>
+        {
+            var day = new ProgramDay
+            {
+                Id = Guid.NewGuid(), ProgramId = programId, Title = "Day A", Position = 1,
+            };
+            db.Add(day);
+
+            var prescription = new ProgramDayExercise
+            {
+                Id = Guid.NewGuid(), ProgramDayId = day.Id, ExerciseId = _app.ExerciseAId,
+                Position = 1, TargetSets = 3, TargetReps = "8",
+            };
+            db.Add(prescription);
+            db.SaveChanges();
+
+            return (day.Id, prescription.Id);
+        });
+    }
+
+    private Guid SeedSession(Guid clientId, Guid? programDayId, DateOnly performedOn)
+    {
+        return _app.WithDb(db =>
+        {
+            var session = new WorkoutSession
+            {
+                Id = Guid.NewGuid(), TrainerId = _app.TrainerAId, ClientId = clientId,
+                ProgramDayId = programDayId, PerformedOn = performedOn, CreatedAt = FakeClock.BaseNow,
+            };
+            db.Add(session);
+            db.SaveChanges();
+            return session.Id;
+        });
+    }
+
+    private void SeedSet(Guid sessionId, Guid? prescriptionId)
+    {
+        _app.WithDb(db =>
+        {
+            db.Add(new LoggedSet
+            {
+                Id = Guid.NewGuid(), SessionId = sessionId, ExerciseId = _app.ExerciseAId,
+                ProgramDayExerciseId = prescriptionId, SetNumber = 1, WeightKg = 60m, Reps = 8,
+                LoggedAt = FakeClock.BaseNow,
+            });
+            db.SaveChanges();
+        });
+    }
+
+    [Fact]
+    public async Task Anonymous_delete_is_401()
+    {
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Delete, $"/api/programs/{_app.ProgramA_Draft_Id}", null));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramEntity>(_app.ProgramA_Draft_Id)));
+    }
+
+    [Fact]
+    public async Task Client_role_delete_is_404_not_403()
+    {
+        var session = await _app.SignInAsync(_app.ClientA1Id);
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Delete, $"/api/programs/{_app.ProgramA_Draft_Id}", session));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramEntity>(_app.ProgramA_Draft_Id)));
+    }
+
+    [Fact]
+    public async Task Delete_removes_an_untrained_program_and_its_tree()
+    {
+        // The case the endpoint exists for: built by mistake, never trained against, and until
+        // now with no way out of the client's list.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA1Id, "Typo Block");
+        var (dayId, prescriptionId) = SeedDay(programId);
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/programs/{programId}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        // The days cascade and their prescriptions cascade from those, so the tree goes with the
+        // program rather than being left as rows nothing can reach.
+        Assert.Null(_app.WithDb(db => db.Find<ProgramEntity>(programId)));
+        Assert.Null(_app.WithDb(db => db.Find<ProgramDay>(dayId)));
+        Assert.Null(_app.WithDb(db => db.Find<ProgramDayExercise>(prescriptionId)));
+    }
+
+    [Fact]
+    public async Task Delete_twice_is_404()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA1Id, "Gone");
+
+        var first = await SendAsync(HttpMethod.Delete, $"/api/programs/{programId}", session);
+        var second = await SendAsync(HttpMethod.Delete, $"/api/programs/{programId}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, first.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task Delete_other_trainers_program_is_the_same_404_as_a_fabricated_id()
+    {
+        // conventions.md §Isolation. The point is not only the status code: the two bodies are
+        // compared as strings, so nothing in the response can tell trainer A that trainer B's
+        // program is a real row while the made-up id is not.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+
+        var crossTenant = await SendAsync(
+            HttpMethod.Delete, $"/api/programs/{_app.ProgramB_Active_Id}", session);
+        var fabricated = await SendAsync(
+            HttpMethod.Delete, $"/api/programs/{Guid.NewGuid()}", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, crossTenant.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, fabricated.StatusCode);
+        Assert.Equal(
+            await fabricated.Content.ReadAsStringAsync(),
+            await crossTenant.Content.ReadAsStringAsync());
+
+        var untouched = _app.WithDb(db => db.Find<ProgramEntity>(_app.ProgramB_Active_Id)!);
+        Assert.Equal("B's Block", untouched.Title);
+    }
+
+    [Fact]
+    public async Task Delete_refuses_when_a_session_references_one_of_its_days()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Trained Block");
+        var (dayId, _) = SeedDay(programId);
+        var sessionId = SeedSession(_app.ClientA2Id, dayId, new DateOnly(2026, 7, 20));
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/programs/{programId}", session);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var error = body.GetProperty("error");
+        Assert.Equal("program_has_history", error.GetProperty("code").GetString());
+        // The refusal names the reason and the way out, which is the whole reason it is a message
+        // rather than a bare status code.
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains("logged workouts", message);
+        Assert.Contains("Archive", message);
+
+        // Nothing was taken: neither the program nor the history that blocked it.
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramEntity>(programId)));
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramDay>(dayId)));
+        Assert.Equal(dayId, _app.WithDb(db => db.Find<WorkoutSession>(sessionId)!.ProgramDayId));
+    }
+
+    [Fact]
+    public async Task Delete_refuses_when_only_a_logged_set_references_a_prescription()
+    {
+        // The gap the AC's original wording left open. POST /api/me/sessions/:id/sets validates
+        // program_day_exercise_id against the client's whole library of programs rather than
+        // against the session's own day, so a set can name this program's prescription while its
+        // session names no day at all. Checking sessions alone would have deleted the program and
+        // cut this set loose.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Freestyle Block");
+        var (_, prescriptionId) = SeedDay(programId);
+        var freestyle = SeedSession(_app.ClientA2Id, null, new DateOnly(2026, 7, 21));
+        SeedSet(freestyle, prescriptionId);
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/programs/{programId}", session);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var error = body.GetProperty("error");
+        Assert.Equal("program_has_history", error.GetProperty("code").GetString());
+        // Says sets rather than workouts, because no session names a day of this program and
+        // claiming otherwise would send the trainer looking for something not in the history.
+        var message = error.GetProperty("message").GetString()!;
+        Assert.Contains("logged sets", message);
+        Assert.Contains("Archive", message);
+
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramEntity>(programId)));
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramDayExercise>(prescriptionId)));
+    }
+
+    [Fact]
+    public async Task Delete_allows_an_untrained_program_while_another_has_history()
+    {
+        // The check on the check: history belongs to the program it was logged against, so a
+        // WHERE clause that forgot to name this program would fail here rather than in production.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var trained = await CreateProgramAsync(session, _app.ClientA2Id, "Trained Neighbour");
+        var (trainedDayId, trainedPrescriptionId) = SeedDay(trained);
+        var sessionId = SeedSession(_app.ClientA2Id, trainedDayId, new DateOnly(2026, 7, 22));
+        SeedSet(sessionId, trainedPrescriptionId);
+
+        var untrained = await CreateProgramAsync(session, _app.ClientA2Id, "Untrained Neighbour");
+        SeedDay(untrained);
+
+        var response = await SendAsync(HttpMethod.Delete, $"/api/programs/{untrained}", session);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Null(_app.WithDb(db => db.Find<ProgramEntity>(untrained)));
+        Assert.NotNull(_app.WithDb(db => db.Find<ProgramEntity>(trained)));
     }
 }
