@@ -205,6 +205,32 @@ export function updateClient(
  * way to answer "when did they last train" — see the Clients screen for what that costs and
  * when it stops being acceptable.
  */
+/**
+ * GET /api/clients/:id/history. What a client actually lifted, for their trainer (#142).
+ *
+ * The same page shape GET /api/me/history returns, so `lib/history.ts`'s `groupSessions` works
+ * on it unchanged — including the page-boundary rule, which is the part worth not writing
+ * twice. Weights come back as canonical kilograms; the reader's unit is the *client's*, read
+ * from the roster row the screen already has.
+ */
+export function fetchClientHistory(
+  clientId: string,
+  options: { before?: string; limit?: number } = {},
+): Promise<HistoryResponse> {
+  const params = new URLSearchParams()
+  if (options.before !== undefined) {
+    params.set('before', options.before)
+  }
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit))
+  }
+
+  const query = params.toString()
+  return request<HistoryResponse>(
+    `/api/clients/${encodeURIComponent(clientId)}/history${query === '' ? '' : `?${query}`}`,
+  )
+}
+
 export function fetchClientSessions(clientId: string): Promise<ClientSessionResponse[]> {
   return request<ClientSessionResponse[]>(
     `/api/clients/${encodeURIComponent(clientId)}/sessions`,

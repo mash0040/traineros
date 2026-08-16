@@ -20,28 +20,9 @@ public static class MeHistoryEndpoints
     private const int DefaultLimit = 20;
     private const int MaxLimit = 100;
 
-    public sealed record HistoryItem(
-        Guid Id,
-        int SetNumber,
-        decimal? WeightKg,
-        int Reps,
-        DateTimeOffset LoggedAt,
-        HistorySessionSummary Session,
-        HistoryExerciseRef Exercise);
-
-    // ProgramDayId (#102) lets a caller identify which session belongs to which program day
-    // without a write. The log screen needs it on mount: POST /api/me/sessions is the only other
-    // route that resolves (client, performed_on, program_day_id), and asking it costs a row.
-    // Null for a freestyle session, which by design has no day to match on.
-    public sealed record HistorySessionSummary(
-        Guid Id, DateOnly PerformedOn, string? Comment, Guid? ProgramDayId);
-
-    public sealed record HistoryExerciseRef(Guid Id, string Name);
-
-    // Cursor-paginated: nextCursor is the loggedAt of the last item when the page
-    // was full, null on the final page. Callers re-issue with ?before=<nextCursor>
-    // — no offsets, no total count (both are misleading at scale).
-    public sealed record HistoryResponse(List<HistoryItem> Items, DateTimeOffset? NextCursor);
+    // HistoryItem / HistorySessionSummary / HistoryExerciseRef / HistoryResponse moved to
+    // HistoryViews.cs in #142, when the trainer's GET /api/clients/:id/history started returning
+    // the same page of the same rows. Shape unchanged; see that file for why it is flat.
 
     public sealed record LastSet(
         Guid Id,

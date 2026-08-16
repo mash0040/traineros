@@ -190,3 +190,24 @@ export function formatSessionDate(performedOn: string): string {
     timeZone: 'UTC',
   }).format(date)
 }
+
+/**
+ * "2 exercises · 11 sets" — what a collapsed session says about itself.
+ *
+ * Shared by the two surfaces that render one: the client's own History (#48) and the trainer's
+ * view of their log (#142). One string, because it is the same sentence about the same session
+ * and two copies would be two chances for "1 exercises".
+ *
+ * `separator` is the caller's because the two channels want different ones: the eye reads a
+ * middot cleanly and a screen reader does not, so the visible summary passes '·' and the
+ * accessible name passes ','.
+ */
+export function sessionSummary(session: HistorySession, separator: string): string {
+  const exercises = count(session.exercises.length, 'exercise', 'exercises')
+  const sets = count(session.setCount, 'set', 'sets')
+  return `${exercises}${separator} ${sets}`
+}
+
+function count(value: number, singular: string, plural: string): string {
+  return `${value} ${value === 1 ? singular : plural}`
+}
