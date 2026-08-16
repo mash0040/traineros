@@ -43,6 +43,12 @@ public sealed class ClientEndpointsTestApp : IAsyncLifetime
     public Guid SessionA1_2Id { get; } = Guid.NewGuid();
     public Guid SessionB1Id { get; } = Guid.NewGuid();
 
+    // #142: logged sets, so the trainer's history route has real rows to page and a real
+    // cross-tenant sibling to reject.
+    public Guid ExerciseA_SquatId { get; } = Guid.NewGuid();
+    public Guid ExerciseBId { get; } = Guid.NewGuid();
+    public Guid SetB1Id { get; } = Guid.NewGuid();
+
     public const string ClientA1Email = "alice@example.com";
     public const string ClientA2Email = "bob@example.com";
     public const string ClientB1Email = "carol@example.com";
@@ -139,6 +145,43 @@ public sealed class ClientEndpointsTestApp : IAsyncLifetime
             {
                 Id = SessionB1Id, TrainerId = TrainerBId, ClientId = ClientB1Id,
                 PerformedOn = new DateOnly(2026, 7, 21), Comment = "B's session", CreatedAt = Clock.Now,
+            });
+
+            db.Add(new Exercise
+            {
+                Id = ExerciseA_SquatId, TrainerId = TrainerAId, Name = "Back Squat",
+                IsActive = true, CreatedAt = Clock.Now,
+            });
+            db.Add(new Exercise
+            {
+                Id = ExerciseBId, TrainerId = TrainerBId, Name = "SECRET_B_EXERCISE",
+                IsActive = true, CreatedAt = Clock.Now,
+            });
+
+            // Client A1: four sets across two sessions, logged_at ascending with the date so the
+            // newest-first ordering and the cursor have something to be wrong about.
+            var loggedAt = Clock.Now;
+            for (var i = 0; i < 2; i++)
+            {
+                db.Add(new LoggedSet
+                {
+                    Id = Guid.NewGuid(), SessionId = SessionA1_1Id, ExerciseId = ExerciseA_SquatId,
+                    SetNumber = i + 1, WeightKg = 100m + i, Reps = 5, LoggedAt = loggedAt.AddMinutes(i),
+                });
+            }
+            for (var i = 0; i < 2; i++)
+            {
+                db.Add(new LoggedSet
+                {
+                    Id = Guid.NewGuid(), SessionId = SessionA1_2Id, ExerciseId = ExerciseA_SquatId,
+                    SetNumber = i + 1, WeightKg = null, Reps = 8, LoggedAt = loggedAt.AddMinutes(10 + i),
+                });
+            }
+
+            db.Add(new LoggedSet
+            {
+                Id = SetB1Id, SessionId = SessionB1Id, ExerciseId = ExerciseBId,
+                SetNumber = 1, WeightKg = 999m, Reps = 1, LoggedAt = loggedAt.AddMinutes(20),
             });
 
             db.SaveChanges();
@@ -665,6 +708,164 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
             db.Find<User>(_app.ClientA1Id)!.WeightUnit = WeightUnits.Default;
             db.SaveChanges();
         });
+    }
+
+    // -- GET /api/clients/:id/history (#142) --
+
+    [Fact]
+    public async Task Anonymous_history_is_401()
+    {
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history", null));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Client_role_history_is_404_not_403()
+    {
+        var session = await _app.SignInAsync(_app.ClientA1Id);
+        var response = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history", session));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task History_returns_the_clients_sets_newest_first_with_exercise_and_session()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history", session);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var items = body.GetProperty("items").EnumerateArray().ToList();
+
+        Assert.Equal(4, items.Count);
+
+        // Newest first, which is the order the SPA's grouping assumes.
+        var loggedAt = items.Select(i => i.GetProperty("loggedAt").GetDateTimeOffset()).ToList();
+        Assert.Equal(loggedAt.OrderByDescending(t => t).ToList(), loggedAt);
+
+        // Each set carries enough to render without a second lookup: its session summary and
+        // its exercise name.
+        var first = items[0];
+        Assert.Equal("Back Squat", first.GetProperty("exercise").GetProperty("name").GetString());
+        Assert.Equal(_app.SessionA1_2Id, first.GetProperty("session").GetProperty("id").GetGuid());
+        Assert.Equal("2026-07-20", first.GetProperty("session").GetProperty("performedOn").GetString());
+
+        // The comment rides on the session summary — it is the reason this screen exists as
+        // much as the sets are (database.md: the v1 substitute for messaging).
+        var withComment = items.First(i =>
+            i.GetProperty("session").GetProperty("id").GetGuid() == _app.SessionA1_1Id);
+        Assert.Equal("shoulder tweak", withComment.GetProperty("session").GetProperty("comment").GetString());
+    }
+
+    [Fact]
+    public async Task History_returns_canonical_kilograms_and_does_not_convert()
+    {
+        // #99: storage is one unit and no endpoint converts. Which unit a reader sees is decided
+        // at the display boundary from the *client's* weight_unit — there is no trainer
+        // preference and database.md §users records why.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history", session);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var weights = body.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("weightKg"))
+            .Select(w => w.ValueKind == JsonValueKind.Null ? (decimal?)null : w.GetDecimal())
+            .ToList();
+
+        Assert.Contains(100m, weights);
+        Assert.Contains(101m, weights);
+        // Bodyweight stays null rather than becoming a zero in any unit.
+        Assert.Equal(2, weights.Count(w => w is null));
+    }
+
+    [Fact]
+    public async Task History_pages_with_the_cursor_rather_than_an_offset()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+
+        var firstPage = await SendAsync(
+            HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history?limit=2", session);
+        var first = await firstPage.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(2, first.GetProperty("items").GetArrayLength());
+        var cursor = first.GetProperty("nextCursor").GetDateTimeOffset();
+
+        var secondPage = await SendAsync(
+            HttpMethod.Get,
+            $"/api/clients/{_app.ClientA1Id}/history?limit=2&before={Uri.EscapeDataString(cursor.ToString("O"))}",
+            session);
+        var second = await secondPage.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(2, second.GetProperty("items").GetArrayLength());
+        // Full final page, so nextCursor is still set; the page after it is empty.
+        var firstIds = first.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("id").GetGuid()).ToHashSet();
+        var secondIds = second.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("id").GetGuid()).ToHashSet();
+        Assert.Empty(firstIds.Intersect(secondIds));
+    }
+
+    [Fact]
+    public async Task History_refuses_a_limit_outside_the_range()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+
+        foreach (var limit in new[] { "0", "-1", "101" })
+        {
+            var response = await SendAsync(
+                HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history?limit={limit}", session);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task History_of_another_trainers_client_is_the_same_404_as_a_made_up_id()
+    {
+        // The mandatory isolation shape (api.md §Authorization pt 2). Both the status and the
+        // body have to match, or the pair is an existence oracle.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var madeUp = Guid.NewGuid();
+
+        var foreign = await SendAsync(HttpMethod.Get, $"/api/clients/{_app.ClientB1Id}/history", session);
+        var fabricated = await SendAsync(HttpMethod.Get, $"/api/clients/{madeUp}/history", session);
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, fabricated.StatusCode);
+        Assert.Equal(
+            await foreign.Content.ReadAsStringAsync(),
+            await fabricated.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task History_never_leaks_another_trainers_rows()
+    {
+        // Belt and braces on top of the 404: the sets query is scoped through
+        // LoggedSetsForTrainer, so even a bug in the existence check above could not return B's
+        // rows. Asserted against the raw body so a nested field cannot hide one.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var raw = await (await SendAsync(
+            HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/history", session)).Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("SECRET_B_EXERCISE", raw);
+        Assert.DoesNotContain(_app.SetB1Id.ToString(), raw);
+        Assert.DoesNotContain(_app.SessionB1Id.ToString(), raw);
+        Assert.DoesNotContain("999", raw);
+    }
+
+    [Fact]
+    public async Task History_of_a_client_with_nothing_logged_is_an_empty_page_not_a_404()
+    {
+        // A2 exists and has never trained. Empty state is not an error — the same rule
+        // GET /api/me/program follows for "no active program" (#30).
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Get, $"/api/clients/{_app.ClientA2Id}/history", session);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, body.GetProperty("items").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("nextCursor").ValueKind);
     }
 
     [Fact]

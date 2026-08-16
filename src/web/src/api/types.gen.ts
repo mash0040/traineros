@@ -520,6 +520,27 @@ export type GetApiClientsByIdSessionsResponses = {
 
 export type GetApiClientsByIdSessionsResponse = GetApiClientsByIdSessionsResponses[keyof GetApiClientsByIdSessionsResponses];
 
+export type GetApiClientsByIdHistoryData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: {
+        before?: string;
+        limit?: number;
+    };
+    url: '/api/clients/{id}/history';
+};
+
+export type GetApiClientsByIdHistoryResponses = {
+    /**
+     * OK
+     */
+    200: HistoryResponse;
+};
+
+export type GetApiClientsByIdHistoryResponse = GetApiClientsByIdHistoryResponses[keyof GetApiClientsByIdHistoryResponses];
+
 export type GetApiExercisesData = {
     body?: never;
     path?: never;

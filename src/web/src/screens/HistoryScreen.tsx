@@ -7,10 +7,12 @@ import {
   exerciseOptions,
   formatSessionDate,
   groupSessions,
-  type HistoryExerciseGroup,
+  sessionSummary,
   type HistorySession,
 } from '../lib/history'
-import { spokenUnit, toDisplay, unitLabel, unitOf, type WeightUnit } from '../lib/weight'
+import { unitOf, type WeightUnit } from '../lib/weight'
+import { DisclosureChevron } from './DisclosureChevron'
+import { ExerciseSets } from './ExerciseSets'
 import { Message } from './Message'
 
 type Load = 'loading' | 'ready' | 'unreachable'
@@ -291,9 +293,15 @@ function ExerciseFilter({
 }
 
 // The card, and the tap target, are the same element: the whole summary opens the session,
-// rather than a chevron sized either to dominate the card or to be missed on a gym floor. Same
-// argument as the saved set row on the log screen, and the same shape — the detail opens
-// below, so a second tap in the same place closes it rather than landing on something else.
+// rather than a small chevron *as the target* — sized either to dominate the card or to be
+// missed on a gym floor. Same argument as the saved set row on the log screen, and the same
+// shape: the detail opens below, so a second tap in the same place closes it rather than
+// landing on something else.
+//
+// The chevron that #142 added is the affordance, not the target. It marks the whole button
+// rather than being one — which is the distinction the sentence above was missing, since "the
+// card is the target" was never an argument for the card having no visible sign of being one.
+// DESIGN.md §Controls, and see DisclosureChevron for why it is not the record link's `›`.
 function SessionCard({
   onToggle,
   open,
@@ -306,7 +314,7 @@ function SessionCard({
   unit: WeightUnit
 }) {
   const date = formatSessionDate(session.performedOn)
-  const summary = `${count(session.exercises.length, 'exercise', 'exercises')} · ${count(session.setCount, 'set', 'sets')}`
+  const summary = sessionSummary(session, ' ·')
 
   return (
     <li className="rounded-md border border-edge">
@@ -317,13 +325,16 @@ function SessionCard({
       <h2>
         <button
           aria-expanded={open}
-          aria-label={`${date}, ${count(session.exercises.length, 'exercise', 'exercises')}, ${count(session.setCount, 'set', 'sets')}`}
-          className="grid w-full gap-1 p-4 text-left"
+          aria-label={`${date}, ${sessionSummary(session, ',')}`}
+          className="flex w-full items-center justify-between gap-3 p-4 text-left"
           onClick={onToggle}
           type="button"
         >
-          <span className="text-base font-semibold text-ink-bold">{date}</span>
-          <span className="text-sm text-muted">{summary}</span>
+          <span className="grid min-w-0 gap-1">
+            <span className="text-base font-semibold text-ink-bold">{date}</span>
+            <span className="text-sm text-muted">{summary}</span>
+          </span>
+          <DisclosureChevron open={open} />
         </button>
       </h2>
 
@@ -331,13 +342,18 @@ function SessionCard({
         <div className="grid gap-6 border-t border-edge p-4">
           {/* Her note to the trainer (database.md: the v1 substitute for messaging). It reads
               in the detail rather than on the summary, so the collapsed list stays a column of
-              dates and counts to scan rather than a wall of prose. */}
+              dates and counts to scan rather than a wall of prose.
+
+              #142 puts it on the *collapsed* row of the trainer's copy of this list, and the
+              two answers are both right because the reader differs: she wrote this note and
+              knows what it says, so here it is reference. Her trainer has never seen it, so
+              there it is the signal — behind a tap it would be a message nobody reads. */}
           {session.comment !== null && session.comment !== '' && (
             <p className="text-sm text-ink">{session.comment}</p>
           )}
 
           {session.exercises.map((exercise) => (
-            <ExerciseSets exercise={exercise} key={exercise.id} unit={unit} />
+            <ExerciseSets exercise={exercise} idPrefix="history" key={exercise.id} unit={unit} />
           ))}
         </div>
       )}
@@ -349,84 +365,6 @@ function SessionCard({
 // where today's inputs outrank last time which outranks the prescription; none of those roles
 // exist here. So there is one rank: what she lifted, at --text-base / 600 / --ink-bold with
 // tabular-nums so successive sets line up, and a set number in --muted to count them off.
-function ExerciseSets({
-  exercise,
-  unit,
-}: {
-  exercise: HistoryExerciseGroup
-  unit: WeightUnit
-}) {
-  // Bodyweight sets carry no unit, so a group of nothing but them gets no label — "lbs" over a
-  // column of "8 reps" would be a unit for a number that is not there.
-  const anyWeighted = exercise.sets.some((set) => set.weightKg !== null)
-  const headingId = `history-exercise-${exercise.id}`
-
-  return (
-    <div className="grid gap-2">
-      {/* The unit, named once per exercise rather than suffixed onto every row. This screen had
-          none at all, which left "22.05 × 3" as a number with no meaning — and it is exactly
-          the number that needs one, because it is what a client converted from. Once per group
-          is the same rule DESIGN.md §Log row applies on the log screen, where the unit lives in
-          the column header and is "never repeated per set row"; history has no header row, so
-          the exercise heading is the nearest thing that plays that part.
-
-          The per-set aria-label already spells it out on every row (see spokenSet) — a screen
-          reader has no column header to carry it, so there the repetition is the only option. */}
-      <div className="flex items-baseline justify-between gap-3">
-        {/* min-w-0 and wrap-break-word because this heading is a flex item now. A flex item's
-            default minimum is min-content, which for an unbroken exercise name is the whole
-            word — it was a plain block that wrapped for free before the unit sat beside it.
-            Same pair the exercise library already applies to its own row headings. */}
-        <h3
-          className="min-w-0 text-base font-semibold wrap-break-word text-ink-bold"
-          id={headingId}
-        >
-          {exercise.name}
-        </h3>
-        {anyWeighted && (
-          <span className="shrink-0 text-xs text-muted">{unitLabel(unit)}</span>
-        )}
-      </div>
-      {/* Labelled by its own heading. A session card holds several of these lists back to back,
-          so an unlabelled one leaves a screen reader to infer which exercise's sets it has
-          landed in from whatever it heard last. It also gives this group a name to scope to
-          that does not depend on the markup around it — the wrapper this heading now sits in
-          broke a test that was reaching for `closest('div')`, which is the same brittleness in
-          the other direction. */}
-      <ul aria-labelledby={headingId} className="grid gap-1">
-        {exercise.sets.map((set) => (
-          // Labelled, with the cells hidden behind it, for the same reason the log screen's
-          // saved row is: the columns are laid out by the grid and nothing separates them in
-          // the text stream, so read cell by cell "1" and "100 × 5" run together into "1100".
-          <li
-            aria-label={spokenSet(set, unit)}
-            className="grid grid-cols-[2rem_1fr] items-baseline gap-3"
-            key={set.id}
-          >
-            <span aria-hidden="true" className="text-sm text-muted tabular-nums">
-              {set.setNumber}
-            </span>
-            <span aria-hidden="true" className="text-base font-semibold text-ink-bold tabular-nums">
-              {set.weightKg === null ? (
-                // Bodyweight (weight_kg NULL, database.md). Named rather than shown as
-                // "– × 8", which reads as a number that went missing.
-                `${set.reps} reps`
-              ) : (
-                <>
-                  {/* The display boundary (#99): stored kilograms, read in the client's unit. */}
-                  {toDisplay(set.weightKg, unit)}
-                  <span className="text-muted"> × </span>
-                  {set.reps}
-                </>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 function Empty({ body, heading }: { body: string; heading: string }) {
   return (
     <div className="mt-8 grid gap-2">
@@ -471,23 +409,6 @@ function HistorySkeleton() {
   )
 }
 
-/**
- * "Set 2, 102.5 kilograms by 5 reps". Same wording the log screen reads a saved row with, and
- * the unit is spelled out there for the same reason (#99): screen readers render "kg" and "lb"
- * unpredictably, and this is the only channel for someone who cannot see the column header.
- */
-function spokenSet(
-  set: { setNumber: number; weightKg: number | null; reps: number },
-  unit: WeightUnit,
-): string {
-  return set.weightKg === null
-    ? `Set ${set.setNumber}, ${set.reps} reps`
-    : `Set ${set.setNumber}, ${toDisplay(set.weightKg, unit)} ${spokenUnit(unit)} by ${set.reps} reps`
-}
-
-function count(value: number, singular: string, plural: string): string {
-  return `${value} ${value === 1 ? singular : plural}`
-}
 
 /** Adds any exercise this page introduced, keeping the list sorted and free of duplicates. */
 function mergeOptions(

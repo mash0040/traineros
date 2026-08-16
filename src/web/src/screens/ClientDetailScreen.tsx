@@ -1,20 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import type { ClientResponse, ClientSessionResponse, ProgramResponse, ScheduleResponse } from '../api/types.gen'
+import type {
+  ClientResponse,
+  HistoryItem,
+  HistoryResponse,
+  ProgramResponse,
+  ScheduleResponse,
+} from '../api/types.gen'
 import {
   createClientSchedule,
   fetchClientSchedule,
-  fetchClientSessions,
+  fetchClientHistory,
   fetchClients,
   fetchPrograms,
   updateSchedule,
 } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
-import { formatSessionDate } from '../lib/history'
+import {
+  formatSessionDate,
+  groupSessions,
+  sessionSummary,
+  type HistorySession,
+} from '../lib/history'
 import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
-import { unitLabel, unitOf } from '../lib/weight'
+import { unitLabel, unitOf, type WeightUnit } from '../lib/weight'
 import { useBlockMessage } from './blockMessage'
+import { DisclosureChevron } from './DisclosureChevron'
+import { ExerciseSets } from './ExerciseSets'
 import { Message } from './Message'
 import { RecordLink } from './RecordLink'
 import { TrainerShell } from './TrainerShell'
@@ -31,9 +44,18 @@ type Load = 'loading' | 'ready' | 'missing' | 'unreachable'
 type Detail = {
   client: ClientResponse
   programs: ProgramResponse[]
-  sessions: ClientSessionResponse[]
+  history: HistoryResponse
   schedule: ScheduleResponse | null
 }
+
+/**
+ * How many sets to read per page.
+ *
+ * Sized in sets because the endpoint pages in sets, and 50 is comfortably two or three real
+ * workouts — the same number the client's own History screen uses, for the same reason: the
+ * first page fills the section and the second is a tap away.
+ */
+const HISTORY_PAGE = 50
 
 // ui-ux.md §Trainer screens, Client detail: "their program (edit entry point), their history,
 // reminder schedule (time, days, enabled)". Reached by tapping a client on the roster (#50).
@@ -49,11 +71,12 @@ type Detail = {
 // clientId here. Both are worth a field or a route only when a trainer has enough clients for
 // the difference to be visible, which is not v1.
 //
-// ── What "their history" can be on this screen ─────────────────────────────────────────────
-// GET /api/clients/:id/sessions returns sessions, not sets: date, program day, and the client's
-// note. There is no trainer-side route to a session's logged sets — GET /api/me/history is
-// client-scoped — so this is session-level by construction rather than by choice. The note is
-// the part with the most in it anyway (database.md calls it the v1 substitute for messaging).
+// ── What "their history" is on this screen ─────────────────────────────────────────────────
+// Sets, since #142. It used to be session-level by construction: GET /api/clients/:id/sessions
+// returns date, program day and comment, and GET /api/me/history is client-scoped, so there was
+// no trainer-side route to what anyone actually lifted. GET /api/clients/:id/history is that
+// route, returning the same flat page of sets the client's own history does — which is what
+// lets lib/history.ts group both.
 export function ClientDetailScreen() {
   const { clientId = '' } = useParams()
 
@@ -70,10 +93,10 @@ export function ClientDetailScreen() {
     Promise.all([
       fetchClients(),
       fetchPrograms(),
-      fetchClientSessions(clientId),
+      fetchClientHistory(clientId, { limit: HISTORY_PAGE }),
       fetchClientSchedule(clientId),
     ])
-      .then(([roster, programs, sessions, schedule]) => {
+      .then(([roster, programs, history, schedule]) => {
         if (cancelled) {
           return
         }
@@ -89,7 +112,7 @@ export function ClientDetailScreen() {
         setDetail({
           client,
           programs: programs.filter((program) => program.clientId === clientId),
-          sessions,
+          history,
           schedule,
         })
         setLoad('ready')
@@ -146,7 +169,7 @@ export function ClientDetailScreen() {
     )
   }
 
-  const { client, programs, sessions, schedule } = detail
+  const { client, programs, history, schedule } = detail
   const active = client.isActive !== false
 
   return (
@@ -186,7 +209,7 @@ export function ClientDetailScreen() {
         schedule={schedule}
       />
 
-      <History sessions={sessions} />
+      <History clientId={clientId} initial={history} unit={unitOf(client.weightUnit)} />
     </TrainerShell>
   )
 }
@@ -476,30 +499,171 @@ function ReminderSchedule({
 
 // The trainer's view of what the client has actually been doing — the same "who's slacking"
 // question the roster answers with one date, opened up to the list behind it.
-function History({ sessions }: { sessions: ClientSessionResponse[] }) {
+//
+// ── What #142 added, and what was here before ──────────────────────────────────────────────
+// Dates and comments only, because there was no trainer-side route to a session's logged sets:
+// GET /api/clients/:id/sessions returns no sets and GET /api/me/history is client-scoped. So a
+// trainer could see that someone trained and read their note, but not what they lifted — the
+// most useful thing on a coaching screen. GET /api/clients/:id/history closed that.
+//
+// ── Grouping is lib/history.ts's, not this screen's ────────────────────────────────────────
+// The endpoint returns flat sets and both history surfaces render sessions, so the assembly —
+// including the page-boundary rule, where a session cut by the cursor is withheld until it is
+// complete rather than shown with a wrong set count — is one function shared with the client's
+// own History screen. Rewriting it here would have been the second place to get that wrong.
+//
+// That rule is also why "Load older workouts" is not optional: while `hasMore` holds, the
+// session owning the oldest loaded set is withheld, so a section with no way to load more would
+// silently never show it.
+function History({
+  clientId,
+  initial,
+  unit,
+}: {
+  clientId: string
+  initial: HistoryResponse
+  unit: WeightUnit
+}) {
+  const [items, setItems] = useState<HistoryItem[]>(initial.items ?? [])
+  const [cursor, setCursor] = useState<string | null>(initial.nextCursor ?? null)
+  const [openSessionId, setOpenSessionId] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  const block = useBlockMessage(`client-history-message-${clientId}`)
+  const sessions = useMemo(
+    () => groupSessions(items, { hasMore: cursor !== null }),
+    [items, cursor],
+  )
+
+  async function loadMore() {
+    if (loadingMore || cursor === null) {
+      return
+    }
+
+    setLoadingMore(true)
+    block.clear()
+    try {
+      const page = await fetchClientHistory(clientId, { before: cursor, limit: HISTORY_PAGE })
+      setItems((previous) => [...previous, ...(page.items ?? [])])
+      setCursor(page.nextCursor ?? null)
+    } catch (caught) {
+      // What is already on screen stays there. A dropped read of older workouts is not a reason
+      // to take away the ones being read.
+      block.fail(messageFor(caught, 'client'))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   return (
     <section className="mt-10">
       <h2 className="text-lg font-semibold text-ink-bold">History</h2>
 
-      {sessions.length === 0 ? (
+      {sessions.length === 0 && cursor === null ? (
         <p className="mt-2 text-base text-muted">Nothing logged yet.</p>
       ) : (
         <ul className="mt-4 divide-y divide-edge border-y border-edge">
           {sessions.map((session) => (
-            <li className="grid gap-1 py-3" key={session.id}>
-              <span className="text-base font-semibold text-ink-bold">
-                {formatSessionDate(session.performedOn ?? '')}
-              </span>
-              {/* database.md calls the session comment the v1 substitute for messaging, which
-                  makes it the most valuable thing on this list — it is the only channel the
-                  client has to say "shoulder tweaked on OHP". Rendered in ink, not muted. */}
-              {session.comment != null && session.comment !== '' && (
-                <span className="text-sm text-ink">{session.comment}</span>
-              )}
-            </li>
+            <ClientSession
+              key={session.id}
+              onToggle={() =>
+                setOpenSessionId((previous) => (previous === session.id ? null : session.id))
+              }
+              open={openSessionId === session.id}
+              session={session}
+              unit={unit}
+            />
           ))}
         </ul>
+      )}
+
+      {cursor !== null && (
+        <div className="mt-4 grid justify-items-start gap-2">
+          {block.message !== null && (
+            <Message id={block.id} tone={block.message.tone}>
+              {block.message.body}
+            </Message>
+          )}
+          <button
+            aria-describedby={block.describedBy}
+            className={trainerSecondary}
+            disabled={loadingMore}
+            onClick={() => void loadMore()}
+            type="button"
+          >
+            {loadingMore ? 'Loading' : 'Load older workouts'}
+          </button>
+        </div>
       )}
     </section>
   )
 }
+
+// One session: a date and the client's note at rest, the sets behind a disclosure.
+//
+// ── Why the comment is on the collapsed row and the sets are inside ────────────────────────
+// database.md calls the session comment the v1 substitute for messaging, which makes it the one
+// thing on this list that was *written to the trainer* rather than recorded about the client.
+// A message behind a tap is a message that does not get read: the trainer would have to open
+// every session to discover whether anything was said, and would stop.
+//
+// The client's own History screen puts its comment inside the card instead, and both are right
+// because the reader differs — she wrote the note and knows what it says, so there it is
+// reference; here it has never been seen, so it is the signal. #51 already gave it ink rather
+// than muted for the same reason, and that survives: the sets are what the disclosure is for.
+function ClientSession({
+  onToggle,
+  open,
+  session,
+  unit,
+}: {
+  onToggle: () => void
+  open: boolean
+  session: HistorySession
+  unit: WeightUnit
+}) {
+  const date = formatSessionDate(session.performedOn)
+  const summary = sessionSummary(session, ' ·')
+
+  return (
+    <li className="py-1">
+      {/* The whole row is the target, and the chevron is the affordance rather than the target
+          — DESIGN.md §Controls, and see DisclosureChevron for why it is not the record link's
+          `›`. The label is spelled out because the visible summary leans on a separator glyph
+          that does not read as a sentence. */}
+      <button
+        aria-expanded={open}
+        aria-label={`${date}, ${sessionSummary(session, ',')}`}
+        className="flex w-full items-center justify-between gap-3 py-2 text-left"
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="grid min-w-0 gap-1">
+          <span className="text-base font-semibold text-ink-bold">{date}</span>
+          <span className="text-sm text-muted">{summary}</span>
+        </span>
+        <DisclosureChevron open={open} />
+      </button>
+
+      {/* Outside the button, so a screen reader is not made to hear the note as part of the
+          control's name every time it moves down the list — and so the trainer can select it. */}
+      {session.comment !== null && session.comment !== '' && (
+        <p className="pb-2 text-sm text-ink">{session.comment}</p>
+      )}
+
+      {open && (
+        <div className="grid gap-6 border-t border-edge py-4">
+          {session.exercises.map((exercise) => (
+            <ExerciseSets
+              exercise={exercise}
+              idPrefix={`client-${session.id}`}
+              key={exercise.id}
+              unit={unit}
+            />
+          ))}
+        </div>
+      )}
+    </li>
+  )
+}
+

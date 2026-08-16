@@ -47,10 +47,14 @@ The route that would actually work is explicit +/− buttons, and that is a real
 | Screen | Content |
 |---|---|
 | Clients | list + add/deactivate; per-client: last session date (the "who's slacking" signal — the v1 stand-in for the deferred digest) |
-| Client detail | their program (edit entry point), their history, reminder schedule (time, days, enabled) |
+| Client detail | their program (edit entry point), their history (sessions → sets, behind a disclosure), reminder schedule (time, days, enabled) |
 | New program | title, for a client; creates the draft the builder then fills. `/programs/new?client=` |
 | Program builder | days → prescriptions; add exercise from library; drag-or-buttons reorder (buttons acceptable in v1; drag is polish) |
 | Exercise library | list/add/edit: name, video URL, cues; soft-delete |
+
+(Client detail's history row is amended by #142. It read "their history" while the screen showed dates and comments only, because no trainer-side route returned a client's logged sets. It now shows sessions that open to what was lifted — the same disclosure the client's own History uses, on the same grouped data, through the same `ExerciseSets` component.
+
+Two things about it are decisions rather than defaults. **The session comment sits on the collapsed row, not inside the disclosure** — database.md calls it the v1 substitute for messaging, so it is the one thing on that list written *to* the trainer, and behind a tap it would be a message nobody reads. That deliberately differs from the client's own History, which puts the comment inside: she wrote the note and knows what it says, so there it is reference; here it has never been seen, so it is the signal. **The disclosure carries a `▾`/`▴` chevron**, because #132 established that weight and ink are hierarchy and cannot also be the affordance. It is not the record link's `›`, which DESIGN.md assigns to "opens a record" — a disclosure goes nowhere, and a third meaning for that glyph would cost the other two their precision. The client's History cards got the same chevron in the same ticket; they had the defect too.)
 
 (New program is added to this table by #138, which found it built and routed but absent from the inventory. It is not new scope — #53 built it as the "Build a program" entry point this table's Client detail row already implies, and a create step has to exist somewhere for the builder to have a draft to open. What was wrong was the inventory, which had been describing four trainer screens while five shipped. Recorded rather than scope-reviewed for that reason.)
 

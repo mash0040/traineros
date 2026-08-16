@@ -57,7 +57,8 @@ Revokes current session row.
 | GET /api/clients | list clients | includes is_active |
 | POST /api/clients | create client | body: email, display_name, timezone, weight_unit? ('kg'\|'lb', default 'lb'). Sends nothing; invite = trainer tells them to log in via magic link |
 | PATCH /api/clients/:id | edit / deactivate | body: display_name?, timezone?, is_active?, weight_unit?. is_active=false also disables their schedules (single transaction) |
-| GET /api/clients/:id/sessions | client's workout history | trainer view of logs |
+| GET /api/clients/:id/sessions | client's sessions (date, program day, comment) | no sets; powers the roster's last-session date |
+| GET /api/clients/:id/history?before=&limit= | client's logged sets, for their trainer | same shape as GET /api/me/history — flat sets, cursor pagination. Scoped through ClientsForTrainer *and* LoggedSetsForTrainer |
 | GET/POST /api/exercises, PATCH /api/exercises/:id | exercise library | delete = PATCH is_active=false (soft-delete per database.md) |
 | GET/POST /api/programs | list/create (client_id in body on create) | create enforces one-active-per-client via partial unique index; 409 on conflict |
 (Recorded in #27: program status transitions are unrestricted — any of {draft, active, archived} → any other. Deliberate for v1 given single-trainer scale; the 409 active-conflict constraint is the only structural gate. Restrictive transitions become worthwhile if program history needs to be auditable — v2 concern.)
@@ -65,6 +66,12 @@ Revokes current session row.
 | POST /api/programs/:id/days, PATCH/DELETE /api/days/:id | manage days | |
 | POST /api/days/:id/exercises, PATCH/DELETE /api/day-exercises/:id | manage prescriptions | position handling: client sends full ordered id list on reorder (PATCH /api/days/:id/order), server rewrites positions in one transaction. (Rejected: fractional/gap positions — clever, unnecessary at this scale.) |
 | GET/POST /api/clients/:id/schedule, PATCH /api/schedules/:id | reminder schedule | one schedule per client in v1 |
+
+(Recorded in #142: the trainer's view of a client's logged sets is its **own route** rather than sets nested into GET /api/clients/:id/sessions, because that route has a second consumer — the roster reads it once per client for the last-session date, and it already downloads every session a client has ever logged to render one. Nesting sets would multiply that by every set, for every client on the roster. /sessions is unchanged and keeps the roster as its one caller.
+
+The page is **flat sets, not sessions with nested sets**, matching GET /api/me/history exactly — same records, in HistoryViews.cs, so the SPA gets one generated type and one grouping function. Grouping lives in the SPA (lib/history.ts) because that is where the hard part already is: pagination counts sets while the screen renders sessions, so a page can end mid-workout and a session must be withheld until complete rather than shown with a wrong set count. A nested response would have been a third representation of the same rows and would have had to re-answer that.
+
+Weights are canonical kilograms and this endpoint converts nothing. The reader's unit is the **client's** `weight_unit`, on the trainer's screen as much as the client's — there is no trainer-side preference and database.md §users records why. ClientDetailScreen already holds it: the client comes from the roster read, and ClientResponse has carried `weight_unit` since #99.)
 
 (Recorded in #114: MailAddress.TryCreate alone is not address validation — it parses RFC 5322 mailbox syntax, so "Ada <ada@example.com>" and "ada example@example.com" both pass, and the endpoint stored raw input rather than the parsed address. Validation now round-trips: the parsed address must equal the input byte-for-byte with no display name. Client email is write-once in v1 — PATCH /api/clients/:id has no email field, so a typo requires deactivate-and-re-add.)
 

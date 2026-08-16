@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type {
   ClientResponse,
-  ClientSessionResponse,
+  HistoryItem,
+  HistoryResponse,
   ProgramResponse,
   ScheduleResponse,
 } from '../api/types.gen'
@@ -16,6 +17,9 @@ const ada: ClientResponse = {
   email: 'ada@example.com',
   displayName: 'Ada',
   timezone: 'America/Toronto',
+  // kg on purpose, like the log and history fixtures: the assertions in this file are about
+  // what the screen shows, not about the conversion. The lb path has its own test.
+  weightUnit: 'kg',
   isActive: true,
   createdAt: '2026-01-01T00:00:00Z',
 }
@@ -45,8 +49,33 @@ const schedule: ScheduleResponse = {
   enabled: true,
 }
 
-function session(performedOn: string, comment: string | null = null): ClientSessionResponse {
-  return { id: `session-${performedOn}`, performedOn, programDayId: 'day-1', comment, createdAt: `${performedOn}T18:00:00Z` }
+/**
+ * One session's worth of logged sets, in the flat shape GET /api/clients/:id/history returns
+ * (#142) — the same shape GET /api/me/history returns, which is what lets lib/history.ts group
+ * both. Weights are canonical kilograms; the screen converts at the display boundary.
+ */
+function sessionSets(
+  performedOn: string,
+  comment: string | null = null,
+  sets: { weightKg: number | null; reps: number }[] = [{ weightKg: 100, reps: 5 }],
+  exercise: { id: string; name: string } = { id: 'ex-1', name: 'Back Squat' },
+): HistoryItem[] {
+  return sets.map((set, index) => ({
+    id: `set-${performedOn}-${index + 1}`,
+    setNumber: index + 1,
+    weightKg: set.weightKg,
+    reps: set.reps,
+    // Descending across sessions is the caller's job; within one, ascending is what the real
+    // feed produces and what groupSessions preserves.
+    loggedAt: `${performedOn}T18:0${index}:00Z`,
+    session: { id: `session-${performedOn}`, performedOn, comment, programDayId: 'day-1' },
+    exercise,
+  }))
+}
+
+/** Newest session first, which is the order the endpoint returns and grouping assumes. */
+function history(items: HistoryItem[], nextCursor: string | null = null): HistoryResponse {
+  return { items, nextCursor }
 }
 
 describe('ClientDetailScreen', () => {
@@ -58,7 +87,7 @@ describe('ClientDetailScreen', () => {
   function mockApi(options: {
     clients?: ClientResponse[]
     programs?: ProgramResponse[]
-    sessions?: ClientSessionResponse[]
+    history?: HistoryResponse
     schedule?: ScheduleResponse | null
     onPost?: (body: unknown) => Partial<Response>
     onPatch?: (id: string, body: unknown) => Partial<Response>
@@ -95,8 +124,8 @@ describe('ClientDetailScreen', () => {
           : ok(options.schedule)
       }
 
-      if (url.endsWith('/sessions')) {
-        return ok(options.sessions ?? [])
+      if (url.includes('/history')) {
+        return ok(options.history ?? { items: [], nextCursor: null })
       }
 
       if (url === '/api/programs') {
@@ -133,7 +162,10 @@ describe('ClientDetailScreen', () => {
     mockApi({
       clients: [ada, grace],
       programs: [gracesProgram, adasProgram],
-      sessions: [session('2026-07-31', 'Shoulder tweaked on OHP.'), session('2026-07-29')],
+      history: history([
+        ...sessionSets('2026-07-31', 'Shoulder tweaked on OHP.'),
+        ...sessionSets('2026-07-29'),
+      ]),
       schedule,
     })
     renderAt('client-ada')
@@ -149,6 +181,161 @@ describe('ClientDetailScreen', () => {
     // The session comment is the v1 substitute for messaging, so it is on screen rather than
     // behind a tap.
     expect(screen.getByText('Shoulder tweaked on OHP.')).toBeInTheDocument()
+  })
+
+  // ── The client's logged sets (#142) ───────────────────────────────────────────────────────
+
+  it('opens a session to what the client actually lifted', async () => {
+    // The whole point of the ticket: a trainer could see that someone trained and read their
+    // note, but not what was lifted.
+    mockApi({
+      clients: [ada],
+      history: history(
+        sessionSets('2026-07-31', null, [
+          { weightKg: 100, reps: 5 },
+          { weightKg: 102.5, reps: 5 },
+        ]),
+      ),
+      schedule,
+    })
+    renderAt('client-ada')
+
+    const row = await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ })
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    // Collapsed: the summary counts them, the sets themselves are behind the disclosure.
+    expect(screen.getByText('1 exercise · 2 sets')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Back Squat' })).not.toBeInTheDocument()
+
+    await userEvent.click(row)
+
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    const sets = within(screen.getByRole('list', { name: 'Back Squat' })).getAllByRole('listitem')
+    expect(sets.map((set) => set.getAttribute('aria-label'))).toEqual([
+      'Set 1, 100 kilograms by 5 reps',
+      'Set 2, 102.5 kilograms by 5 reps',
+    ])
+  })
+
+  it('reads the sets in the client’s unit, not the trainer’s', async () => {
+    // #99: there is no trainer-side preference and database.md §users records why — the number
+    // a trainer is looking at is the number their client lifted and will lift again. The unit
+    // comes off the roster row this screen already holds.
+    mockApi({
+      clients: [{ ...ada, weightUnit: 'lb' }],
+      history: history(sessionSets('2026-07-31', null, [{ weightKg: 83.91458845, reps: 5 }])),
+      schedule,
+    })
+    renderAt('client-ada')
+
+    await userEvent.click(await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ }))
+
+    // 83.91458845 kg is exactly 185 lb. Stored canonical, read in the client's unit.
+    expect(screen.getByRole('listitem', { name: 'Set 1, 185 pounds by 5 reps' })).toBeInTheDocument()
+    expect(screen.getByText('lbs')).toBeInTheDocument()
+  })
+
+  it('keeps the client’s note on the collapsed row rather than behind the disclosure', async () => {
+    // database.md calls the comment the v1 substitute for messaging: it is the one thing here
+    // written *to* the trainer. Behind a tap it would be a message nobody reads, because the
+    // trainer would have to open every session to find out whether anything was said.
+    mockApi({
+      clients: [ada],
+      history: history(sessionSets('2026-07-31', 'Shoulder tweaked on OHP.')),
+      schedule,
+    })
+    renderAt('client-ada')
+
+    expect(await screen.findByText('Shoulder tweaked on OHP.')).toBeInTheDocument()
+
+    // And it is not swallowed into the disclosure's accessible name, which a screen reader
+    // would then repeat on every row it moved past.
+    const row = screen.getByRole('button', { name: /Fri, 31 Jul 2026/ })
+    expect(row).not.toHaveAccessibleName(/Shoulder/)
+    expect(row).not.toContainElement(screen.getByText('Shoulder tweaked on OHP.'))
+  })
+
+  it('marks the disclosure with a chevron rather than bold text alone', async () => {
+    // #132: weight and ink are hierarchy and cannot also be the affordance. The glyph carries
+    // state, and it is not the record link's `›` — that means "opens a record", and a
+    // disclosure goes nowhere. See DisclosureChevron.
+    mockApi({ clients: [ada], history: history(sessionSets('2026-07-31')), schedule })
+    renderAt('client-ada')
+
+    const row = await screen.findByRole('button', { name: /Fri, 31 Jul 2026/ })
+    expect(row).toHaveTextContent('▾')
+
+    await userEvent.click(row)
+    expect(row).toHaveTextContent('▴')
+  })
+
+  it('offers older workouts when the page did not exhaust the log', async () => {
+    // Not optional: groupSessions withholds the session owning the oldest loaded set while
+    // hasMore, so without this control that session would never appear.
+    const fetchMock = mockApi({
+      clients: [ada],
+      history: history(
+        [...sessionSets('2026-08-02'), ...sessionSets('2026-07-31')],
+        '2026-07-31T18:00:00Z',
+      ),
+      schedule,
+    })
+    renderAt('client-ada')
+
+    const more = await screen.findByRole('button', { name: 'Load older workouts' })
+    await userEvent.click(more)
+
+    const paged = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('/history') && url.includes('before='))
+    expect(paged).toHaveLength(1)
+    expect(paged[0]).toContain('before=2026-07-31T18%3A00%3A00Z')
+  })
+
+  it('keeps the loaded workouts on screen when a later page fails', async () => {
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        const ok = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json })
+        if (url.endsWith('/schedule')) {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            json: async () => ({ error: { code: 'not_found', message: 'Not Found' } }),
+          })
+        }
+        if (url.includes('/history')) {
+          calls += 1
+          if (calls > 1) {
+            throw new TypeError('Failed to fetch')
+          }
+          return ok(
+            history(
+              [...sessionSets('2026-08-02'), ...sessionSets('2026-07-31')],
+              '2026-07-31T18:00:00Z',
+            ),
+          )
+        }
+        if (url === '/api/programs') {
+          return ok([])
+        }
+        return ok([ada])
+      }),
+    )
+    renderAt('client-ada')
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Load older workouts' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    // The session that was already loaded is still there.
+    expect(screen.getByRole('button', { name: /Sun, 2 Aug 2026/ })).toBeInTheDocument()
+  })
+
+  it('says nothing is logged rather than showing an empty list', async () => {
+    mockApi({ clients: [ada], history: history([]), schedule })
+    renderAt('client-ada')
+
+    expect(await screen.findByText('Nothing logged yet.')).toBeInTheDocument()
   })
 
   // The program's title is the way into the builder, not a separate "Edit program" button
@@ -405,7 +592,7 @@ describe('ClientDetailScreen', () => {
   })
 
   it('says so when there is no program and nothing logged', async () => {
-    mockApi({ clients: [ada], programs: [], sessions: [], schedule })
+    mockApi({ clients: [ada], programs: [], schedule })
     renderAt('client-ada')
 
     expect(await screen.findByText(/No program yet/)).toBeInTheDocument()

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 using TrainerOS.Api.Auth;
@@ -11,6 +12,12 @@ namespace TrainerOS.Api.Endpoints;
 // not a lookup key, so a foreign trainer's client id is a 404 like a made-up one.
 public static class ClientEndpoints
 {
+    // Same page size and ceiling as GET /api/me/history. The two routes return the same rows in
+    // the same shape, so a trainer paging through a client's log and the client paging through
+    // their own should not be reading different-sized pages.
+    private const int DefaultHistoryLimit = 20;
+    private const int MaxHistoryLimit = 100;
+
     public sealed record CreateClientRequest(
         string? Email, string? DisplayName, string? Timezone, string? WeightUnit);
 
@@ -44,6 +51,8 @@ public static class ClientEndpoints
             .Produces<ClientResponse>();
         clients.MapGet("/{id:guid}/sessions", ListClientSessions)
             .Produces<List<ClientSessionResponse>>();
+        clients.MapGet("/{id:guid}/history", GetClientHistory)
+            .Produces<HistoryResponse>();
         return api;
     }
 
@@ -282,6 +291,100 @@ public static class ClientEndpoints
             .ToListAsync(cancellationToken);
 
         return Results.Ok(sessions);
+    }
+
+    // #142. What the client actually lifted, for their trainer.
+    //
+    // ── Why this is not GET /api/clients/:id/sessions with sets nested in it ───────────────
+    // That route has a second consumer: the roster reads it once per client for the last-session
+    // date, and ClientsScreen already documents what that costs — "reading one date downloads
+    // every session that client has ever logged". Nesting sets into it would multiply that by
+    // every set of every session, for every client on the roster, to render one date. So the
+    // sets get their own route and /sessions is left alone.
+    //
+    // ── Why the page is flat sets rather than sessions with nested sets ───────────────────
+    // It is the shape GET /api/me/history already returns (#33), and these are the same rows.
+    // See HistoryViews.cs. The grouping both screens render lives in the SPA's lib/history.ts,
+    // which already solves the part that is hard — pagination counts sets while the screen
+    // renders sessions, so a page can end mid-workout.
+    //
+    // ── Scoping, twice ─────────────────────────────────────────────────────────────────────
+    // The existence check goes through ClientsForTrainer, so another trainer's client id is the
+    // same 404 as a fabricated one (api.md §Authorization pt 2). The sets themselves come
+    // through LoggedSetsForTrainer, so even a bug in the check above could not return rows
+    // belonging to another trainer — ownership is in the WHERE clause, not in a guard.
+    private static async Task<IResult> GetClientHistory(
+        Guid id,
+        [FromQuery(Name = "before")] DateTimeOffset? before,
+        [FromQuery(Name = "limit")] int? limit,
+        HttpContext http,
+        TrainerOsDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var trainer = http.GetCurrentUser()!;
+
+        var pageSize = limit ?? DefaultHistoryLimit;
+        if (pageSize <= 0 || pageSize > MaxHistoryLimit)
+        {
+            return Results.BadRequest(ApiError.Create(
+                "bad_request", $"limit must be between 1 and {MaxHistoryLimit}."));
+        }
+
+        var clientExists = await db.ClientsForTrainer(trainer.Id)
+            .AnyAsync(u => u.Id == id, cancellationToken);
+        if (!clientExists)
+        {
+            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
+        }
+
+        var query = db.LoggedSetsForTrainer(trainer.Id).Where(s => s.Session.ClientId == id);
+        if (before is { } cursor)
+        {
+            query = query.Where(s => s.LoggedAt < cursor);
+        }
+
+        var rows = await query
+            .OrderByDescending(s => s.LoggedAt)
+            .Take(pageSize)
+            .Select(s => new
+            {
+                s.Id,
+                s.SetNumber,
+                s.WeightKg,
+                s.Reps,
+                s.LoggedAt,
+                SessionId = s.Session.Id,
+                SessionPerformedOn = s.Session.PerformedOn,
+                SessionComment = s.Session.Comment,
+                SessionProgramDayId = s.Session.ProgramDayId,
+                s.ExerciseId,
+            })
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        // Second query rather than a per-row join, matching GET /api/me/history: two round
+        // trips, and the exercise index takes a page's-worth of keys in one WHERE id IN (…).
+        // Scoped to the trainer's own library, which is where these exercises are by
+        // construction — a client's sets can only name exercises their trainer prescribed.
+        var exerciseIds = rows.Select(r => r.ExerciseId).Distinct().ToList();
+        var exerciseNames = exerciseIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await db.ExercisesForTrainer(trainer.Id)
+                .Where(e => exerciseIds.Contains(e.Id))
+                .Select(e => new { e.Id, e.Name })
+                .AsNoTracking()
+                .ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken);
+
+        var items = rows.Select(r => new HistoryItem(
+            r.Id, r.SetNumber, r.WeightKg, r.Reps, r.LoggedAt,
+            new HistorySessionSummary(
+                r.SessionId, r.SessionPerformedOn, r.SessionComment, r.SessionProgramDayId),
+            new HistoryExerciseRef(r.ExerciseId, exerciseNames.GetValueOrDefault(r.ExerciseId, ""))
+        )).ToList();
+
+        var nextCursor = items.Count == pageSize ? items[^1].LoggedAt : (DateTimeOffset?)null;
+
+        return Results.Ok(new HistoryResponse(items, nextCursor));
     }
 
     // One sentence for both write paths, so a trainer sending a bad unit to POST and to PATCH
