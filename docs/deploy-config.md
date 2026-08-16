@@ -520,7 +520,7 @@ which never starts also never logs.
 ## App Service (API)
 - ConnectionStrings:Postgres
 - Resend:ApiKey
-- Resend:From  (noreply@traineros.me)
+- Resend:From  (TrainerOS <noreply@traineros.me>)
 - Notifications:PauseTokenKey  (must be IDENTICAL to the Function App's value)
 - App:BaseUrl = https://traineros.me  (the domain is bound — §Custom domain. Must stay identical to the Function App's copy: every magic link and reminder footer is built from it)
 - Seed__TrainerEmail / Seed__TrainerPassword  (first boot only; seeds the trainer)
@@ -531,7 +531,7 @@ which never starts also never logs.
 ## Function App
 - ConnectionStrings:Postgres
 - Resend:ApiKey 
-- Resend:From (noreply@traineros.me)
+- Resend:From (TrainerOS <noreply@traineros.me>)
 - Notifications:PauseTokenKey  (same value as App Service)
 - App:BaseUrl = https://traineros.me  (same value as the App Service — the two must never disagree: this host mints the pause links the API validates)
 - Queue Storage connection string
