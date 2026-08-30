@@ -1,6 +1,5 @@
 import type {
   ClientResponse,
-  ClientSessionResponse,
   ExerciseResponse,
   HistoryResponse,
   PrescriptionResponse,
@@ -200,13 +199,6 @@ export function updateClient(
 }
 
 /**
- * GET /api/clients/:id/sessions. Every session that client has ever logged, newest first.
- *
- * There is no limit parameter and no summary field on the roster, so this is also the only
- * way to answer "when did they last train" — see the Clients screen for what that costs and
- * when it stops being acceptable.
- */
-/**
  * GET /api/clients/:id/history. What a client actually lifted, for their trainer (#142).
  *
  * The same page shape GET /api/me/history returns, so `lib/history.ts`'s `groupSessions` works
@@ -232,11 +224,12 @@ export function fetchClientHistory(
   )
 }
 
-export function fetchClientSessions(clientId: string): Promise<ClientSessionResponse[]> {
-  return request<ClientSessionResponse[]>(
-    `/api/clients/${encodeURIComponent(clientId)}/sessions`,
-  )
-}
+// GET /api/clients/:id/sessions has no wrapper here any more (#115). The roster read it once
+// per client for the last-session date; that date is now a field on ClientResponse, computed
+// server-side, and #142 had already moved the client detail screen to /history. The route is
+// still mounted and still returns what it always did — deleting an endpoint is an API decision,
+// tracked separately — but nothing in the SPA calls it, so a wrapper here would be a function
+// with no caller that reads like a supported way in.
 
 /**
  * GET /api/programs. Every program this trainer owns, across all their clients.

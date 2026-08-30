@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type { ClientResponse } from '../api/types.gen'
-import { ApiError, createClient, fetchClientSessions, fetchClients, updateClient } from '../lib/api'
+import { ApiError, createClient, fetchClients, updateClient } from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
 import { looksLikeEmail } from '../lib/email'
 import { NO_VALUE } from '../lib/glyphs'
@@ -23,46 +23,39 @@ import {
 
 type Load = 'loading' | 'ready' | 'unreachable'
 
-/**
- * A client's most recent `performed_on`, or null for one who has never logged anything.
- *
- * Absent from the record means still in flight. Both of the other two render something
- * definite, which is why the screen never waits on any of them.
- */
-type LastSessions = Record<string, string | null>
-
 // ui-ux.md §Trainer screens, Clients: "list + add/deactivate; per-client: last session date
 // (the 'who's slacking' signal — the v1 stand-in for the deferred digest)". The trainer's
 // landing screen, and the first one built.
 //
-// ── The last-session date, and what it costs ───────────────────────────────────────────────
-// There is no roster field for it. GET /api/clients returns identity and is_active; the only
-// route that knows when someone last trained is GET /api/clients/:id/sessions. So N clients is
-// N requests, fired in parallel after the roster is already on screen.
+// ── The last-session date arrives with the roster (#115) ───────────────────────────────────
+// It used to be N separate requests, one per client, fired after the roster was already on
+// screen. The comment here used to defend that and name the price: GET /api/clients/:id/sessions
+// has no limit parameter and no summary field, so reading one date downloaded every session
+// that client had ever logged. That degrades with client *tenure* rather than roster size,
+// which is why it looked cheap at four clients and would not have stayed cheap.
 //
-// That is #46's shape and #46's argument, and it holds here for the same reasons: the requests
-// are parallel so the wall clock is one round trip rather than N, and nothing blocks on them —
-// the roster, the add form, and the deactivate controls all render from the first response, and
-// each cell starts on a dash and fills in. A trainer can add a client before any of them land.
+// ClientResponse now carries `lastSessionOn`, computed server-side as the max of that client's
+// performed_on. The effect, the request-dedupe ref and the parallel state map are all gone with
+// it, and so is the question they existed to answer.
 //
-// The honest cost, which is not the request count:
-//   * Each response is that client's *entire* session history. There is no limit parameter and
-//     no summary field, so reading one date downloads every session that client has ever
-//     logged. This degrades with client tenure, not with roster size — the axis nobody watches.
-//     Four clients a year in is a few hundred small rows; four clients five years in is not.
-//   * N queries per screen open, where one would do.
-// At v1 scale (one trainer, a handful of clients, months of history) both are fine, and neither
-// is worth an API change inside a web ticket. The fix when it stops being fine is one field —
-// last_session_on on ClientResponse, computed as a grouped max — which deletes this entire
-// effect and every request it makes. That is the moment to spend it, not before.
+// ── What that does to the three states, which is the part worth reading ────────────────────
+// The cell has always had three: not known yet, known to be never, and a date. #50 fixed their
+// meanings and the rule is that a *failed read must never render as "never trained"* — null is
+// a claim about the client, and a timeout is not evidence for it.
+//
+// That rule gets easier to keep here, not harder. There is one read now, so a failure is the
+// screen's failure: the roster renders "We couldn't load your clients" with a Try again, which
+// is louder and more honest than a row of dashes was. `null` narrows to meaning only what it
+// says.
+//
+// LastSession keeps its `undefined` branch anyway. The generated type is
+// `lastSessionOn?: string | null`, so absence stays reachable, and a component that folded it
+// into the null branch would render a missing field as "No sessions yet" — the same defect one
+// refactor later.
 export function ClientsScreen() {
   const [load, setLoad] = useState<Load>('loading')
   const [clients, setClients] = useState<ClientResponse[]>([])
-  const [lastSessions, setLastSessions] = useState<LastSessions>({})
   const [attempt, setAttempt] = useState(0)
-
-  /** Clients already asked about, so a re-render never re-requests. See the effect below. */
-  const requested = useRef(new Set<string>())
 
   useEffect(() => {
     let cancelled = false
@@ -85,49 +78,6 @@ export function ClientsScreen() {
       cancelled = true
     }
   }, [attempt])
-
-  // Fired once the roster is on screen, one request per client, none of them blocking anything.
-  // A dropped read of decision support is not worth an error banner on a screen whose job is
-  // the roster: a cell that never answers keeps its dash, which reads as "not known" and is
-  // exactly true.
-  useEffect(() => {
-    if (load !== 'ready') {
-      return
-    }
-
-    let cancelled = false
-    for (const client of clients) {
-      const id = client.id
-      // A ref, not the state this effect writes: keying the guard on `lastSessions` would make
-      // it a dependency, and the effect would re-run on every arrival to discover it has
-      // nothing left to do. The set only ever grows, so a re-run costs one pass over the
-      // roster.
-      if (id === undefined || requested.current.has(id)) {
-        continue
-      }
-      requested.current.add(id)
-
-      fetchClientSessions(id)
-        .then((sessions) => {
-          if (!cancelled) {
-            // Ordered by performed_on DESC by the endpoint, so the head is the answer.
-            setLastSessions((previous) => ({
-              ...previous,
-              [id]: sessions[0]?.performedOn ?? null,
-            }))
-          }
-        })
-        .catch(() => {
-          // Deliberately not recorded as null: null means "has never trained", which is a
-          // claim, and a failed request is not evidence for it. Left absent, so the cell keeps
-          // its dash rather than accusing someone of slacking on the strength of a timeout.
-        })
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [load, clients])
 
   function onAdded(client: ClientResponse) {
     // Inserted and re-sorted rather than appended: the endpoint orders by display name, and a
@@ -179,7 +129,7 @@ export function ClientsScreen() {
               No clients yet. Add one below, then tell them to log in with their email.
             </p>
           ) : (
-            <Roster clients={clients} lastSessions={lastSessions} onUpdated={onUpdated} />
+            <Roster clients={clients} onUpdated={onUpdated} />
           )}
 
           <AddClient onAdded={onAdded} />
@@ -214,11 +164,9 @@ export function ClientsScreen() {
 // yet", "Active") — except the loading dash, which gets an sr-only label below.
 function Roster({
   clients,
-  lastSessions,
   onUpdated,
 }: {
   clients: ClientResponse[]
-  lastSessions: LastSessions
   onUpdated: (client: ClientResponse) => void
 }) {
   const today = todayIn(undefined)
@@ -253,13 +201,7 @@ function Roster({
         className={`divide-y divide-edge border-y border-edge ${SUBGRID} sm:grid`}
       >
         {clients.map((client) => (
-          <ClientRow
-            client={client}
-            key={client.id}
-            lastSession={client.id === undefined ? undefined : lastSessions[client.id]}
-            onUpdated={onUpdated}
-            today={today}
-          />
+          <ClientRow client={client} key={client.id} onUpdated={onUpdated} today={today} />
         ))}
       </ul>
     </div>
@@ -320,12 +262,10 @@ const SUBGRID = 'sm:col-span-4 sm:grid-cols-subgrid'
 
 function ClientRow({
   client,
-  lastSession,
   onUpdated,
   today,
 }: {
   client: ClientResponse
-  lastSession: string | null | undefined
   onUpdated: (client: ClientResponse) => void
   today: string
 }) {
@@ -413,7 +353,10 @@ function ClientRow({
       </div>
 
       <div className="sm:justify-self-start">
-        <LastSession performedOn={lastSession} today={today} />
+        {/* Straight off the roster row since #115. `onUpdated` replaces this whole record
+            with the PATCH response, so the field has to be right on that response too — see
+            LastSessionFor in ClientEndpoints.cs for why that is not a detail. */}
+        <LastSession performedOn={client.lastSessionOn} today={today} />
       </div>
 
       <div className="text-sm text-ink sm:self-center sm:justify-self-start">
@@ -511,7 +454,15 @@ function LastSession({
   today: string
 }) {
   if (performedOn === undefined) {
-    // Still loading, or the request failed. One dash, and no claim either way.
+    // The field was not on the record. One dash, and no claim either way.
+    //
+    // Before #115 this was the common case — the date arrived in its own request, so a cell
+    // was undefined while that request was in flight and stayed undefined if it failed. Now the
+    // date rides in with the roster, so there is no in-flight state and a failed read takes the
+    // whole screen to its own error. What is left is the generated type: `lastSessionOn` is
+    // optional, so absence is still expressible, and it must not fall through to the null
+    // branch below. Rendering a field the server did not send as "No sessions yet" is #50's
+    // defect wearing a different cause.
     //
     // The sr-only half is what the dropped <th> used to provide. Every other value this
     // component renders says what it is ("3 days ago", "No sessions yet"); a bare dash in a

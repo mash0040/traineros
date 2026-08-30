@@ -54,10 +54,10 @@ Revokes current session row.
 
 | Method & path | Purpose | Notes |
 |---|---|---|
-| GET /api/clients | list clients | includes is_active |
+| GET /api/clients | list clients | includes is_active and last_session_on (the client's most recent performed_on, null if they have never trained) |
 | POST /api/clients | create client | body: email, display_name, timezone, weight_unit? ('kg'\|'lb', default 'lb'). Sends nothing; invite = trainer tells them to log in via magic link |
 | PATCH /api/clients/:id | edit / deactivate | body: display_name?, timezone?, is_active?, weight_unit?. is_active=false also disables their schedules (single transaction) |
-| GET /api/clients/:id/sessions | client's sessions (date, program day, comment) | no sets; powers the roster's last-session date |
+| GET /api/clients/:id/sessions | client's sessions (date, program day, comment) | no sets. **No consumer since #115**; deletion tracked as #147 |
 | GET /api/clients/:id/history?before=&limit= | client's logged sets, for their trainer | same shape as GET /api/me/history — flat sets, cursor pagination. Scoped through ClientsForTrainer *and* LoggedSetsForTrainer |
 | GET/POST /api/exercises, PATCH /api/exercises/:id | exercise library | delete = PATCH is_active=false (soft-delete per database.md) |
 | GET/POST /api/programs | list/create (client_id in body on create) | create enforces one-active-per-client via partial unique index; 409 on conflict |
@@ -67,6 +67,16 @@ Revokes current session row.
 | POST /api/programs/:id/days, PATCH/DELETE /api/days/:id | manage days | |
 | POST /api/days/:id/exercises, PATCH/DELETE /api/day-exercises/:id | manage prescriptions | position handling: client sends full ordered id list on reorder (PATCH /api/days/:id/order), server rewrites positions in one transaction. (Rejected: fractional/gap positions — clever, unnecessary at this scale.) |
 | GET/POST /api/clients/:id/schedule, PATCH /api/schedules/:id | reminder schedule | one schedule per client in v1 |
+
+(Recorded in #115: **`last_session_on` is a field on ClientResponse**, and the roster no longer reads GET /api/clients/:id/sessions at all. The problem it solves is not the request count. That route has no `limit` parameter and no summary field, so reading one date downloaded every session the client had ever logged — the cost grew with client *tenure* rather than roster size, which is the axis nobody watches, and which is why it looked free at four clients.
+
+**It is a correlated subquery, not a `GROUP BY`, and the difference is the index.** `workout_sessions` is indexed on `(client_id, performed_on DESC)` and on the #98 uniqueness triple, and on nothing that leads with `trainer_id`. So a literal `GROUP BY client_id` over the trainer's sessions would hash every session they own to produce one row per client, and would want a new index to stop. Correlated per roster row, the existing index is an exact fit: `client_id` is the leading column and Postgres rewrites `max()` over an indexed column into a backward index scan that stops at the first row. One index descent per client, no migration, no new index. "Grouped max" is the semantics; it is not the SQL.
+
+**PATCH computes it too, and that is the load-bearing part.** #50 settled that a failed session read must never render as "never trained": null is a claim about the client and a timeout is not evidence for it. That rule was written for the read path, and moving the field onto ClientResponse quietly relocates the risk to the write path — ClientsScreen folds a PATCH response back into the roster row wholesale, so a PATCH that answered `last_session_on: null` for convenience would flip a client who trained on Monday to "No sessions yet" the moment their trainer deactivated them. On screen that is indistinguishable from the app having lost her history. Both write paths therefore answer honestly: PATCH runs the same scoped query, POST returns null because a row inserted a moment ago genuinely has no sessions. Pinned by `Deactivating_a_client_does_not_report_them_as_never_having_trained`.
+
+The read-path distinction gets *stronger*, not weaker. There is one read now, so a failure is the screen's failure and renders as "We couldn't load your clients" with a Try again, rather than as a row of dashes nobody reads as an error. `null` narrows to meaning only what it says. The SPA keeps its third branch anyway, because the generated type is `lastSessionOn?: string | null` and a component that folded absence into null would render a missing field as a claim.
+
+**GET /api/clients/:id/sessions now has no consumer.** #142 moved the client detail screen to /history; the roster was the only other caller. It is a **deletion candidate**, tracked as #147 rather than removed here — removing a route is an API decision and this ticket scopes one field. Its SPA wrapper (`fetchClientSessions`) is gone, so nothing in the web app presents it as a supported way in.)
 
 (Recorded in #142: the trainer's view of a client's logged sets is its **own route** rather than sets nested into GET /api/clients/:id/sessions, because that route has a second consumer — the roster reads it once per client for the last-session date, and it already downloads every session a client has ever logged to render one. Nesting sets would multiply that by every set, for every client on the roster. /sessions is unchanged and keeps the roster as its one caller.
 

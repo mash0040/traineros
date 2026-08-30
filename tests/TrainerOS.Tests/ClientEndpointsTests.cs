@@ -301,6 +301,76 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.True(first.TryGetProperty("isActive", out _));
     }
 
+    // -- GET /api/clients: last_session_on (#115) --
+
+    [Fact]
+    public async Task Roster_carries_each_clients_most_recent_session_date()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await _app.Client.SendAsync(Request(HttpMethod.Get, "/api/clients", session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var rows = body.EnumerateArray().ToDictionary(e => e.GetProperty("id").GetGuid());
+
+        // Alice trained on the 18th and the 20th. The 20th is the answer, and asserting it
+        // rather than "some date" is what makes this a test of a max: the roster screen this
+        // replaces read the *head* of a DESC-ordered list, so a subquery that happened to
+        // return the wrong end would still have looked like it worked.
+        Assert.Equal("2026-07-20", rows[_app.ClientA1Id].GetProperty("lastSessionOn").GetString());
+    }
+
+    [Fact]
+    public async Task Roster_says_null_for_a_client_who_has_never_trained()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await _app.Client.SendAsync(Request(HttpMethod.Get, "/api/clients", session));
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var bob = body.EnumerateArray().Single(e => e.GetProperty("id").GetGuid() == _app.ClientA2Id);
+
+        // Present and null, not absent. #50: null is the claim "has never trained", and the
+        // screen renders it as a sentence. An absent key would be a different statement.
+        Assert.Equal(JsonValueKind.Null, bob.GetProperty("lastSessionOn").ValueKind);
+    }
+
+    [Fact]
+    public async Task Roster_never_reports_another_trainers_session_date()
+    {
+        // Carol belongs to trainer B and trained on the 21st, later than anything of A's. The
+        // subquery is scoped through WorkoutSessionsForTrainer as well as by client_id, so
+        // neither her row nor her date can reach this response.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await _app.Client.SendAsync(Request(HttpMethod.Get, "/api/clients", session));
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var rows = body.EnumerateArray().ToList();
+
+        Assert.DoesNotContain(rows, e => e.GetProperty("id").GetGuid() == _app.ClientB1Id);
+        Assert.DoesNotContain(rows, e => e.GetProperty("lastSessionOn").GetString() == "2026-07-21");
+    }
+
+    [Fact]
+    public async Task Deactivating_a_client_does_not_report_them_as_never_having_trained()
+    {
+        // The reason LastSessionFor exists. ClientsScreen folds a PATCH response back into the
+        // roster row wholesale, so a PATCH that answered null for convenience would turn
+        // "trained on the 20th" into "No sessions yet" at the moment of deactivation — #50's
+        // rule broken through the write path, and indistinguishable on screen from a UI bug.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+
+        var deactivated = await SendAsync(
+            HttpMethod.Patch, $"/api/clients/{_app.ClientA1Id}", session, new { isActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, deactivated.StatusCode);
+        var body = await deactivated.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(body.GetProperty("isActive").GetBoolean());
+        Assert.Equal("2026-07-20", body.GetProperty("lastSessionOn").GetString());
+
+        // Self-restoring, like the reactivation test below: the fixture is shared.
+        await SendAsync(HttpMethod.Patch, $"/api/clients/{_app.ClientA1Id}", session, new { isActive = true });
+    }
+
     // -- POST /api/clients --
 
     [Fact]
@@ -321,6 +391,9 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.Equal("new@example.com", body.GetProperty("email").GetString());
         Assert.Equal("New Client", body.GetProperty("displayName").GetString());
         Assert.True(body.GetProperty("isActive").GetBoolean());
+        // #115: null here is a fact rather than an unlooked-up default, which is why this is
+        // the one path that does not query for it. The row was inserted a moment ago.
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("lastSessionOn").ValueKind);
 
         var persisted = _app.WithDb(db =>
             db.ClientsForTrainer(_app.TrainerAId).AsNoTracking().Single(u => u.Id == newId));

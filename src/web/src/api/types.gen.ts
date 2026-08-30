@@ -27,6 +27,7 @@ export type ClientResponse = {
     weightUnit?: string | null;
     isActive?: boolean;
     createdAt?: string;
+    lastSessionOn?: string | null;
 };
 
 export type ClientSessionResponse = {
