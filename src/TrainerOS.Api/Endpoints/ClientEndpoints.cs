@@ -24,6 +24,9 @@ public static class ClientEndpoints
     public sealed record UpdateClientRequest(
         string? DisplayName, string? Timezone, bool? IsActive, string? WeightUnit);
 
+    // #115: LastSessionOn is a read-only projection, not a column. Null means "has never
+    // logged a workout", and it means only that — see LastSessionFor for why every path that
+    // builds this record has to compute it rather than pass null for convenience.
     public sealed record ClientResponse(
         Guid Id,
         string Email,
@@ -31,7 +34,8 @@ public static class ClientEndpoints
         string Timezone,
         string WeightUnit,
         bool IsActive,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt,
+        DateOnly? LastSessionOn);
 
     public sealed record ClientSessionResponse(
         Guid Id,
@@ -61,10 +65,32 @@ public static class ClientEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
+        // #115. The last-session date used to be N separate GETs of /clients/:id/sessions from
+        // the roster screen, each one downloading every session that client had ever logged to
+        // read one date off the head of it. The cost grew with client tenure rather than roster
+        // size, which is the axis nobody watches.
+        //
+        // ── Why a correlated subquery and not GROUP BY ──────────────────────────────────────
+        // The issue says "grouped max", which is the semantics; this is not the SQL that serves
+        // it best. A literal GROUP BY client_id over this trainer's sessions has no index to
+        // stand on — workout_sessions is indexed on (client_id, performed_on DESC) and on the
+        // #98 uniqueness triple, and on nothing that leads with trainer_id — so it would hash
+        // every session the trainer owns to produce one row per client, and it would want a new
+        // index to stop doing that.
+        //
+        // Correlated per roster row, the existing index is an exact fit: client_id is the
+        // leading column, and Postgres rewrites max() over an indexed column into a backward
+        // index scan that stops at the first row. One index descent per client, no new index,
+        // and the roster is a handful of rows.
+        var sessions = db.WorkoutSessionsForTrainer(trainer.Id);
+
         var rows = await db.ClientsForTrainer(trainer.Id)
             .OrderBy(u => u.DisplayName)
             .Select(u => new ClientResponse(
-                u.Id, u.Email, u.DisplayName, u.Timezone, u.WeightUnit, u.IsActive, u.CreatedAt))
+                u.Id, u.Email, u.DisplayName, u.Timezone, u.WeightUnit, u.IsActive, u.CreatedAt,
+                // Cast to nullable so a client who has never trained yields null instead of
+                // throwing on an empty sequence.
+                sessions.Where(s => s.ClientId == u.Id).Max(s => (DateOnly?)s.PerformedOn)))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
@@ -161,9 +187,12 @@ public static class ClientEndpoints
             return EmailTaken();
         }
 
+        // null without asking the database, and it is the one place that is honest: this row was
+        // inserted a moment ago and cannot have a session against it. Everywhere else, see
+        // LastSessionFor.
         var response = new ClientResponse(
             client.Id, client.Email, client.DisplayName, client.Timezone, client.WeightUnit,
-            client.IsActive, client.CreatedAt);
+            client.IsActive, client.CreatedAt, null);
         return Results.Created($"/api/clients/{client.Id}", response);
 
         static IResult EmailTaken() => Results.Json(
@@ -264,7 +293,8 @@ public static class ClientEndpoints
 
         var response = new ClientResponse(
             client.Id, client.Email, client.DisplayName, client.Timezone, client.WeightUnit,
-            client.IsActive, client.CreatedAt);
+            client.IsActive, client.CreatedAt,
+            await LastSessionFor(db, trainer.Id, client.Id, cancellationToken));
         return Results.Ok(response);
     }
 
@@ -386,6 +416,32 @@ public static class ClientEndpoints
 
         return Results.Ok(new HistoryResponse(items, nextCursor));
     }
+
+    /// <summary>
+    /// The one client's most recent <c>performed_on</c>, or null if they have never trained.
+    /// </summary>
+    ///
+    /// <remarks>
+    /// This exists because PATCH has to answer the question too, and the reason is a UI defect
+    /// rather than an API one. The roster screen folds a PATCH response straight back into the
+    /// row it came from, replacing it wholesale, so a PATCH that reported <c>lastSessionOn:
+    /// null</c> for convenience would flip a client who trained yesterday to "No sessions yet"
+    /// the moment their trainer deactivated them.
+    ///
+    /// That is #50's rule broken through the write path: null is a claim ("has never trained")
+    /// and a value the endpoint simply did not look up is not evidence for it. #50 settled this
+    /// for the read path, where a failed request must not render as never-trained; the same
+    /// distinction has to survive the field moving into ClientResponse, and the write path is
+    /// where it would quietly not.
+    ///
+    /// Same query as the roster's, scoped the same way: trainer_id through the extension,
+    /// client_id in the predicate, so the (client_id, performed_on DESC) index serves it.
+    /// </remarks>
+    private static Task<DateOnly?> LastSessionFor(
+        TrainerOsDbContext db, Guid trainerId, Guid clientId, CancellationToken cancellationToken)
+        => db.WorkoutSessionsForTrainer(trainerId)
+            .Where(s => s.ClientId == clientId)
+            .MaxAsync(s => (DateOnly?)s.PerformedOn, cancellationToken);
 
     // One sentence for both write paths, so a trainer sending a bad unit to POST and to PATCH
     // reads the same refusal. Worded identically to PATCH /api/me's, for the same reason the

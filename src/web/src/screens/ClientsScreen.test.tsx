@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ClientResponse, ClientSessionResponse } from '../api/types.gen'
+import type { ClientResponse } from '../api/types.gen'
 import { ClientsScreen } from './ClientsScreen'
 
 const ada: ClientResponse = {
@@ -13,6 +13,9 @@ const ada: ClientResponse = {
   timezone: 'America/Toronto',
   isActive: true,
   createdAt: '2026-01-01T00:00:00Z',
+  // #115: on the roster row, not in a second request. The clock below is pinned to 2026-08-03,
+  // so this is "3 days ago".
+  lastSessionOn: '2026-07-31',
 }
 
 const grace: ClientResponse = {
@@ -22,16 +25,9 @@ const grace: ClientResponse = {
   timezone: 'Europe/Berlin',
   isActive: true,
   createdAt: '2026-01-01T00:00:00Z',
-}
-
-function session(performedOn: string): ClientSessionResponse {
-  return {
-    id: `session-${performedOn}`,
-    performedOn,
-    programDayId: 'day-1',
-    comment: null,
-    createdAt: `${performedOn}T18:00:00Z`,
-  }
+  // Explicit null, which is the claim "has never trained". Distinct from the field being
+  // absent, which the screen must not render as this.
+  lastSessionOn: null,
 }
 
 describe('ClientsScreen', () => {
@@ -47,14 +43,9 @@ describe('ClientsScreen', () => {
     vi.restoreAllMocks()
   })
 
-  /**
-   * Routes each request by method and path, the way the real API would.
-   *
-   * Sessions default to "never trained" so a test only says what it cares about.
-   */
+  /** Routes each request by method and path, the way the real API would. */
   function mockApi(options: {
     clients?: ClientResponse[]
-    sessions?: Record<string, ClientSessionResponse[]>
     onPost?: (body: unknown) => Partial<Response>
     onPatch?: (id: string, body: unknown) => Partial<Response>
   }) {
@@ -71,11 +62,6 @@ describe('ClientsScreen', () => {
         const id = url.replace('/api/clients/', '')
         const answer = options.onPatch?.(id, JSON.parse(String(init.body)))
         return Promise.resolve({ ok: true, status: 200, json: async () => ({}), ...answer })
-      }
-
-      const sessionMatch = /^\/api\/clients\/([^/]+)\/sessions$/.exec(url)
-      if (sessionMatch !== null) {
-        return ok(options.sessions?.[sessionMatch[1]] ?? [])
       }
 
       return ok(options.clients ?? [])
@@ -231,18 +217,13 @@ describe('ClientsScreen', () => {
   it('shows how long ago each client last trained, which is the whole point of the column', async () => {
     // ui-ux.md calls this the "who's slacking" signal. A bare date makes the trainer do the
     // arithmetic; the age leads and the date backs it up.
-    mockApi({
-      clients: [ada, grace],
-      sessions: {
-        'client-ada': [session('2026-07-31'), session('2026-07-29')],
-        'client-grace': [],
-      },
-    })
+    mockApi({ clients: [ada, grace] })
     renderScreen()
 
-    // Awaited on the value rather than on the row: the row renders with the roster, and the
-    // date lands one request later.
-    expect(await screen.findByText('3 days ago')).toBeInTheDocument()
+    // Awaited on the name, not on the value. Since #115 the date arrives with the row rather
+    // than one request later, which is the change; waiting on the date would still pass if it
+    // came back to arriving late.
+    await screen.findByText('Ada')
 
     const adaRow = rowFor('Ada')
     expect(within(adaRow).getByText('3 days ago')).toBeInTheDocument()
@@ -253,61 +234,66 @@ describe('ClientsScreen', () => {
     expect(within(rowFor('Grace')).getByText('No sessions yet')).toBeInTheDocument()
   })
 
-  it('renders the roster before the last-session dates arrive', async () => {
-    // The N requests are decision support, not the screen. Blocking the roster on them would
-    // make adding a client wait for a column nobody is reading yet.
-    let releaseSessions: (value: ClientSessionResponse[]) => void = () => {}
-    const pending = new Promise<ClientSessionResponse[]>((keep) => {
-      releaseSessions = keep
-    })
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) =>
-        url.endsWith('/sessions')
-          ? Promise.resolve({ ok: true, status: 200, json: async () => pending })
-          : Promise.resolve({ ok: true, status: 200, json: async () => [ada] }),
-      ),
-    )
+  it('reads the date off the roster row and never asks for a session list', async () => {
+    // #115. The date used to be one GET /api/clients/:id/sessions per client, each response
+    // that client's entire history, to read one value off the head of it. If a request to that
+    // route reappears here, the payload-growth problem has come back with it.
+    const fetchMock = mockApi({ clients: [ada, grace] })
     renderScreen()
 
-    expect(await screen.findByText('Ada')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add a client' })).toBeInTheDocument()
+    await screen.findByText('Ada')
+    expect(screen.getByText('3 days ago')).toBeInTheDocument()
 
-    releaseSessions([session('2026-08-02')])
-    expect(await screen.findByText('Yesterday')).toBeInTheDocument()
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls).toEqual(['/api/clients'])
   })
 
-  it('leaves the cell blank rather than claiming a client has never trained when the read fails', async () => {
-    // A dropped request is not evidence of anything. Writing "No sessions yet" here would
-    // accuse someone of slacking on the strength of a timeout.
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) =>
-        url.endsWith('/sessions')
-          ? Promise.reject(new TypeError('Failed to fetch'))
-          : Promise.resolve({ ok: true, status: 200, json: async () => [ada] }),
-      ),
-    )
+  it('never claims a client has never trained when the read failed', async () => {
+    // #50's rule, and it survives the date moving onto the roster response. A failed read is not
+    // evidence that someone has not trained. It used to be a per-client request, so a failure
+    // left one cell on a dash; now it is the roster's own read, so the screen says so out loud,
+    // which is louder and more honest. What must not happen either way is "No sessions yet".
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
     renderScreen()
 
-    expect(await screen.findByText('Ada')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument()
     expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument()
-    // And the roster itself is unharmed.
-    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/ago$/)).not.toBeInTheDocument()
   })
 
-  it('asks one question per client and no more, however often it re-renders', async () => {
-    const fetchMock = mockApi({
-      clients: [ada, grace],
-      sessions: { 'client-ada': [session('2026-08-01')], 'client-grace': [] },
+  it('does not render a client as never-trained when the field is missing entirely', async () => {
+    // The generated type marks lastSessionOn optional, so absence stays expressible. Folding it
+    // into the null branch would render a field the server did not send as a claim about the
+    // client, which is the same defect as the one above with a different cause.
+    const { lastSessionOn: _omitted, ...noField } = ada
+    mockApi({ clients: [noField] })
+    renderScreen()
+
+    await screen.findByText('Ada')
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument()
+    expect(screen.getByText('Last session not known')).toBeInTheDocument()
+  })
+
+  it('keeps the last-session date when a client is deactivated', async () => {
+    // The write-path half of #50, and the reason ClientEndpoints computes lastSessionOn on the
+    // PATCH response as well as on the roster read. This screen folds the response back into the
+    // row wholesale, so a PATCH that answered null for convenience would turn "3 days ago" into
+    // "No sessions yet" at the moment of deactivation, which on screen is indistinguishable from
+    // the app having lost her history.
+    mockApi({
+      clients: [ada],
+      onPatch: () => ({ json: async () => ({ ...ada, isActive: false }) }),
     })
     renderScreen()
 
-    await screen.findByText('2 days ago')
+    // 'Deactivate Ada' is the row's trigger (#135 put the name in the accessible name); plain
+    // 'Deactivate' is the confirming answer to the prompt it raises.
+    await userEvent.click(await screen.findByRole('button', { name: 'Deactivate Ada' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Deactivate' }))
 
-    const sessionCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sessions'))
-    expect(sessionCalls).toHaveLength(2)
+    await screen.findByText(/is deactivated/)
+    expect(within(rowFor('Ada')).getByText('3 days ago')).toBeInTheDocument()
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument()
   })
 
   it('adds a client and says plainly that no email was sent', async () => {
