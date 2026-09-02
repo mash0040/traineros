@@ -37,3 +37,5 @@ Thumbs.db
 
 *.zip
 publish-func/
+.claude/skills/impeccable/
+.claude/settings.local.json
