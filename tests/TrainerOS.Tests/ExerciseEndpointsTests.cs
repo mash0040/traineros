@@ -266,8 +266,12 @@ public class ExerciseEndpointsTests : IClassFixture<ExerciseEndpointsTestApp>
     }
 
     [Fact]
-    public async Task Create_defaults_optional_fields_to_null_when_omitted_or_blank()
+    public async Task Create_stores_null_for_omitted_optional_fields_and_the_string_it_is_sent()
     {
+        // #145 retired #26's blank-string sentinel on the create path too, for the reason it
+        // retired it on PATCH: leaving it here would make "" mean nothing on POST and an empty
+        // string on PATCH, which is the same split one layer down. Null still means no value;
+        // whitespace is trimmed, because trimming is normalization rather than a sentinel.
         var session = await _app.SignInAsync(_app.TrainerAId);
         var response = await SendAsync(HttpMethod.Post, "/api/exercises", session, new
         {
@@ -282,7 +286,7 @@ public class ExerciseEndpointsTests : IClassFixture<ExerciseEndpointsTestApp>
 
         var persisted = _app.WithDb(db =>
             db.ExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == newId));
-        Assert.Null(persisted.VideoUrl);
+        Assert.Equal("", persisted.VideoUrl);
         Assert.Null(persisted.Cues);
     }
 
@@ -363,12 +367,53 @@ public class ExerciseEndpointsTests : IClassFixture<ExerciseEndpointsTestApp>
     }
 
     [Fact]
-    public async Task Patch_with_blank_video_url_clears_to_null()
+    public async Task Patch_with_explicit_null_video_url_clears_it()
     {
-        // The only escape hatch for wiping a nullable field via PATCH — null on the wire
-        // means "not sent", so blank-string-to-null is how a trainer removes a video link.
+        // #145. Replaces the #26 blank-string sentinel: null on the wire is now the one way to
+        // clear a nullable column, on every type rather than only on strings.
         var session = await _app.SignInAsync(_app.TrainerAId);
         var created = await CreateExerciseAsync(session, "Clearable", "https://youtu.be/clear", null);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/exercises/{created}", session, new
+        {
+            videoUrl = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == created));
+        Assert.Null(persisted.VideoUrl);
+    }
+
+    [Fact]
+    public async Task Patch_omitting_video_url_leaves_it_alone()
+    {
+        // The other half, and the half that makes the first one safe. Absent and explicit-null
+        // are different documents and now mean different things; before #145 they were the same
+        // value by the time a handler saw them.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var created = await CreateExerciseAsync(session, "Keeps Link", "https://youtu.be/keep", null);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/exercises/{created}", session, new
+        {
+            cues = "only this",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == created));
+        Assert.Equal("https://youtu.be/keep", persisted.VideoUrl);
+        Assert.Equal("only this", persisted.Cues);
+    }
+
+    [Fact]
+    public async Task Patch_with_blank_video_url_stores_an_empty_string()
+    {
+        // #26's sentinel is retired, so "" means itself. That is a capability rather than a
+        // side effect: a trainer who wants a deliberately empty cue can now have one, and it is
+        // distinguishable from an absent cue. Before this there was no way to store either.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var created = await CreateExerciseAsync(session, "Blank Not Null", "https://youtu.be/x", null);
 
         var response = await SendAsync(HttpMethod.Patch, $"/api/exercises/{created}", session, new
         {
@@ -378,7 +423,26 @@ public class ExerciseEndpointsTests : IClassFixture<ExerciseEndpointsTestApp>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = _app.WithDb(db =>
             db.ExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == created));
-        Assert.Null(persisted.VideoUrl);
+        Assert.Equal("", persisted.VideoUrl);
+    }
+
+    [Fact]
+    public async Task Patch_with_explicit_null_name_is_400()
+    {
+        // name backs a NOT NULL column, so null asks for something the column cannot hold.
+        // Refused rather than silently ignored, which is what it was before #145.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var created = await CreateExerciseAsync(session, "Named", null, null);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/exercises/{created}", session, new
+        {
+            name = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == created));
+        Assert.Equal("Named", persisted.Name);
     }
 
     private async Task<Guid> CreateExerciseAsync(Guid session, string name, string? videoUrl, string? cues)

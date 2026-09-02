@@ -13,7 +13,8 @@ namespace TrainerOS.Api.Endpoints;
 public static class ExerciseEndpoints
 {
     public sealed record CreateExerciseRequest(string? Name, string? VideoUrl, string? Cues);
-    public sealed record UpdateExerciseRequest(string? Name, string? VideoUrl, string? Cues, bool? IsActive);
+    public sealed record UpdateExerciseRequest(
+        Patch<string> Name, Patch<string> VideoUrl, Patch<string> Cues, Patch<bool> IsActive);
 
     public sealed record ExerciseResponse(
         Guid Id,
@@ -69,8 +70,8 @@ public static class ExerciseEndpoints
             Id = Guid.NewGuid(),
             TrainerId = trainer.Id,
             Name = name,
-            VideoUrl = NullIfBlank(body.VideoUrl),
-            Cues = NullIfBlank(body.Cues),
+            VideoUrl = body.VideoUrl?.Trim(),
+            Cues = body.Cues?.Trim(),
             IsActive = true,
             CreatedAt = clock.GetUtcNow(),
         };
@@ -90,10 +91,16 @@ public static class ExerciseEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
+        // #145: name backs a NOT NULL column, so an explicit null is a request to do something
+        // impossible and is refused rather than silently ignored.
         string? newName = null;
-        if (body.Name is not null)
+        if (body.Name.IsNull)
         {
-            newName = body.Name.Trim();
+            return Results.BadRequest(ApiError.Create("bad_request", "name cannot be null."));
+        }
+        if (body.Name.HasValue(out var sentName))
+        {
+            newName = sentName.Trim();
             if (string.IsNullOrEmpty(newName))
             {
                 return Results.BadRequest(ApiError.Create("bad_request", "name cannot be blank."));
@@ -112,22 +119,27 @@ public static class ExerciseEndpoints
             exercise.Name = newName;
         }
 
-        // Optional-nullable field convention: absent/null = leave alone; empty string = clear
-        // to NULL. There is no way to distinguish "not sent" from "explicit null" in a record
-        // binding, so blank-as-clear is the only escape hatch for wiping a video_url or cues.
-        if (body.VideoUrl is not null)
+        // #145: absent leaves alone, null clears. #26's blank-string-clears sentinel is retired
+        // — it only ever worked for strings, which is why weight_kg, rest_seconds and starts_on
+        // had no clear path at all, and keeping it would make "" and null two spellings of one
+        // thing on five fields and nowhere else. "" is now an ordinary value.
+        if (body.VideoUrl.IsPresent)
         {
-            exercise.VideoUrl = NullIfBlank(body.VideoUrl);
+            exercise.VideoUrl = body.VideoUrl.Value;
         }
 
-        if (body.Cues is not null)
+        if (body.Cues.IsPresent)
         {
-            exercise.Cues = NullIfBlank(body.Cues);
+            exercise.Cues = body.Cues.Value;
         }
 
-        if (body.IsActive is not null)
+        if (body.IsActive.IsNull)
         {
-            exercise.IsActive = body.IsActive.Value;
+            return Results.BadRequest(ApiError.Create("bad_request", "is_active cannot be null."));
+        }
+        if (body.IsActive.HasValue(out var isActive))
+        {
+            exercise.IsActive = isActive;
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -138,10 +150,4 @@ public static class ExerciseEndpoints
     private static ExerciseResponse ToResponse(Exercise exercise) => new(
         exercise.Id, exercise.Name, exercise.VideoUrl, exercise.Cues, exercise.IsActive, exercise.CreatedAt);
 
-    private static string? NullIfBlank(string? value)
-    {
-        if (value is null) return null;
-        var trimmed = value.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-    }
 }

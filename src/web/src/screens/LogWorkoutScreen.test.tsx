@@ -1653,26 +1653,29 @@ describe('LogWorkoutScreen', () => {
     expect(squat.getByRole('button', { name: /^Set 1, 185 pounds by 8 reps/ })).toBeInTheDocument()
   })
 
-  it('refuses to clear a weight to bodyweight, naming the way round it', async () => {
-    // PATCH reads weight_kg: null as "leave it alone" rather than "clear it", which
-    // MeSessionEndpoints records as deliberate for v1. Sent anyway, the request would succeed
-    // and change nothing, and she would watch the old number come back.
+  it('corrects a weighted set to bodyweight by emptying the weight field', async () => {
+    // #145. This test asserted the opposite until the route could tell an absent field from an
+    // explicitly null one: the screen refused the edit and told her to delete the set and log it
+    // again, which is the workaround #107's editor exists to remove. An emptied weight is now a
+    // null on the wire and the server clears the column.
     const fetchMock = mockApi()
     const squat = await startEditing()
 
     await userEvent.clear(squat.getByLabelText('Set 1 weight in kilograms'))
     await userEvent.click(squat.getByRole('button', { name: 'Save changes' }))
 
-    expect(await squat.findByRole('alert')).toHaveTextContent(
-      'remove the set and log it again without a weight',
-    )
-    expect(callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)).toHaveLength(0)
+    const patches = callsTo(fetchMock, 'PATCH', /\/api\/me\/sets\//)
+    expect(patches).toHaveLength(1)
+    // Explicitly null rather than omitted, which is the whole distinction: omitting it would
+    // leave the 100 kg in place and look identical from here. `toHaveProperty` rather than a
+    // truthiness check, because an absent key would satisfy `== null` and that is the exact
+    // confusion this ticket exists to end.
+    expect(patches[0].body).toHaveProperty('weightKg', null)
   })
 
   it('lets a bodyweight set have its reps corrected', async () => {
-    // The mirror of the case above, and the reason the refusal is scoped to sets that *have* a
-    // weight: here the field is empty because the set is bodyweight, null means "leave alone",
-    // and leaving null alone is exactly right.
+    // The mirror of the case above. It used to be the case the refusal was scoped *around*;
+    // now it is simply the same path with nothing to clear, since the column is already null.
     const fetchMock = mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })

@@ -19,7 +19,8 @@ namespace TrainerOS.Api.Endpoints;
 public static class NotificationScheduleEndpoints
 {
     public sealed record CreateScheduleRequest(TimeOnly? SendTime, int[]? DaysOfWeek, bool? Enabled);
-    public sealed record UpdateScheduleRequest(TimeOnly? SendTime, int[]? DaysOfWeek, bool? Enabled);
+    public sealed record UpdateScheduleRequest(
+        Patch<TimeOnly> SendTime, Patch<int[]> DaysOfWeek, Patch<bool> Enabled);
 
     public sealed record ScheduleResponse(
         Guid Id, Guid ClientId, string Kind, TimeOnly SendTime, int[] DaysOfWeek, bool Enabled);
@@ -131,7 +132,25 @@ public static class NotificationScheduleEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
-        if (body.DaysOfWeek is not null && ValidateDaysOfWeek(body.DaysOfWeek) is { } daysError)
+        // #145: all three back NOT NULL columns. days_of_week being an array changes
+        // nothing — an empty array is still not a null one, so what is refused here is clearing
+        // the column, not sending an empty list, which ValidateDaysOfWeek already rejects.
+        if (PatchRequests.RejectNull(body.SendTime, "send_time") is { } sendTimeNull)
+        {
+            return sendTimeNull;
+        }
+
+        if (PatchRequests.RejectNull(body.DaysOfWeek, "days_of_week") is { } daysNull)
+        {
+            return daysNull;
+        }
+
+        if (PatchRequests.RejectNull(body.Enabled, "enabled") is { } enabledNull)
+        {
+            return enabledNull;
+        }
+
+        if (body.DaysOfWeek.HasValue(out var sentDays) && ValidateDaysOfWeek(sentDays) is { } daysError)
         {
             return Results.BadRequest(daysError);
         }
@@ -143,19 +162,19 @@ public static class NotificationScheduleEndpoints
             return Results.NotFound(ApiError.Create("not_found", "Not Found"));
         }
 
-        if (body.SendTime is not null)
+        if (body.SendTime.HasValue(out var sendTime))
         {
-            schedule.SendTime = body.SendTime.Value;
+            schedule.SendTime = sendTime;
         }
 
-        if (body.DaysOfWeek is not null)
+        if (body.DaysOfWeek.HasValue(out var days))
         {
-            schedule.DaysOfWeek = NormalizeDays(body.DaysOfWeek);
+            schedule.DaysOfWeek = NormalizeDays(days);
         }
 
-        if (body.Enabled is not null)
+        if (body.Enabled.HasValue(out var enabled))
         {
-            schedule.Enabled = body.Enabled.Value;
+            schedule.Enabled = enabled;
         }
 
         await db.SaveChangesAsync(cancellationToken);

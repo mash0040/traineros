@@ -22,7 +22,7 @@ public static class ClientEndpoints
         string? Email, string? DisplayName, string? Timezone, string? WeightUnit);
 
     public sealed record UpdateClientRequest(
-        string? DisplayName, string? Timezone, bool? IsActive, string? WeightUnit);
+        Patch<string> DisplayName, Patch<string> Timezone, Patch<bool> IsActive, Patch<string> WeightUnit);
 
     // #115: LastSessionOn is a read-only projection, not a column. Null means "has never
     // logged a workout", and it means only that — see LastSessionFor for why every path that
@@ -209,15 +209,37 @@ public static class ClientEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
-        var displayName = body.DisplayName?.Trim();
-        var timezone = body.Timezone?.Trim();
+        // #145: every field on this body backs a NOT NULL column, so none of them can be
+        // cleared and an explicit null on any is refused rather than read as "leave alone".
+        if (PatchRequests.RejectNull(body.DisplayName, "display_name") is { } displayNameNull)
+        {
+            return displayNameNull;
+        }
 
-        if (body.DisplayName is not null && string.IsNullOrEmpty(displayName))
+        if (PatchRequests.RejectNull(body.Timezone, "timezone") is { } timezoneNull)
+        {
+            return timezoneNull;
+        }
+
+        if (PatchRequests.RejectNull(body.IsActive, "is_active") is { } isActiveNull)
+        {
+            return isActiveNull;
+        }
+
+        if (PatchRequests.RejectNull(body.WeightUnit, "weight_unit") is { } weightUnitNull)
+        {
+            return weightUnitNull;
+        }
+
+        string? displayName = body.DisplayName.HasValue(out var sentName) ? sentName.Trim() : null;
+        string? timezone = body.Timezone.HasValue(out var sentZone) ? sentZone.Trim() : null;
+
+        if (body.DisplayName.IsPresent && string.IsNullOrEmpty(displayName))
         {
             return Results.BadRequest(ApiError.Create("bad_request", "display_name cannot be blank."));
         }
 
-        if (body.Timezone is not null)
+        if (body.Timezone.IsPresent)
         {
             if (string.IsNullOrEmpty(timezone))
             {
@@ -236,9 +258,9 @@ public static class ClientEndpoints
         // ordering problem — whoever wrote last is right, because both of them are answering
         // the same question about the same person.
         string? weightUnit = null;
-        if (body.WeightUnit is not null)
+        if (body.WeightUnit.HasValue(out var sentUnit))
         {
-            weightUnit = WeightUnits.Normalize(body.WeightUnit);
+            weightUnit = WeightUnits.Normalize(sentUnit);
             if (weightUnit is null)
             {
                 return Results.BadRequest(InvalidWeightUnit());
@@ -252,7 +274,7 @@ public static class ClientEndpoints
             return Results.NotFound(ApiError.Create("not_found", "Not Found"));
         }
 
-        var deactivating = body.IsActive == false && client.IsActive;
+        var deactivating = body.IsActive.HasValue(out var wantsActive) && !wantsActive && client.IsActive;
 
         // AC: is_active=false also disables notification schedules in a single transaction.
         // Ordinary edits skip the transaction — the user update alone is atomic.
@@ -270,9 +292,9 @@ public static class ClientEndpoints
             client.Timezone = timezone;
         }
 
-        if (body.IsActive is not null)
+        if (body.IsActive.HasValue(out var isActive))
         {
-            client.IsActive = body.IsActive.Value;
+            client.IsActive = isActive;
         }
 
         if (weightUnit is not null)

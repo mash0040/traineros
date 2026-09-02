@@ -59,6 +59,9 @@ public static class ApiConventions
             options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
             options.SerializerOptions.Converters.Add(new UtcDateTimeConverter());
             options.SerializerOptions.Converters.Add(new UtcDateTimeOffsetConverter());
+            // #145: lets a PATCH body tell an absent field from one explicitly sent as null.
+            // See Patch.cs — the distinction is already in the JSON; this stops discarding it.
+            options.SerializerOptions.Converters.Add(new PatchConverterFactory());
         });
 
         // Body-binding failures must surface as exceptions in every environment (not just

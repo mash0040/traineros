@@ -327,22 +327,108 @@ public class MeSetPatchTests : IClassFixture<MeSetPatchTestApp>
         Assert.Equal(12, persisted.Reps);            // updated
     }
 
-    [Theory]
-    [InlineData(0, null, 5)]     // set_number zero
-    [InlineData(-1, null, 5)]    // set_number negative
-    [InlineData(null, null, 0)]  // reps zero
-    [InlineData(null, null, -3)] // reps negative
-    [InlineData(null, -1.0, 5)]  // weight negative
-    public async Task Patch_rejects_invalid_fields_with_400(int? setNumber, double? weight, int? reps)
+    [Fact]
+    public async Task Patch_with_null_weight_clears_the_set_to_bodyweight()
     {
+        // #145's own case. The seeded set is 100 kg; a client correcting it to bodyweight sends
+        // weight_kg: null, and until now that request succeeded and changed nothing. The log
+        // screen refused the edit itself and told her to delete and re-log it, which is the
+        // workaround #107's editor was built to remove.
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/me/sets/{setId}", session, new
+        {
+            weightKg = (decimal?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.LoggedSetsForClient(_app.ClientAId).AsNoTracking().Single(s => s.Id == setId));
+        // Null, emphatically not 0m. The first cut of Patch<T> derived "is this null" from the
+        // value, which for a value type collapses an explicit null to default(T) — so clearing
+        // a weight would have written 0 kg and looked like it worked.
+        Assert.Null(persisted.WeightKg);
+        Assert.Equal(8, persisted.Reps);
+    }
+
+    [Fact]
+    public async Task Patch_omitting_weight_leaves_it_alone()
+    {
+        // The half that makes the clear above safe, and the distinction that did not exist
+        // before #145: absent and explicit-null were one value by the time the handler saw them.
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/me/sets/{setId}", session, new
+        {
+            reps = 6,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.LoggedSetsForClient(_app.ClientAId).AsNoTracking().Single(s => s.Id == setId));
+        Assert.Equal(100m, persisted.WeightKg);
+        Assert.Equal(6, persisted.Reps);
+    }
+
+    [Theory]
+    [InlineData("set_number", "{\"setNumber\": null}")]
+    [InlineData("reps", "{\"reps\": null}")]
+    public async Task Patch_with_null_on_a_not_null_column_is_400(string field, string body)
+    {
+        // set_number and reps back NOT NULL columns, so null asks for something impossible.
+        // Refused rather than silently ignored, which is what it was before #145 — and, before
+        // Patch<T> tracked nullness explicitly, it would have written a 0 instead.
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var request = Request(HttpMethod.Patch, $"/api/me/sets/{setId}", session);
+        request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        var response = await _app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(field, problem.GetProperty("error").GetProperty("message").GetString());
+
+        var persisted = _app.WithDb(db =>
+            db.LoggedSetsForClient(_app.ClientAId).AsNoTracking().Single(s => s.Id == setId));
+        Assert.Equal(1, persisted.SetNumber);
+        Assert.Equal(8, persisted.Reps);
+    }
+
+    [Theory]
+    [InlineData(0, 5)]      // set_number zero
+    [InlineData(-1, 5)]     // set_number negative
+    [InlineData(2, 0)]      // reps zero
+    [InlineData(2, -3)]     // reps negative
+    public async Task Patch_rejects_out_of_range_fields_with_400(int setNumber, int reps)
+    {
+        // Rewritten by #145. The rows used to carry nulls in the fields they were not testing,
+        // which was fine while null meant "leave alone" and is not now: a null set_number is
+        // itself a 400, so half these rows would have passed for a reason other than the one
+        // their comment names. Every field is now a real value and only the named one is bad.
         var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
         var session = await _app.SignInAsync(_app.ClientAId);
 
         var response = await SendAsync(HttpMethod.Patch, $"/api/me/sets/{setId}", session, new
         {
             setNumber,
-            weightKg = weight is null ? (decimal?)null : (decimal)weight.Value,
             reps,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Patch_rejects_a_negative_weight_with_400()
+    {
+        var setId = _app.SeedSetForClientA(FakeClock.BaseNow);
+        var session = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/me/sets/{setId}", session, new
+        {
+            weightKg = -1.0m,
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

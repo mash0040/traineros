@@ -251,9 +251,10 @@ describe('ExercisesScreen', () => {
     })
   })
 
-  it('clears a video URL by emptying the field, which the blank-means-null rule allows', async () => {
-    // #26's escape hatch is the only way to wipe a nullable field, since an omitted key means
-    // "leave alone". If the edit form dropped empty strings, the video link would be one-way.
+  it('clears a video URL by emptying the field, which now sends null', async () => {
+    // #145: an emptied field is sent as null, which is what clears it. Under #26 the form sent
+    // '' and the server read that as the clear; '' now means an empty string, so a form that
+    // still sent it would store one and the video link would never come off.
     const fetchMock = mockApi({
       library: [squat],
       onPatch: (id, body) => ({
@@ -268,7 +269,7 @@ describe('ExercisesScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     expect(await screen.findByRole('button', { name: 'Edit Back Squat' })).toBeInTheDocument()
-    expect(lastPatchBody(fetchMock)).toMatchObject({ videoUrl: '' })
+    expect(lastPatchBody(fetchMock)).toMatchObject({ videoUrl: null })
     expect(screen.queryByRole('link', { name: /Watch demo/ })).not.toBeInTheDocument()
   })
 

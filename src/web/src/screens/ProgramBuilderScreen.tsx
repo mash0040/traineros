@@ -16,6 +16,7 @@ import {
   deleteProgram,
   fetchExercises,
   fetchProgram,
+  orNull,
   reorderDayExercises,
   updateDay,
   updatePrescription,
@@ -1057,10 +1058,12 @@ function Prescription({
       const updated = await updatePrescription(prescription.id, {
         targetSets: sets,
         targetReps: targetReps.trim(),
-        // Blank clears to NULL, which is exactly what an emptied field should mean.
-        targetLoad: targetLoad.trim(),
+        // #145: an emptied field is null on the wire and the server clears it. restSeconds was
+        // already being sent this way and was silently ignored — emptying the rest interval put
+        // the old value straight back, with no error and nothing to explain it.
+        targetLoad: orNull(targetLoad),
         restSeconds: restValue,
-        note: note.trim(),
+        note: orNull(note),
       })
 
       onChanged({

@@ -25,10 +25,10 @@ public static class ProgramEndpoints
         string? Notes);
 
     public sealed record UpdateProgramRequest(
-        string? Title,
-        string? Status,
-        DateOnly? StartsOn,
-        string? Notes);
+        Patch<string> Title,
+        Patch<string> Status,
+        Patch<DateOnly> StartsOn,
+        Patch<string> Notes);
 
     public sealed record ProgramResponse(
         Guid Id,
@@ -144,7 +144,7 @@ public static class ProgramEndpoints
             Title = title,
             Status = status,
             StartsOn = body.StartsOn,
-            Notes = NullIfBlank(body.Notes),
+            Notes = body.Notes?.Trim(),
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -286,20 +286,33 @@ public static class ProgramEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
-        string? newTitle = null;
-        if (body.Title is not null)
+        // #145: title and status back NOT NULL columns and cannot be cleared. starts_on and
+        // notes are nullable, so null on those two is a legal request to clear them — which is
+        // what this issue exists for, starts_on having had no clear path at all before now.
+        if (PatchRequests.RejectNull(body.Title, "title") is { } titleNull)
         {
-            newTitle = body.Title.Trim();
+            return titleNull;
+        }
+
+        if (PatchRequests.RejectNull(body.Status, "status") is { } statusNull)
+        {
+            return statusNull;
+        }
+
+        string? newTitle = null;
+        if (body.Title.HasValue(out var sentTitle))
+        {
+            newTitle = sentTitle.Trim();
             if (string.IsNullOrEmpty(newTitle))
             {
                 return Results.BadRequest(ApiError.Create("bad_request", "title cannot be blank."));
             }
         }
 
-        if (body.Status is not null && !ProgramStatuses.IsValid(body.Status))
+        if (body.Status.HasValue(out var sentStatus) && !ProgramStatuses.IsValid(sentStatus))
         {
             return Results.BadRequest(ApiError.Create(
-                "bad_request", $"'{body.Status}' is not a valid status."));
+                "bad_request", $"'{sentStatus}' is not a valid status."));
         }
 
         var program = await db.ProgramsForTrainer(trainer.Id)
@@ -314,23 +327,25 @@ public static class ProgramEndpoints
             program.Title = newTitle;
         }
 
-        if (body.Status is not null)
+        if (body.Status.HasValue(out var status))
         {
-            program.Status = body.Status;
+            program.Status = status;
         }
 
-        // StartsOn on the wire: null = leave alone (no clear path in v1; AC is silent
-        // and a "clear the date" flow isn't in scope).
-        if (body.StartsOn is not null)
+        // #145. This used to read "null = leave alone (no clear path in v1)", which is the gap
+        // that issue was opened for on the other route: a start date could be set and never
+        // removed. Absent still leaves it alone; null clears it.
+        if (body.StartsOn.IsPresent)
         {
-            program.StartsOn = body.StartsOn;
+            program.StartsOn = body.StartsOn.Nullable();
         }
 
-        // Notes: blank-string-as-null, mirroring the exercises PATCH convention so the
-        // trainer has an escape hatch for wiping the field.
-        if (body.Notes is not null)
+        // Trim stays, the null-conversion goes. Trimming is normalization the API does on every
+        // string; #26's blank-string-as-null was a sentinel, and retiring it is what lets ""
+        // mean an empty note rather than an absent one.
+        if (body.Notes.IsPresent)
         {
-            program.Notes = NullIfBlank(body.Notes);
+            program.Notes = body.Notes.Value?.Trim();
         }
 
         program.UpdatedAt = clock.GetUtcNow();
@@ -454,10 +469,4 @@ public static class ProgramEndpoints
         ApiError.Create("program_has_history", message),
         statusCode: StatusCodes.Status409Conflict);
 
-    private static string? NullIfBlank(string? value)
-    {
-        if (value is null) return null;
-        var trimmed = value.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-    }
 }

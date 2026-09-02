@@ -22,12 +22,12 @@ public static class ProgramDayExerciseEndpoints
         string? Note);
 
     public sealed record UpdatePrescriptionRequest(
-        Guid? ExerciseId,
-        int? TargetSets,
-        string? TargetReps,
-        string? TargetLoad,
-        int? RestSeconds,
-        string? Note);
+        Patch<Guid> ExerciseId,
+        Patch<int> TargetSets,
+        Patch<string> TargetReps,
+        Patch<string> TargetLoad,
+        Patch<int> RestSeconds,
+        Patch<string> Note);
 
     public sealed record PrescriptionResponse(
         Guid Id,
@@ -126,9 +126,9 @@ public static class ProgramDayExerciseEndpoints
             Position = nextPosition,
             TargetSets = targetSets,
             TargetReps = targetReps,
-            TargetLoad = NullIfBlank(body.TargetLoad),
+            TargetLoad = body.TargetLoad?.Trim(),
             RestSeconds = body.RestSeconds,
-            Note = NullIfBlank(body.Note),
+            Note = body.Note?.Trim(),
         };
         db.Add(prescription);
         await db.SaveChangesAsync(cancellationToken);
@@ -145,32 +145,49 @@ public static class ProgramDayExerciseEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
-        if (body.TargetSets is { } ts && ts <= 0)
+        // #145: exercise_id, target_sets and target_reps back NOT NULL columns. target_load,
+        // rest_seconds and note are nullable and clear on an explicit null — rest_seconds being
+        // the one this screen was already trying to clear and silently failing to.
+        if (PatchRequests.RejectNull(body.ExerciseId, "exercise_id") is { } exerciseIdNull)
+        {
+            return exerciseIdNull;
+        }
+
+        if (PatchRequests.RejectNull(body.TargetSets, "target_sets") is { } targetSetsNull)
+        {
+            return targetSetsNull;
+        }
+
+        if (PatchRequests.RejectNull(body.TargetReps, "target_reps") is { } targetRepsNull)
+        {
+            return targetRepsNull;
+        }
+
+        if (body.TargetSets.HasValue(out var ts) && ts <= 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "target_sets must be a positive integer."));
         }
 
         string? newTargetReps = null;
-        if (body.TargetReps is not null)
+        if (body.TargetReps.HasValue(out var sentReps))
         {
-            newTargetReps = body.TargetReps.Trim();
+            newTargetReps = sentReps.Trim();
             if (string.IsNullOrEmpty(newTargetReps))
             {
                 return Results.BadRequest(ApiError.Create("bad_request", "target_reps cannot be blank."));
             }
         }
 
-        // Only what the body actually carries: null on the wire means "leave alone", so an
-        // absent field is not re-checked. A blank target_load clears it to NULL and passes,
-        // which is the same answer the create path gives an omitted one.
+        // Only what the body actually carries: an absent field is not re-checked, and a null
+        // target_load is a clear rather than a value, so there is nothing in it to refuse.
         var textProblem = PrescriptionText.Check(newTargetReps, PrescriptionText.Field.Reps)
-            ?? PrescriptionText.Check(body.TargetLoad, PrescriptionText.Field.Load);
+            ?? PrescriptionText.Check(body.TargetLoad.Value, PrescriptionText.Field.Load);
         if (textProblem is not null)
         {
             return Results.BadRequest(ApiError.Create("bad_request", textProblem));
         }
 
-        if (body.RestSeconds is { } rs && rs <= 0)
+        if (body.RestSeconds.HasValue(out var rs) && rs <= 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "rest_seconds must be a positive integer."));
         }
@@ -182,7 +199,7 @@ public static class ProgramDayExerciseEndpoints
             return Results.NotFound(ApiError.Create("not_found", "Not Found"));
         }
 
-        if (body.ExerciseId is { } newExerciseId)
+        if (body.ExerciseId.HasValue(out var newExerciseId))
         {
             var exerciseUsable = await db.ExercisesForTrainer(trainer.Id)
                 .AnyAsync(e => e.Id == newExerciseId && e.IsActive, cancellationToken);
@@ -193,9 +210,9 @@ public static class ProgramDayExerciseEndpoints
             prescription.ExerciseId = newExerciseId;
         }
 
-        if (body.TargetSets is not null)
+        if (body.TargetSets.HasValue(out var targetSets))
         {
-            prescription.TargetSets = body.TargetSets.Value;
+            prescription.TargetSets = targetSets;
         }
 
         if (newTargetReps is not null)
@@ -203,21 +220,26 @@ public static class ProgramDayExerciseEndpoints
             prescription.TargetReps = newTargetReps;
         }
 
-        // Nullable text fields: blank string = clear to NULL, null on wire = leave alone.
-        // Same convention as exercises and programs.
-        if (body.TargetLoad is not null)
+        // #145, all three nullable: absent leaves alone, null clears. Trim stays on the two
+        // text fields because trimming is normalization; what went is #26's blank-string-as-null
+        // sentinel, which only ever worked on strings.
+        if (body.TargetLoad.IsPresent)
         {
-            prescription.TargetLoad = NullIfBlank(body.TargetLoad);
+            prescription.TargetLoad = body.TargetLoad.Value?.Trim();
         }
 
-        if (body.RestSeconds is not null)
+        // The unreported half of #145. This screen sends rest_seconds: null when the trainer
+        // empties the field, and the old "null = leave alone" reading meant the previous value
+        // came straight back with no error and nothing to explain it. Worse than the bodyweight
+        // case that prompted the issue: there the SPA at least knew to refuse the edit.
+        if (body.RestSeconds.IsPresent)
         {
-            prescription.RestSeconds = body.RestSeconds;
+            prescription.RestSeconds = body.RestSeconds.Nullable();
         }
 
-        if (body.Note is not null)
+        if (body.Note.IsPresent)
         {
-            prescription.Note = NullIfBlank(body.Note);
+            prescription.Note = body.Note.Value?.Trim();
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -249,10 +271,4 @@ public static class ProgramDayExerciseEndpoints
         p.Id, p.ProgramDayId, p.ExerciseId, p.Position, p.TargetSets,
         p.TargetReps, p.TargetLoad, p.RestSeconds, p.Note);
 
-    private static string? NullIfBlank(string? value)
-    {
-        if (value is null) return null;
-        var trimmed = value.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-    }
 }

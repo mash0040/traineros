@@ -44,9 +44,10 @@ public static class MeSessionEndpoints
         int Reps,
         DateTimeOffset LoggedAt);
 
-    public sealed record UpdateSetRequest(int? SetNumber, decimal? WeightKg, int? Reps);
+    public sealed record UpdateSetRequest(
+        Patch<int> SetNumber, Patch<decimal> WeightKg, Patch<int> Reps);
 
-    public sealed record UpdateSessionRequest(string? Comment);
+    public sealed record UpdateSessionRequest(Patch<string> Comment);
 
     public static RouteGroupBuilder MapMeSessionEndpoints(this RouteGroupBuilder api)
     {
@@ -143,7 +144,7 @@ public static class MeSessionEndpoints
             ClientId = client.Id,
             ProgramDayId = body.ProgramDayId,
             PerformedOn = performedOn,
-            Comment = NullIfBlank(body.Comment),
+            Comment = body.Comment?.Trim(),
             CreatedAt = clock.GetUtcNow(),
         };
         db.Add(session);
@@ -316,11 +317,19 @@ public static class MeSessionEndpoints
             return Results.NotFound(ApiError.Create("not_found", "Not Found"));
         }
 
-        // Divergence from PATCH /me/sets/:id, where a null field means "don't touch": with one
-        // field in the body, "don't touch" would make the whole request a no-op and leave no
-        // way to take a note back. So the body is the new value, and null or blank clears it —
-        // matching what POST already does with the same input.
-        session.Comment = NullIfBlank(body.Comment);
+        // #96's divergence is retired along with the reason for it. That note argued the body
+        // had to *be* the new value because null meant "don't touch" everywhere else, so honouring
+        // absence would have left no way to retract a comment. #145 gives absence and null
+        // separate meanings, so this route stops being a special case and joins the general rule.
+        //
+        // Two of its four inputs change, and neither is reachable from the SPA, which always
+        // sends the field: an absent comment now leaves the note alone instead of clearing it,
+        // and a blank one stores "" instead of clearing. Explicit null still clears, which is the
+        // path updateSessionComment actually uses.
+        if (body.Comment.IsPresent)
+        {
+            session.Comment = body.Comment.Value?.Trim();
+        }
         await db.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(new SessionResponse(session.Id, session.PerformedOn, session.ProgramDayId,
@@ -343,17 +352,31 @@ public static class MeSessionEndpoints
     {
         var client = http.GetCurrentUser()!;
 
-        if (body.SetNumber is { } sn && sn <= 0)
+        // #145: set_number and reps back NOT NULL columns, so an explicit null asks for
+        // something the column cannot hold and is refused rather than quietly ignored.
+        if (body.SetNumber.IsNull)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "set_number cannot be null."));
+        }
+
+        if (body.SetNumber.HasValue(out var sn) && sn <= 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "set_number must be a positive integer."));
         }
 
-        if (body.Reps is { } r && r <= 0)
+        if (body.Reps.IsNull)
+        {
+            return Results.BadRequest(ApiError.Create("bad_request", "reps cannot be null."));
+        }
+
+        if (body.Reps.HasValue(out var r) && r <= 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "reps must be a positive integer."));
         }
 
-        if (body.WeightKg is { } w && w < 0)
+        // weight_kg is nullable, so null is legal here and means bodyweight. Only a sent
+        // number is range-checked.
+        if (body.WeightKg.HasValue(out var sentWeight) && sentWeight < 0)
         {
             return Results.BadRequest(ApiError.Create("bad_request", "weight_kg cannot be negative."));
         }
@@ -376,22 +399,23 @@ public static class MeSessionEndpoints
             return Results.NotFound(ApiError.Create("not_found", "Not Found"));
         }
 
-        if (body.SetNumber is not null)
+        if (body.SetNumber.HasValue(out var setNumber))
         {
-            set.SetNumber = body.SetNumber.Value;
+            set.SetNumber = setNumber;
         }
 
-        // WeightKg: null on the wire = don't touch. Clearing a value back to bodyweight
-        // via PATCH isn't supported in v1 — the trainer/client workflow is delete +
-        // re-add for that rare case, which sidesteps the "null means not sent" gap.
-        if (body.WeightKg is not null)
+        // #145, and the whole reason that issue exists. weight_kg backs a nullable column, so
+        // an explicit null is the client saying "this was bodyweight" and it clears. Absent
+        // still leaves it alone. Before this, a set logged at 60 kg could only be corrected by
+        // deleting and re-logging it, which is the workaround #107's editor exists to remove.
+        if (body.WeightKg.IsPresent)
         {
-            set.WeightKg = body.WeightKg;
+            set.WeightKg = body.WeightKg.Nullable();
         }
 
-        if (body.Reps is not null)
+        if (body.Reps.HasValue(out var reps))
         {
-            set.Reps = body.Reps.Value;
+            set.Reps = reps;
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -466,10 +490,4 @@ public static class MeSessionEndpoints
         return Results.NoContent();
     }
 
-    private static string? NullIfBlank(string? value)
-    {
-        if (value is null) return null;
-        var trimmed = value.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-    }
 }
