@@ -1064,22 +1064,12 @@ function ExerciseBlock({
       return false
     }
 
-    // The one edit this endpoint cannot express. PATCH reads `weight_kg: null` as "leave it
-    // alone" rather than "clear it", which MeSessionEndpoints records as a deliberate v1
-    // decision — so emptying the field on a set that has a weight would send a request that
-    // succeeds and changes nothing, and she would watch the old number come back. Refused here
-    // with the workaround named, rather than sent and silently ignored. Tracked as its own
-    // issue; widening the endpoint to tell absent from explicitly-null is a contract decision.
-    //
-    // A set that is *already* bodyweight is unaffected: its field starts empty, null means
-    // "leave alone", and leaving null alone is exactly right.
-    if (typedWeight === null && set.weightKg !== null) {
-      setActionFailure({
-        kind: 'rejected',
-        message: 'To change this to bodyweight, remove the set and log it again without a weight.',
-      })
-      return false
-    }
+    // #145 removed the refusal that used to sit here. PATCH read `weight_kg: null` as "leave it
+    // alone", so emptying the field on a weighted set sent a request that succeeded and changed
+    // nothing; the screen refused the edit itself and named delete-and-re-add as the workaround,
+    // which is the workaround this editor exists to remove. The route now tells an absent field
+    // from an explicitly null one, so an emptied weight clears to bodyweight like any other
+    // correction and there is nothing left for the screen to refuse.
 
     setBusy(true)
     setActionFailure(null)

@@ -38,7 +38,13 @@ else
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
-    o.SwaggerDoc("v1", new OpenApiInfo { Title = "TrainerOS API", Version = "v1" }));
+{
+    o.SwaggerDoc("v1", new OpenApiInfo { Title = "TrainerOS API", Version = "v1" });
+    // #145: Patch<T> is a server-side reading mechanism and must not reach the wire. Without
+    // these two, the generated TypeScript turns every PATCH body field into a nested object.
+    o.MapPatchTypes();
+    o.SchemaFilter<PatchOptionalSchemaFilter>();
+});
 
 var app = builder.Build();
 

@@ -260,23 +260,60 @@ public class MeSessionPatchTests : IClassFixture<MeSessionPatchTestApp>
         Assert.Equal("Actually it was the left side.", Reload(sessionRow).Comment);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task Patch_with_no_content_clears_the_comment(string? comment)
+    [Fact]
+    public async Task Patch_with_null_comment_clears_it()
     {
-        // Deliberate divergence from PATCH /me/sets/:id, where null means "leave this field
-        // alone". With one field in the body that reading makes the request a no-op and leaves
-        // no way to take a note back, so the body is the new value. Blank normalises to NULL
-        // rather than being stored, matching POST.
+        // The one input of #96's four whose meaning survives #145 unchanged, and the only one
+        // the SPA sends: updateSessionComment always puts the field in the body, as a string or
+        // as null. Kept as its own test rather than as a row of the old theory, because the
+        // other rows now have different answers and a theory that mixes them would hide that.
         var sessionRow = _app.SeedSessionForClientA(FakeClock.BaseNow, comment: "Written by mistake.");
         var auth = await _app.SignInAsync(_app.ClientAId);
 
-        var response = await SendAsync(HttpMethod.Patch, $"/api/me/sessions/{sessionRow}", auth, new { comment });
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/me/sessions/{sessionRow}", auth, new { comment = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Null(Reload(sessionRow).Comment);
+    }
+
+    [Fact]
+    public async Task Patch_omitting_comment_leaves_it_alone()
+    {
+        // The behaviour #145 actually changes on this route, and the case the suite had no test
+        // for. #96 read the body as *the new value* with no presence check at all, so an empty
+        // object wiped the note; a client who PATCHed this session for any other reason would
+        // have destroyed a comment they never mentioned. There is no other reason today, which
+        // is why nothing caught it, and is exactly why it needs pinning now that the general
+        // rule gives absence its own meaning.
+        var sessionRow = _app.SeedSessionForClientA(FakeClock.BaseNow, comment: "Shoulder tweak.");
+        var auth = await _app.SignInAsync(_app.ClientAId);
+
+        var request = Request(HttpMethod.Patch, $"/api/me/sessions/{sessionRow}", auth);
+        request.Content = JsonContent.Create(new { });
+        var response = await _app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Shoulder tweak.", Reload(sessionRow).Comment);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    public async Task Patch_with_a_blank_comment_stores_an_empty_string(string sent, string expected)
+    {
+        // #26's blank-string sentinel is retired, so "" means itself here as everywhere else.
+        // Trimming stays: it is normalization the API does to every string, and it is not what
+        // the sentinel was. The distinction matters because a client who cleared the field and
+        // one who never wrote in it are now different states, where before they were the same.
+        var sessionRow = _app.SeedSessionForClientA(FakeClock.BaseNow, comment: "Written by mistake.");
+        var auth = await _app.SignInAsync(_app.ClientAId);
+
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/me/sessions/{sessionRow}", auth, new { comment = sent });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(expected, Reload(sessionRow).Comment);
     }
 
     [Fact]

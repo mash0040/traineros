@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 
 import type { ExerciseResponse } from '../api/types.gen'
-import { createExercise, fetchExercises, updateExercise } from '../lib/api'
+import {
+  createExercise,
+  fetchExercises,
+  orNull,
+  updateExercise,
+} from '../lib/api'
 import { messageFor } from '../lib/apiMessages'
 import { useBlockMessage } from './blockMessage'
 import { Message } from './Message'
@@ -455,8 +460,10 @@ function EditExercise({
       onSaved(
         await updateExercise(exercise.id, {
           name: name.trim(),
-          videoUrl: videoUrl.trim(),
-          cues: cues.trim(),
+          // #145: an emptied field is sent as null, which is now what clears it. Under #26 this
+          // sent '' and the server read that as the clear; '' now means an empty string.
+          videoUrl: orNull(videoUrl),
+          cues: orNull(cues),
         }),
       )
     } catch (caught) {
@@ -541,8 +548,8 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
     try {
       const created = await createExercise({
         name: name.trim(),
-        videoUrl: videoUrl.trim(),
-        cues: cues.trim(),
+        videoUrl: orNull(videoUrl),
+        cues: orNull(cues),
       })
       onAdded(created)
       block.done(`${created.name ?? name.trim()} added. You can prescribe it now.`)

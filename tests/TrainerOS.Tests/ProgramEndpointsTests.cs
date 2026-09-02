@@ -260,7 +260,7 @@ public class ProgramEndpointsTests : IClassFixture<ProgramEndpointsTestApp>
             title = "New Block",
             status = (string?)null,
             startsOn = (DateOnly?)null,
-            notes = "  ",
+            notes = (string?)null,
         });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -274,7 +274,8 @@ public class ProgramEndpointsTests : IClassFixture<ProgramEndpointsTestApp>
         var persisted = _app.WithDb(db =>
             db.ProgramsForTrainer(_app.TrainerAId).AsNoTracking().Single(p => p.Id == newId));
         Assert.Equal(_app.TrainerAId, persisted.TrainerId);
-        Assert.Null(persisted.Notes); // blank collapsed to NULL
+        // Null, not blank: #145 retired the blank-string sentinel, so "no notes" is sent as null.
+        Assert.Null(persisted.Notes);
     }
 
     [Fact]
@@ -694,6 +695,76 @@ public class ProgramEndpointsTests : IClassFixture<ProgramEndpointsTestApp>
     }
 
     // -- PATCH /api/programs/:id --
+
+    [Fact]
+    public async Task Patch_with_null_starts_on_clears_it()
+    {
+        // #145. api.md recorded this field as having "no clear path in v1": a start date could
+        // be set and never removed, because null meant "leave alone". It is one of the three
+        // fields the retired blank-string sentinel could never have covered, all three being
+        // the non-string ones.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Dated Block");
+
+        await SendAsync(HttpMethod.Patch, $"/api/programs/{programId}", session, new
+        {
+            startsOn = new DateOnly(2026, 9, 1),
+        });
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/programs/{programId}", session, new
+        {
+            startsOn = (DateOnly?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ProgramsForTrainer(_app.TrainerAId).AsNoTracking().Single(p => p.Id == programId));
+        // Null, not DateOnly.MinValue — the value-type trap Patch<T> tracks nullness to avoid.
+        Assert.Null(persisted.StartsOn);
+    }
+
+    [Fact]
+    public async Task Patch_omitting_starts_on_leaves_it_alone()
+    {
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Keeps Its Date");
+
+        await SendAsync(HttpMethod.Patch, $"/api/programs/{programId}", session, new
+        {
+            startsOn = new DateOnly(2026, 9, 1),
+        });
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/programs/{programId}", session, new
+        {
+            title = "Renamed",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ProgramsForTrainer(_app.TrainerAId).AsNoTracking().Single(p => p.Id == programId));
+        Assert.Equal(new DateOnly(2026, 9, 1), persisted.StartsOn);
+        Assert.Equal("Renamed", persisted.Title);
+    }
+
+    [Fact]
+    public async Task Patch_with_null_status_is_400()
+    {
+        // status backs a NOT NULL column. Before #145 this was read as "leave alone" and got a
+        // 200; before Patch<T> tracked nullness it would have written an empty status.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var programId = await CreateProgramAsync(session, _app.ClientA2Id, "Status Null");
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/programs/{programId}", session, new
+        {
+            status = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ProgramsForTrainer(_app.TrainerAId).AsNoTracking().Single(p => p.Id == programId));
+        Assert.Equal(ProgramStatuses.Draft, persisted.Status);
+    }
+
 
     [Fact]
     public async Task Patch_updates_title_and_notes_and_bumps_updated_at()

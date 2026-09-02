@@ -350,16 +350,38 @@ export function createExercise(body: PostApiExercisesData['body']): Promise<Exer
 }
 
 /**
+ * An optional text field's wire value: the trimmed string, or null when it is empty.
+ *
+ * #145 made null the one way to clear a nullable column, on every type rather than only on
+ * strings. This is the form's half of that: a field the trainer emptied means "no value", and
+ * "no value" is null. Written once rather than at each call site, because the alternative is
+ * five call sites each deciding what an empty input means.
+ *
+ * Deliberately not applied to required fields. `name`, `targetReps` and `title` back NOT NULL
+ * columns, so null on those is a 400 rather than a clear, and their forms refuse an empty value
+ * before it gets this far.
+ */
+export function orNull(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
+}
+
+/**
  * PATCH /api/exercises/:id. Also the delete route: there is no DELETE.
  *
- * #26's convention, and the reason callers must be deliberate about what they put in the body:
- * a field that is absent is left alone, and a field sent as "" is cleared to NULL. Since
+ * #145's convention, and the reason callers must be deliberate about what they put in the body:
+ * a field that is absent is left alone, and a field sent as `null` is cleared. Since
  * JSON.stringify drops `undefined` keys, "absent" is what an omitted property produces — so
  * `{ isActive: false }` retires an exercise without touching its video URL or cues, while
- * `{ isActive: false, videoUrl: '' }` would retire it *and* wipe the link.
+ * `{ isActive: false, videoUrl: null }` would retire it *and* wipe the link.
+ *
+ * This replaces #26's blank-string sentinel, under which `videoUrl: ''` did the clearing. That
+ * rule only ever worked on strings, which is why weight_kg, rest_seconds and starts_on could be
+ * set and never cleared. `''` now means an empty string and is stored as one.
  *
  * The two callers therefore send different bodies on purpose: the edit form sends every text
- * field it owns (so emptying one clears it), and the retire/restore control sends only isActive.
+ * field it owns (so emptying one clears it, via `orNull`), and the retire/restore control sends
+ * only isActive.
  */
 export function updateExercise(
   exerciseId: string,
@@ -601,10 +623,9 @@ export function logSet(
  * probed. The caller is what knows the row was on screen a moment ago, so the caller is what
  * turns that 404 into a sentence.
  *
- * `weightKg: null` on the wire means **leave it alone**, not "clear it": MeSessionEndpoints
- * records that as deliberate for v1, so a weighted set cannot be corrected to bodyweight
- * through this route. The log screen refuses that edit itself rather than sending a request
- * that would silently do nothing.
+ * `weightKg: null` clears the weight to bodyweight (#145); omitting the field leaves it alone.
+ * Until #145 those were the same request and both meant "leave it alone", so a weighted set
+ * could not be corrected to bodyweight at all and the log screen refused that edit itself.
  */
 export function updateSet(
   setId: string,

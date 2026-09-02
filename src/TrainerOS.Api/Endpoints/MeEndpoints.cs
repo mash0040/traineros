@@ -37,7 +37,7 @@ public static class MeEndpoints
     ///
     /// Null means "don't touch", the same convention UpdateClientRequest uses.
     /// </summary>
-    public sealed record UpdateMeRequest(string? WeightUnit);
+    public sealed record UpdateMeRequest(Patch<string> WeightUnit);
 
     public sealed record ActiveProgramSummary(Guid Id, string Title, DateOnly? StartsOn);
 
@@ -104,10 +104,17 @@ public static class MeEndpoints
     {
         var current = http.GetCurrentUser()!;
 
-        string? weightUnit = null;
-        if (body.WeightUnit is not null)
+        // #145: weight_unit backs a NOT NULL column, so null is a request to clear something
+        // that cannot be cleared. Refused rather than read as "leave alone".
+        if (PatchRequests.RejectNull(body.WeightUnit, "weight_unit") is { } unitNull)
         {
-            weightUnit = WeightUnits.Normalize(body.WeightUnit);
+            return unitNull;
+        }
+
+        string? weightUnit = null;
+        if (body.WeightUnit.HasValue(out var sentUnit))
+        {
+            weightUnit = WeightUnits.Normalize(sentUnit);
             if (weightUnit is null)
             {
                 return Results.BadRequest(

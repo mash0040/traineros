@@ -14,7 +14,7 @@ namespace TrainerOS.Api.Endpoints;
 public static class ProgramDayEndpoints
 {
     public sealed record CreateDayRequest(string? Title);
-    public sealed record UpdateDayRequest(string? Title, int? Position);
+    public sealed record UpdateDayRequest(Patch<string> Title, Patch<int> Position);
     public sealed record ReorderExercisesRequest(List<Guid>? OrderedIds);
 
     public sealed record ProgramDayResponse(Guid Id, Guid ProgramId, string Title, int Position);
@@ -91,10 +91,21 @@ public static class ProgramDayEndpoints
     {
         var trainer = http.GetCurrentUser()!;
 
-        string? newTitle = null;
-        if (body.Title is not null)
+        // #145: both fields back NOT NULL columns, so neither can be cleared.
+        if (PatchRequests.RejectNull(body.Title, "title") is { } titleNull)
         {
-            newTitle = body.Title.Trim();
+            return titleNull;
+        }
+
+        if (PatchRequests.RejectNull(body.Position, "position") is { } positionNull)
+        {
+            return positionNull;
+        }
+
+        string? newTitle = null;
+        if (body.Title.HasValue(out var sentTitle))
+        {
+            newTitle = sentTitle.Trim();
             if (string.IsNullOrEmpty(newTitle))
             {
                 return Results.BadRequest(ApiError.Create("bad_request", "title cannot be blank."));
@@ -113,9 +124,9 @@ public static class ProgramDayEndpoints
             day.Title = newTitle;
         }
 
-        if (body.Position is not null)
+        if (body.Position.HasValue(out var position))
         {
-            day.Position = body.Position.Value;
+            day.Position = position;
         }
 
         await db.SaveChangesAsync(cancellationToken);

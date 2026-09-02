@@ -697,8 +697,9 @@ public class ProgramStructureEndpointsTests : IClassFixture<ProgramStructureEndp
     }
 
     [Fact]
-    public async Task Patch_prescription_blank_note_clears_to_null()
+    public async Task Patch_prescription_null_note_clears_it()
     {
+        // #145: null clears, replacing #26's blank-string sentinel.
         var session = await _app.SignInAsync(_app.TrainerAId);
         var dayId = await CreateDayAsync(session, _app.ProgramAId, "Clear Note");
         var pId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
@@ -710,13 +711,83 @@ public class ProgramStructureEndpointsTests : IClassFixture<ProgramStructureEndp
 
         var response = await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
         {
-            note = "",
+            note = (string?)null,
         });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = _app.WithDb(db =>
             db.ProgramDayExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == pId));
         Assert.Null(persisted.Note);
+    }
+
+    [Fact]
+    public async Task Patch_prescription_null_rest_seconds_clears_it()
+    {
+        // The unreported half of #145, and the one that was costing a trainer something today.
+        // The builder sends rest_seconds: null when the field is emptied; the old "null = leave
+        // alone" reading put the previous value straight back with a 200 and no message. Unlike
+        // the bodyweight case the issue was opened for, the SPA did not know to refuse it, so
+        // there was nothing on screen to explain why the number came back.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Clear Rest");
+        var pId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
+
+        await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
+        {
+            restSeconds = 90,
+        });
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
+        {
+            restSeconds = (int?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ProgramDayExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == pId));
+        Assert.Null(persisted.RestSeconds);
+    }
+
+    [Fact]
+    public async Task Patch_prescription_omitting_rest_seconds_leaves_it_alone()
+    {
+        // The half that makes the clear safe. Absent and null were the same value before #145.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Keep Rest");
+        var pId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
+
+        await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
+        {
+            restSeconds = 120,
+        });
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
+        {
+            targetSets = 4,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.ProgramDayExercisesForTrainer(_app.TrainerAId).AsNoTracking().Single(e => e.Id == pId));
+        Assert.Equal(120, persisted.RestSeconds);
+        Assert.Equal(4, persisted.TargetSets);
+    }
+
+    [Fact]
+    public async Task Patch_prescription_null_target_reps_is_400()
+    {
+        // target_reps backs a NOT NULL column. Refused, where before #145 it was read as
+        // "leave alone" and answered 200.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var dayId = await CreateDayAsync(session, _app.ProgramAId, "Null Reps");
+        var pId = await CreatePrescriptionAsync(session, dayId, _app.ExerciseA_SquatId);
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/day-exercises/{pId}", session, new
+        {
+            targetReps = (string?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]

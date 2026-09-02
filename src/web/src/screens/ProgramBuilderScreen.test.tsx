@@ -195,9 +195,14 @@ describe('ProgramBuilderScreen', () => {
     })
   })
 
-  it('clears a nullable field by sending it blank', async () => {
-    // #28's convention: blank string clears to NULL, absent leaves alone. Sending the whole
-    // field set on every save is what makes clearing possible at all.
+  it('clears a nullable field by sending it null', async () => {
+    // #145: null clears, absent leaves alone. Sending the whole field set on every save is what
+    // makes clearing possible at all.
+    //
+    // restSeconds was already going out as null here and the server was ignoring it, so a
+    // trainer who emptied the rest interval watched the old number come back with no error.
+    // That half of the bug was live and unreported; the assertion below did not change, the
+    // behaviour behind it did.
     const fetchMock = mockApi({
       onPatch: (_url, body) => ({ json: async () => ({ id: 'presc-1', ...(body as object) }) }),
     })
@@ -211,7 +216,7 @@ describe('ProgramBuilderScreen', () => {
     await userEvent.click(row.getByRole('button', { name: 'Save' }))
 
     await screen.findByRole('status')
-    expect(bodyOf(callsOf(fetchMock, 'PATCH')[0])).toMatchObject({ targetLoad: '', restSeconds: null })
+    expect(bodyOf(callsOf(fetchMock, 'PATCH')[0])).toMatchObject({ targetLoad: null, restSeconds: null })
   })
 
   it('adds a day and shows it without a reload', async () => {
