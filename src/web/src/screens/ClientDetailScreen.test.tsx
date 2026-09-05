@@ -394,7 +394,8 @@ describe('ClientDetailScreen', () => {
     await screen.findByRole('status')
     const patches = callsOfMethod(fetchMock, 'PATCH')
     expect(patches).toHaveLength(1)
-    expect(bodyOf(patches[0])).toMatchObject({ sendTime: '08:15:00' })
+    // #79: sent as the input gives it, unpadded. The API takes HH:mm.
+    expect(bodyOf(patches[0])).toMatchObject({ sendTime: '08:15' })
   })
 
   it('creates with POST when the client has no schedule at all', async () => {
@@ -418,7 +419,7 @@ describe('ClientDetailScreen', () => {
     const posts = callsOfMethod(fetchMock, 'POST')
     expect(posts).toHaveLength(1)
     expect(posts[0][0]).toBe('/api/clients/client-ada/schedule')
-    expect(bodyOf(posts[0])).toEqual({ sendTime: '06:00:00', daysOfWeek: [2, 4], enabled: true })
+    expect(bodyOf(posts[0])).toEqual({ sendTime: '06:00', daysOfWeek: [2, 4], enabled: true })
     expect(callsOfMethod(fetchMock, 'PATCH')).toHaveLength(0)
 
     // And the form becomes an editor, so a second save patches rather than 409-ing.

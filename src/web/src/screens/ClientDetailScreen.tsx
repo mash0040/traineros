@@ -23,7 +23,7 @@ import {
   sessionSummary,
   type HistorySession,
 } from '../lib/history'
-import { DAY_ABBREVIATIONS, describeDays, toApiTime, toInputTime } from '../lib/scheduleTime'
+import { DAY_ABBREVIATIONS, describeDays, toInputTime } from '../lib/scheduleTime'
 import { unitLabel, unitOf, type WeightUnit } from '../lib/weight'
 import { useBlockMessage } from './blockMessage'
 import { DisclosureChevron } from './DisclosureChevron'
@@ -340,8 +340,10 @@ function ReminderSchedule({
     setSaving(true)
     block.clear()
 
-    // The seconds are the whole point of toApiTime. Sending "07:30" is a 400 from both routes.
-    const body = { sendTime: toApiTime(sendTime), daysOfWeek: [...days].sort((a, b) => a - b), enabled }
+    // Sent as the input gives it. #79 removed the toApiTime padding that used to wrap this:
+    // both routes take HH:mm, and appending ":00" was answering a rejection that no longer
+    // happens. The empty case is caught by the guard above, not by the converter.
+    const body = { sendTime: sendTime.trim(), daysOfWeek: [...days].sort((a, b) => a - b), enabled }
 
     try {
       // POST creates, PATCH edits, and which one this is depends entirely on whether the GET
@@ -414,8 +416,10 @@ function ReminderSchedule({
           <label className="text-sm font-semibold text-ink" htmlFor="schedule-time">
             Send at
           </label>
-          {/* type="time" for the platform's own picker. It speaks HH:mm; #29 speaks HH:mm:ss.
-              toApiTime and toInputTime are the seam. */}
+          {/* type="time" for the platform's own picker. It speaks HH:mm and the API reads that
+              happily (#79), so nothing converts on the way out. toInputTime is still the seam on
+              the way in: the API answers with seconds and this element renders empty rather than
+              complaining when it cannot parse a value. */}
           <input
             className={`justify-self-start ${trainerField}`}
             id="schedule-time"

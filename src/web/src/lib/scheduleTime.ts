@@ -1,37 +1,19 @@
-// The one place the reminder schedule's time format is converted, because two systems disagree
-// about it and neither is going to change.
+// The reminder schedule's time format, converted in the one direction that still needs it.
 //
-// #29 binds send_time to a C# TimeOnly, which serializes and parses as HH:mm:ss. An HH:mm
-// string is a 400 from POST /api/clients/:id/schedule and PATCH /api/schedules/:id.
+// This module used to convert both ways. #29 binds send_time to a C# TimeOnly and #51 recorded
+// that an HH:mm string was a 400 from both schedule routes, so `toApiTime` appended `:00` to
+// everything the form sent. #79 checked that premise and it no longer holds: the .NET 8 TimeOnly
+// reader accepts HH:mm as readily as HH:mm:ss, so the padding was doing nothing. It is gone, and
+// the API's own tests now pin the format so its absence is a decision rather than a drift.
 //
-// `<input type="time">` emits HH:mm, because its default step is 60 seconds. It only produces
-// HH:mm:ss when a sub-minute step is set, which this form has no reason to do — reminder times
-// are picked to the minute.
-//
-// So every read from the input needs seconds appended and every write into it needs them
-// removed, and doing that inline at the call site is how one of the two directions eventually
-// gets missed.
-
-/** Sunday-first, matching #29's 0..6 day numbering. Index is the wire value. */
-export const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+// The render direction stays, and its reason was never the API. `<input type="time">` emits
+// HH:mm because its default step is 60 seconds, and — the half that matters — it renders *empty*
+// when handed a value it cannot parse. The API answers with seconds, so an existing schedule
+// handed straight to the input would present as unset and turn a save into a blank-time
+// rejection. That is the input element being strict, and nothing on the server changes it.
 
 /** Short forms for the day checkboxes, where seven full names would not fit a row. */
 export const DAY_ABBREVIATIONS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-/**
- * `<input type="time">` value to what the API will accept: "07:30" becomes "07:30:00".
- *
- * Already-seconded input is passed through rather than re-appended, so a browser that does
- * emit HH:mm:ss (any that sets a sub-minute step) does not produce "07:30:00:00".
- */
-export function toApiTime(inputValue: string): string {
-  const trimmed = inputValue.trim()
-  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
-    return trimmed
-  }
-
-  return trimmed.length === 5 ? `${trimmed}:00` : trimmed
-}
 
 /**
  * The API's "07:30:00" back to the "07:30" the input expects.

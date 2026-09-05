@@ -5,32 +5,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { describeDays, toApiTime, toInputTime } from './scheduleTime'
+import { describeDays, toInputTime } from './scheduleTime'
 
 // #29's TimeOnly binds HH:mm:ss and rejects HH:mm with a 400, while `<input type="time">`
 // emits HH:mm. These are the tests that keep the seam honest in both directions — a miss on
 // either one is a schedule editor that looks fine and cannot save.
-describe('toApiTime', () => {
-  it('appends the seconds the API requires', () => {
-    expect(toApiTime('07:30')).toBe('07:30:00')
-    expect(toApiTime('00:00')).toBe('00:00:00')
-    expect(toApiTime('23:59')).toBe('23:59:00')
-  })
-
-  it('leaves an already-seconded value alone', () => {
-    // A browser with a sub-minute step emits HH:mm:ss. Appending again would send
-    // "07:30:00:00", which is a 400 with a confusing message attached.
-    expect(toApiTime('07:30:45')).toBe('07:30:45')
-  })
-
-  it('passes anything unrecognised through for the server to reject', () => {
-    // Not this function's job to invent a time. Guessing here would turn a form bug into a
-    // silently wrong reminder hour.
-    expect(toApiTime('')).toBe('')
-    expect(toApiTime('half seven')).toBe('half seven')
-  })
-})
-
 describe('toInputTime', () => {
   it('strips the seconds the input cannot parse', () => {
     // An input handed "07:30:00" renders empty, which shows an existing schedule as unset and
@@ -45,8 +24,10 @@ describe('toInputTime', () => {
     expect(toInputTime('nonsense')).toBe('')
   })
 
-  it('round-trips with toApiTime', () => {
-    expect(toInputTime(toApiTime('06:15'))).toBe('06:15')
+  it('round-trips what the form sends against what the API answers', () => {
+    // #79 removed toApiTime, so the form now sends the input's own value. The API stores it and
+    // answers with seconds, and this is what puts it back in the input unchanged.
+    expect(toInputTime('06:15:00')).toBe('06:15')
   })
 })
 
