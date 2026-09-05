@@ -279,6 +279,135 @@ public class NotificationScheduleEndpointsTests : IClassFixture<NotificationSche
         Assert.Equal(_app.TrainerAId, persisted.TrainerId);
     }
 
+    // -- Wire time format (#79) --
+    //
+    // No converter. The issue asked for a JsonConverter<TimeOnly> accepting HH:mm, on the
+    // premise that the framework default required seconds — true when #29's smoke test hit it,
+    // and not true on .NET 8, whose built-in TimeOnly converter accepts HH:mm, HH:mm:ss and a
+    // fractional part. Writing one would have *narrowed* what the API accepts (the stock reader
+    // also takes "7:00"; a TryParseExact list does not) and changed the sub-second output shape,
+    // both for no gain. What was missing was not behaviour but evidence: nothing asserted the
+    // format the SPA depends on, so it was free to regress on a framework upgrade or the day
+    // someone registers a converter of their own. These tests are that evidence.
+
+    [Theory]
+    [InlineData("07:00")]
+    [InlineData("07:00:00")]
+    public async Task Post_accepts_a_time_with_or_without_seconds(string sent)
+    {
+        // The AC. #29's smoke test saw "07:00" rejected and #51 worked around it in the SPA by
+        // appending ":00" before every send; that workaround is what #79 removes.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(
+            HttpMethod.Post, $"/api/clients/{_app.ClientA_UnscheduledId}/schedule", session, new
+            {
+                sendTime = sent,
+                daysOfWeek = new[] { 1 },
+                enabled = true,
+            });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var newId = body.GetProperty("id").GetGuid();
+
+        // Emitted with seconds whichever form went in. Asserted because the output format is the
+        // half of this the SPA still converts for: toInputTime exists to strip these.
+        Assert.Equal("07:00:00", body.GetProperty("sendTime").GetString());
+
+        _app.WithDb(db =>
+        {
+            var row = db.NotificationSchedulesForTrainer(_app.TrainerAId).Single(s => s.Id == newId);
+            Assert.Equal(new TimeOnly(7, 0), row.SendTime);
+            db.Remove(row);
+            db.SaveChanges();
+        });
+    }
+
+    [Fact]
+    public async Task Patch_accepts_hh_mm_through_the_patch_wrapper()
+    {
+        // The path a trainer actually takes: editing an existing schedule is a PATCH, whose
+        // sendTime is a Patch<TimeOnly> (#145) and so is read by two converters composing.
+        // PatchConverter delegates with the JsonSerializerOptions it was handed rather than a
+        // fresh set, which is what keeps the TimeOnly reader in play underneath it. Nothing in
+        // either type states that dependency, so it is recorded here.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(
+            HttpMethod.Patch, $"/api/schedules/{_app.ScheduleA_Id}", session, new
+            {
+                sendTime = "07:00",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.NotificationSchedulesForTrainer(_app.TrainerAId)
+                .AsNoTracking().Single(s => s.Id == _app.ScheduleA_Id));
+        Assert.Equal(new TimeOnly(7, 0), persisted.SendTime);
+    }
+
+    [Fact]
+    public async Task Patch_omitting_send_time_still_leaves_it_alone()
+    {
+        // #145's three-state reading has to survive the TimeOnly reader sitting under it: an
+        // absent field must not reach the inner converter at all.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        await SendAsync(HttpMethod.Patch, $"/api/schedules/{_app.ScheduleA_Id}", session, new
+        {
+            sendTime = "06:45",
+        });
+
+        var response = await SendAsync(HttpMethod.Patch, $"/api/schedules/{_app.ScheduleA_Id}", session, new
+        {
+            enabled = true,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = _app.WithDb(db =>
+            db.NotificationSchedulesForTrainer(_app.TrainerAId)
+                .AsNoTracking().Single(s => s.Id == _app.ScheduleA_Id));
+        Assert.Equal(new TimeOnly(6, 45), persisted.SendTime);
+    }
+
+    [Fact]
+    public async Task Patch_with_null_send_time_is_still_400()
+    {
+        // The other end of the same composition: send_time backs a NOT NULL column, and the null
+        // token is answered by PatchConverter before the TimeOnly reader would see it (#145).
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var request = Request(HttpMethod.Patch, $"/api/schedules/{_app.ScheduleA_Id}", session);
+        request.Content = new StringContent(
+            "{\"sendTime\": null}", System.Text.Encoding.UTF8, "application/json");
+
+        var response = await _app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("send_time", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Theory]
+    [InlineData("half seven")]
+    [InlineData("25:00")]
+    [InlineData("")]
+    public async Task A_malformed_send_time_is_400_not_500(string sent)
+    {
+        // The reader throws JsonException, which ThrowOnBadRequest lifts to a
+        // BadHttpRequestException for UseApiErrorHandling to shape. Without that path a typo
+        // would be an unhandled 500.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(
+            HttpMethod.Post, $"/api/clients/{_app.ClientA_UnscheduledId}/schedule", session, new
+            {
+                sendTime = sent,
+                daysOfWeek = new[] { 1 },
+                enabled = true,
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
     [Fact]
     public async Task Post_duplicate_schedule_is_409()
     {
