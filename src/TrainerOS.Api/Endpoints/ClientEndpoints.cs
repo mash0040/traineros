@@ -125,14 +125,26 @@ public static class ClientEndpoints
             // one is looser and lets some inputs through to be refused here — so the trainer
             // can see the same rejection from either layer for what is, to them, one mistake.
             // If this string changes, that one changes with it.
+            //
+            // #124: its own code, and deliberately with no entry in the SPA's copy map. The
+            // sentence above is already written for a person, so there is nothing the SPA knows
+            // to add and a map entry would be a second copy of one string. What the code buys is
+            // *attribution*: the add-client form marks the field the rejection is about, and it
+            // used to infer that from `bad_request`, which also covers the timezone below.
             return Results.BadRequest(
-                ApiError.Create("bad_request", "Please enter a valid email address."));
+                ApiError.Create("invalid_email", "Please enter a valid email address."));
         }
 
+        // #124: the one validation on this endpoint a trainer can reach without doing anything
+        // wrong. The SPA's timezone picker is populated from the *browser's* ICU database via
+        // Intl.supportedValuesOf('timeZone'); this check reads the host's tzdata through
+        // TimeZoneInfo. Two databases of different vintages, so the picker can offer a zone this
+        // process has never heard of and the trainer has no way to tell which. Hence its own
+        // code: the SPA drew that list, so it knows something this sentence cannot.
         if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out _))
         {
             return Results.BadRequest(
-                ApiError.Create("bad_request", $"'{timezone}' is not a recognized IANA timezone."));
+                ApiError.Create("unknown_timezone", $"'{timezone}' is not a recognized IANA timezone."));
         }
 
         // Optional on create (#99): omitted means the default, which is what the trainer wants
@@ -238,10 +250,13 @@ public static class ClientEndpoints
                 return Results.BadRequest(ApiError.Create("bad_request", "timezone cannot be blank."));
             }
 
+            // Same code as the create path. No screen sends a timezone in an update body today,
+            // so this is unreachable from the SPA; it carries the code anyway because one
+            // condition answering under two codes is how the next caller gets a surprise.
             if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out _))
             {
                 return Results.BadRequest(
-                    ApiError.Create("bad_request", $"'{timezone}' is not a recognized IANA timezone."));
+                    ApiError.Create("unknown_timezone", $"'{timezone}' is not a recognized IANA timezone."));
             }
         }
 
