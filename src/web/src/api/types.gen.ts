@@ -30,14 +30,6 @@ export type ClientResponse = {
     lastSessionOn?: string | null;
 };
 
-export type ClientSessionResponse = {
-    id?: string;
-    performedOn?: string;
-    programDayId?: string | null;
-    comment?: string | null;
-    createdAt?: string;
-};
-
 export type CreateClientRequest = {
     email?: string | null;
     displayName?: string | null;
@@ -502,24 +494,6 @@ export type PatchApiClientsByIdResponses = {
 };
 
 export type PatchApiClientsByIdResponse = PatchApiClientsByIdResponses[keyof PatchApiClientsByIdResponses];
-
-export type GetApiClientsByIdSessionsData = {
-    body?: never;
-    path: {
-        id: string;
-    };
-    query?: never;
-    url: '/api/clients/{id}/sessions';
-};
-
-export type GetApiClientsByIdSessionsResponses = {
-    /**
-     * OK
-     */
-    200: Array<ClientSessionResponse>;
-};
-
-export type GetApiClientsByIdSessionsResponse = GetApiClientsByIdSessionsResponses[keyof GetApiClientsByIdSessionsResponses];
 
 export type GetApiClientsByIdHistoryData = {
     body?: never;

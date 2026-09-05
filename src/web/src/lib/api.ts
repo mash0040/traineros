@@ -224,13 +224,6 @@ export function fetchClientHistory(
   )
 }
 
-// GET /api/clients/:id/sessions has no wrapper here any more (#115). The roster read it once
-// per client for the last-session date; that date is now a field on ClientResponse, computed
-// server-side, and #142 had already moved the client detail screen to /history. The route is
-// still mounted and still returns what it always did — deleting an endpoint is an API decision,
-// tracked separately — but nothing in the SPA calls it, so a wrapper here would be a function
-// with no caller that reads like a supported way in.
-
 /**
  * GET /api/programs. Every program this trainer owns, across all their clients.
  *

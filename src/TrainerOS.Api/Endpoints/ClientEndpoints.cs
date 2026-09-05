@@ -37,13 +37,6 @@ public static class ClientEndpoints
         DateTimeOffset CreatedAt,
         DateOnly? LastSessionOn);
 
-    public sealed record ClientSessionResponse(
-        Guid Id,
-        DateOnly PerformedOn,
-        Guid? ProgramDayId,
-        string? Comment,
-        DateTimeOffset CreatedAt);
-
     public static RouteGroupBuilder MapClientEndpoints(this RouteGroupBuilder api)
     {
         var clients = api.MapGroup("/clients").RequireTrainer();
@@ -53,8 +46,6 @@ public static class ClientEndpoints
             .Produces<ClientResponse>(StatusCodes.Status201Created);
         clients.MapPatch("/{id:guid}", UpdateClient)
             .Produces<ClientResponse>();
-        clients.MapGet("/{id:guid}/sessions", ListClientSessions)
-            .Produces<List<ClientSessionResponse>>();
         clients.MapGet("/{id:guid}/history", GetClientHistory)
             .Produces<HistoryResponse>();
         return api;
@@ -68,7 +59,8 @@ public static class ClientEndpoints
         // #115. The last-session date used to be N separate GETs of /clients/:id/sessions from
         // the roster screen, each one downloading every session that client had ever logged to
         // read one date off the head of it. The cost grew with client tenure rather than roster
-        // size, which is the axis nobody watches.
+        // size, which is the axis nobody watches. That route was the roster's last caller and
+        // was deleted in #147.
         //
         // ── Why a correlated subquery and not GROUP BY ──────────────────────────────────────
         // The issue says "grouped max", which is the semantics; this is not the SQL that serves
@@ -320,39 +312,18 @@ public static class ClientEndpoints
         return Results.Ok(response);
     }
 
-    private static async Task<IResult> ListClientSessions(
-        Guid id, HttpContext http, TrainerOsDbContext db, CancellationToken cancellationToken)
-    {
-        var trainer = http.GetCurrentUser()!;
-
-        // Existence check via the trainer-scoped client roster: a client id belonging to
-        // another trainer collapses to the same 404 as a fabricated id (api.md §Authorization pt 2).
-        var clientExists = await db.ClientsForTrainer(trainer.Id)
-            .AnyAsync(u => u.Id == id, cancellationToken);
-        if (!clientExists)
-        {
-            return Results.NotFound(ApiError.Create("not_found", "Not Found"));
-        }
-
-        var sessions = await db.WorkoutSessionsForTrainer(trainer.Id)
-            .Where(s => s.ClientId == id)
-            .OrderByDescending(s => s.PerformedOn)
-            .Select(s => new ClientSessionResponse(
-                s.Id, s.PerformedOn, s.ProgramDayId, s.Comment, s.CreatedAt))
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
-
-        return Results.Ok(sessions);
-    }
-
     // #142. What the client actually lifted, for their trainer.
     //
-    // ── Why this is not GET /api/clients/:id/sessions with sets nested in it ───────────────
-    // That route has a second consumer: the roster reads it once per client for the last-session
-    // date, and ClientsScreen already documents what that costs — "reading one date downloads
-    // every session that client has ever logged". Nesting sets into it would multiply that by
-    // every set of every session, for every client on the roster, to render one date. So the
-    // sets get their own route and /sessions is left alone.
+    // ── Why this is its own route (#142), and what became of the one it is not ───────────
+    // It was written not to be GET /api/clients/:id/sessions with sets nested in it, because
+    // that route had a second consumer: the roster read it once per client for the last-session
+    // date, and nesting sets would have multiplied "every session this client ever logged" by
+    // every set of every session, for every client on the roster, to render one date.
+    //
+    // #115 then moved the roster onto ClientResponse.LastSessionOn, which left /sessions with no
+    // consumer at all — #142 had already taken the other one. #147 deleted it. So the route this
+    // one was defined against is gone, and this is now simply the trainer's view of a client's
+    // log. The reasoning is kept because it is why the page is shaped the way it is.
     //
     // ── Why the page is flat sets rather than sessions with nested sets ───────────────────
     // It is the shape GET /api/me/history already returns (#33), and these are the same rows.
