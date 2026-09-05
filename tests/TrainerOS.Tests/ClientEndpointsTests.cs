@@ -290,6 +290,86 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.True(first.TryGetProperty("isActive", out _));
     }
 
+    // -- Per-field validation codes (#124) --
+
+    [Fact]
+    public async Task Create_with_a_malformed_email_answers_invalid_email()
+    {
+        // #124 split exactly two conditions out of bad_request, and this is one: the SPA's
+        // looksLikeEmail is deliberately looser than EmailAddresses.IsValid, so this address
+        // passes the form and is refused here. The message is unchanged and stays the server's,
+        // because it is already written for a person; the code is what lets the form mark the
+        // right input.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = "ada@example..com",
+            displayName = "Ada",
+            timezone = "America/Toronto",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("invalid_email", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(
+            "Please enter a valid email address.",
+            body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task Create_with_an_unrecognised_timezone_answers_unknown_timezone()
+    {
+        // The other one, and the only validation on this endpoint a trainer can reach without
+        // doing anything wrong: the picker is filled from the browser's ICU database and this
+        // check reads the host's tzdata, so the two can disagree about a zone that is real.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = "grace@example.com",
+            displayName = "Grace",
+            timezone = "Mars/Olympus_Mons",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("unknown_timezone", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Patch_with_an_unrecognised_timezone_answers_the_same_code()
+    {
+        // Unreachable from the SPA — no screen sends a timezone in an update body — but one
+        // condition must not answer under two codes, or the next caller gets a surprise.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Patch, $"/api/clients/{_app.ClientA2Id}", session, new
+        {
+            timezone = "Mars/Olympus_Mons",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("unknown_timezone", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task The_other_validations_on_this_endpoint_keep_the_shared_code()
+    {
+        // The scope line, asserted rather than left to a comment. #124 proposed splitting all 61
+        // bad_request sites; the measurement found two reachable, so the rest keep the shared
+        // code. A missing field is the example: the form requires all three before it sends.
+        var session = await _app.SignInAsync(_app.TrainerAId);
+        var response = await SendAsync(HttpMethod.Post, "/api/clients", session, new
+        {
+            email = "",
+            displayName = "Nameless",
+            timezone = "America/Toronto",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
     // -- GET /api/clients: last_session_on (#115) --
 
     [Fact]
@@ -392,15 +472,17 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.Null(persisted.PasswordHash);
     }
 
+    // #124 took two rows out of this theory. A malformed address and an unrecognised timezone
+    // now answer under invalid_email and unknown_timezone, and are asserted by name above; what
+    // is left here is the required-field family, which keeps the shared code because the form
+    // requires all three before it sends and nothing can reach it.
     [Theory]
     [InlineData(null, "Name", "America/Toronto")]
     [InlineData("", "Name", "America/Toronto")]
     [InlineData("valid@example.com", null, "America/Toronto")]
     [InlineData("valid@example.com", "   ", "America/Toronto")]
     [InlineData("valid@example.com", "Name", "")]
-    [InlineData("not-an-email", "Name", "America/Toronto")]
-    [InlineData("valid@example.com", "Name", "Not/A_Real_Zone")]
-    public async Task Create_rejects_missing_or_invalid_fields_with_400(
+    public async Task Create_rejects_missing_fields_with_400(
         string? email, string? displayName, string? timezone)
     {
         var session = await _app.SignInAsync(_app.TrainerAId);
@@ -444,7 +526,9 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("bad_request", body.GetProperty("error").GetProperty("code").GetString());
+        // #124: its own code now, so the add-client form can mark the email input rather than
+        // inferring the field from bad_request, which also stood for the timezone.
+        Assert.Equal("invalid_email", body.GetProperty("error").GetProperty("code").GetString());
 
         // The exact sentence, because the SPA's own client-side check is worded to match it and
         // no test can span both languages to prove they still agree. Pinning each side means a

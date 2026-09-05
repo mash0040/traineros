@@ -550,10 +550,10 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   // only means anything while a failure is what is showing, so a stale value cannot mark a field
   // invalid under a confirmation. That is the #141 rule applied to the one thing the slot does
   // not itself carry.
-  const [field, setField] = useState<'name' | 'email' | null>(null)
+  const [field, setField] = useState<InvalidField>(null)
   const invalid = block.message?.tone === 'failure' ? field : null
 
-  function reject(message: string, about: 'name' | 'email' | null) {
+  function reject(message: string, about: InvalidField) {
     setField(about)
     block.fail(message)
   }
@@ -611,16 +611,16 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
     } catch (caught) {
       // Nothing the trainer typed is cleared: the whole point is that they can fix it.
       //
-      // Attributed to the email field only when the rejection is actually about the address —
-      // 400 for a format the looser client rule let through (#114), 409 for one already in use.
-      // Marking the input aria-invalid for a dropped connection or an expired session would
-      // send a screen reader user to fix an address that is perfectly fine, which is the same
-      // defect #114 found when one error string marked every field.
-      const aboutTheAddress =
-        caught instanceof ApiError &&
-        (caught.code === 'bad_request' || caught.code === 'email_taken')
-
-      reject(messageFor(caught, 'client'), aboutTheAddress ? 'email' : null)
+      // Attributed by code (#124), not by guesswork. This used to read `bad_request` as "about
+      // the address", which was right for the format rejection and wrong for the other thing
+      // that code covered: a timezone the server does not recognise marked the *email* input
+      // invalid and put the caret in it, sending a screen reader user to fix an address that was
+      // perfectly fine. That is #114's defect on the server-side path, and it survived because
+      // one code stood for two fields.
+      //
+      // Anything not in the table attributes to nothing. A dropped connection or an expired
+      // session is not about a field, and marking one would be the same lie in a different form.
+      reject(messageFor(caught, 'client'), fieldFor(caught))
     } finally {
       setSubmitting(false)
     }
@@ -748,6 +748,8 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
                 scheduler sends against, so a wrong-but-valid zone is a client emailed at 4am.
                 Defaults to the trainer's own zone, which is the right guess for most rosters. */}
             <select
+              aria-describedby={invalid === 'timezone' ? block.id : undefined}
+              aria-invalid={invalid === 'timezone'}
               className={trainerField}
               id="client-timezone"
               name="timezone"
@@ -787,6 +789,32 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
       </section>
     </>
   )
+}
+
+/** Which control a failed add-client write should mark, or null when it is about no field. */
+type InvalidField = 'name' | 'email' | 'timezone' | null
+
+/**
+ * The field a rejection belongs to, read off the error code (#124).
+ *
+ * Only codes that name a field appear here. `email_taken` is a 409 rather than a validation
+ * failure, but it is about the address the trainer typed and is fixed in the same input, which
+ * is what this function is for.
+ */
+function fieldFor(caught: unknown): InvalidField {
+  if (!(caught instanceof ApiError)) {
+    return null
+  }
+
+  switch (caught.code) {
+    case 'invalid_email':
+    case 'email_taken':
+      return 'email'
+    case 'unknown_timezone':
+      return 'timezone'
+    default:
+      return null
+  }
 }
 
 // Resolved once at module load: the list is ~400 static strings and rebuilding it per render

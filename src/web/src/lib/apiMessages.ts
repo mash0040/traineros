@@ -21,21 +21,34 @@ import { ApiError } from './api'
 // only the SPA can say "reload to see the current library" — a sentence no server string could
 // have known to write.
 //
-// ── Why `bad_request` is deliberately not mapped ────────────────────────────────────────────
-// One code covers ~27 distinct validation failures across the API: "name is required.",
-// "target_sets must be a positive integer.", "days_of_week must not contain duplicates.",
-// "Please enter a valid email address.", and so on. A single rewrite of `bad_request` would
+// ── Why `bad_request` is still mostly not mapped (#124) ─────────────────────────────────────
+// One code covers 61 distinct validation failures across the API: 46 explicit sites, 15 more
+// from #145's RejectNull, plus the body-binding 400. A single rewrite of `bad_request` would
 // have to say something like "Check the form" — strictly less than every string it replaced,
 // because the server is the only layer that knows which field it rejected.
 //
-// It matters less than it looks. Every trainer form validates the same conditions client-side
-// before it sends, so the reachable `bad_request` responses are the ones where the two layers
-// disagree in strictness, and the email rule (#114) is the deliberate example: the server's
-// sentence there is already written for a person. The rest are the safety net for a rule that
-// drifts, which is exactly when the server's specific message is the one worth showing.
+// #124 proposed splitting all of them into per-field codes. The measurement it asked for is
+// what stopped that: **two are reachable.** Every trainer form validates the same condition
+// before it sends, so a `bad_request` only arrives where the two layers genuinely disagree, and
+// the rest fall into groups nobody can reach — a route with no SPA caller at all (password
+// login, since #20 made magic links cover the trainer), values that come from a `<select>` or
+// from the screen's own state, guards mirrored on both sides where a divergence would be a bug
+// rather than a design, and #145's "cannot be null" family, which the SPA never sends.
 //
-// Fixing this properly means splitting `bad_request` into per-field codes. That is an API
-// change, not a web one.
+// So the split was scoped to the reachable pair, and the 59 keep the shared code. A code nobody
+// can trigger is a code nobody benefits from.
+//
+// ── What the two codes are actually for, and it is not copy ─────────────────────────────────
+// `invalid_email` has no entry below, on purpose. The server's sentence is already written for
+// a person and is deliberately word-for-word the SPA's own client-side one, so there is nothing
+// here to add and an entry would be a second copy of one string.
+//
+// It earns its place through **attribution**. The add-client form marks the field a rejection is
+// about, and it used to infer that from `bad_request` — which also covered the timezone, so a
+// rejected timezone marked the *email* input invalid and focused it. That is the defect #114
+// fixed for client-side validation, surviving on the server-side path because one code stood for
+// two fields. Codes are what let the form point at the right control; the copy was never the
+// problem.
 
 /**
  * What the trainer was acting on, so one code can read differently in two places.
@@ -80,6 +93,19 @@ const COPY: Record<string, string> = {
   unknown_program_day: 'That day was deleted. Reload to see the current program.',
   unknown_program_day_exercise: 'That exercise was already removed from this day. Reload to see the current program.',
   unknown_client: 'That client is no longer on your roster. Reload to see who is.',
+
+  // ── The picker offering something the server refuses, second instance (#124) ──────────────
+  // The same shape as unknown_exercise and reached the same way: the trainer chose this from a
+  // list the screen drew, so "not a recognized IANA timezone" is true and useless from where
+  // they sit. What the SPA knows and the server cannot is where that list came from — the
+  // browser's own ICU database, read through Intl.supportedValuesOf, while the API validates
+  // against the host's tzdata. Two databases of different vintages, so a zone can be real,
+  // correctly spelled, offered by this app, and still unknown to the server.
+  //
+  // The copy does not explain any of that, because a trainer cannot act on it. It says what to
+  // do instead, which is the half no server string could have written.
+  unknown_timezone:
+    'This server does not recognise that timezone. Pick a nearby major city instead.',
 
   // ── Conflicts: the write was understood and refused on a rule ─────────────────────────────
   // The server names the conflict; the SPA adds what to do about it, which is the half the API

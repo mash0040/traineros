@@ -560,7 +560,9 @@ describe('ClientsScreen', () => {
         status: 400,
         // Verbatim from ClientEndpoints.CreateClient.
         json: async () => ({
-          error: { code: 'bad_request', message: 'Please enter a valid email address.' },
+          // #124: its own code now. The message is unchanged and still the server's, because
+          // it was already written for a person.
+          error: { code: 'invalid_email', message: 'Please enter a valid email address.' },
         }),
       }),
     })
@@ -577,6 +579,90 @@ describe('ClientsScreen', () => {
       fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST'),
     ).toHaveLength(1)
     expect(screen.queryByText(/added\. Tell them to log in\./)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('marks the timezone control, and not the email, when the server rejects the zone', async () => {
+    // The defect #124 actually fixes. The picker is filled from the browser's ICU database and
+    // the API validates against the host's tzdata, so it can offer a zone the server refuses —
+    // and the attribution used to read `bad_request` as "about the address", so this rejection
+    // marked the email input invalid. A screen reader user was sent to correct an address that
+    // was perfectly fine, which is #114's defect surviving on the server-side path because one
+    // code stood for two fields.
+    mockApi({
+      clients: [ada],
+      onPost: () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: {
+            code: 'unknown_timezone',
+            message: "'Mars/Olympus_Mons' is not a recognized IANA timezone.",
+          },
+        }),
+      }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Grace')
+    await userEvent.type(screen.getByLabelText('Email'), 'grace@example.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    await screen.findByRole('alert')
+    expect(screen.getByLabelText('Timezone')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false')
+  })
+
+  it('says what to do about an unrecognised timezone rather than repeating the server', async () => {
+    // The one map entry #124 adds, and the same shape as unknown_exercise: the trainer chose
+    // this from a list the screen drew, so "not a recognized IANA timezone" is true and useless
+    // from where they sit. `invalid_email` deliberately has no entry — the server's sentence
+    // there is already the right one.
+    mockApi({
+      clients: [ada],
+      onPost: () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: {
+            code: 'unknown_timezone',
+            message: "'Mars/Olympus_Mons' is not a recognized IANA timezone.",
+          },
+        }),
+      }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Grace')
+    await userEvent.type(screen.getByLabelText('Email'), 'grace@example.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Pick a nearby major city instead.')
+    expect(alert).not.toHaveTextContent('IANA')
+  })
+
+  it('marks no field when the failure is not about one', async () => {
+    // The other half of attributing by code: a dropped connection is not about an input, and
+    // marking one would be the same lie in a different form.
+    mockApi({
+      clients: [ada],
+      onPost: () => ({ ok: false, status: 500, json: async () => ({ error: { code: 'internal_error', message: 'x' } }) }),
+    })
+    renderScreen()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add a client' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Grace')
+    await userEvent.type(screen.getByLabelText('Email'), 'grace@example.com')
+    await userEvent.click(screen.getByRole('button', { name: 'Add client' }))
+
+    await screen.findByRole('alert')
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByLabelText('Timezone')).toHaveAttribute('aria-invalid', 'false')
   })
 
   it('closes the add form from the disclosure, with no second completion path in the form', async () => {
