@@ -72,11 +72,12 @@ const HISTORY_PAGE = 50
 // the difference to be visible, which is not v1.
 //
 // ── What "their history" is on this screen ─────────────────────────────────────────────────
-// Sets, since #142. It used to be session-level by construction: GET /api/clients/:id/sessions
-// returns date, program day and comment, and GET /api/me/history is client-scoped, so there was
-// no trainer-side route to what anyone actually lifted. GET /api/clients/:id/history is that
-// route, returning the same flat page of sets the client's own history does — which is what
-// lets lib/history.ts group both.
+// Sets, since #142. It used to be session-level by construction: the only trainer-side route
+// was GET /api/clients/:id/sessions, which returned date, program day and comment, and
+// GET /api/me/history is client-scoped — so there was no route to what anyone actually lifted.
+// GET /api/clients/:id/history is that route, returning the same flat page of sets the client's
+// own history does, which is what lets lib/history.ts group both. (#147 has since deleted
+// /sessions: moving this screen off it took one of its two consumers, and #115 took the other.)
 export function ClientDetailScreen() {
   const { clientId = '' } = useParams()
 
@@ -502,9 +503,10 @@ function ReminderSchedule({
 //
 // ── What #142 added, and what was here before ──────────────────────────────────────────────
 // Dates and comments only, because there was no trainer-side route to a session's logged sets:
-// GET /api/clients/:id/sessions returns no sets and GET /api/me/history is client-scoped. So a
+// GET /api/clients/:id/sessions returned no sets and GET /api/me/history is client-scoped. So a
 // trainer could see that someone trained and read their note, but not what they lifted — the
-// most useful thing on a coaching screen. GET /api/clients/:id/history closed that.
+// most useful thing on a coaching screen. GET /api/clients/:id/history closed that, and #147
+// later deleted the route this screen moved off.
 //
 // ── Grouping is lib/history.ts's, not this screen's ────────────────────────────────────────
 // The endpoint returns flat sets and both history surfaces render sessions, so the assembly —

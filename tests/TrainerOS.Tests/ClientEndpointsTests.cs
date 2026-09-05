@@ -265,17 +265,6 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    [Fact]
-    public async Task Client_role_get_sessions_is_404_not_403()
-    {
-        // The client's own id in a trainer-only route must not leak "you exist, wrong role."
-        var session = await _app.SignInAsync(_app.ClientA1Id);
-        var response = await _app.Client.SendAsync(
-            Request(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/sessions", session));
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
     // -- GET /api/clients --
 
     [Fact]
@@ -632,23 +621,6 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    // -- GET /api/clients/:id/sessions --
-
-    [Fact]
-    public async Task Get_sessions_returns_this_clients_sessions_newest_first()
-    {
-        var session = await _app.SignInAsync(_app.TrainerAId);
-        var response = await _app.Client.SendAsync(
-            Request(HttpMethod.Get, $"/api/clients/{_app.ClientA1Id}/sessions", session));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var ids = body.EnumerateArray().Select(e => e.GetProperty("id").GetGuid()).ToList();
-
-        // A1_2 (2026-07-20) is newer than A1_1 (2026-07-18); B1's session must not appear.
-        Assert.Equal([_app.SessionA1_2Id, _app.SessionA1_1Id], ids);
-    }
-
     // -- Isolation (the AC's core test) --
 
     [Fact]
@@ -670,16 +642,6 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
     }
 
     [Fact]
-    public async Task Get_sessions_for_another_trainers_client_is_404()
-    {
-        var session = await _app.SignInAsync(_app.TrainerAId);
-        var response = await _app.Client.SendAsync(
-            Request(HttpMethod.Get, $"/api/clients/{_app.ClientB1Id}/sessions", session));
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Nonexistent_client_id_is_404_indistinguishable_from_cross_tenant()
     {
         var session = await _app.SignInAsync(_app.TrainerAId);
@@ -689,23 +651,26 @@ public class ClientEndpointsTests : IClassFixture<ClientEndpointsTestApp>
             HttpMethod.Patch, $"/api/clients/{madeUp}", session, new { displayName = "x" });
         var otherPatch = await SendAsync(
             HttpMethod.Patch, $"/api/clients/{_app.ClientB1Id}", session, new { displayName = "x" });
-        var madeUpSessions = await _app.Client.SendAsync(
-            Request(HttpMethod.Get, $"/api/clients/{madeUp}/sessions", session));
-        var otherSessions = await _app.Client.SendAsync(
-            Request(HttpMethod.Get, $"/api/clients/{_app.ClientB1Id}/sessions", session));
+        // #147 deleted GET /clients/:id/sessions, which used to be the read half of this pair.
+        // The pairing is the point of the test rather than the route: a write and a read must
+        // both answer identically for a fabricated id and a foreign one, because a difference in
+        // either direction is an existence oracle. /history is the surviving GET of that shape.
+        var madeUpRead = await SendAsync(HttpMethod.Get, $"/api/clients/{madeUp}/history", session);
+        var otherRead = await SendAsync(
+            HttpMethod.Get, $"/api/clients/{_app.ClientB1Id}/history", session);
 
         Assert.Equal(HttpStatusCode.NotFound, madeUpPatch.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, otherPatch.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, madeUpSessions.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, otherSessions.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, madeUpRead.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, otherRead.StatusCode);
 
         // Bodies match too — no length or shape oracle.
         Assert.Equal(
             await madeUpPatch.Content.ReadAsStringAsync(),
             await otherPatch.Content.ReadAsStringAsync());
         Assert.Equal(
-            await madeUpSessions.Content.ReadAsStringAsync(),
-            await otherSessions.Content.ReadAsStringAsync());
+            await madeUpRead.Content.ReadAsStringAsync(),
+            await otherRead.Content.ReadAsStringAsync());
     }
 
     // -- weight_unit (#99) --

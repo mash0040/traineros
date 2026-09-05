@@ -30,8 +30,8 @@ type Load = 'loading' | 'ready' | 'unreachable'
 // ── The last-session date arrives with the roster (#115) ───────────────────────────────────
 // It used to be N separate requests, one per client, fired after the roster was already on
 // screen. The comment here used to defend that and name the price: GET /api/clients/:id/sessions
-// has no limit parameter and no summary field, so reading one date downloaded every session
-// that client had ever logged. That degrades with client *tenure* rather than roster size,
+// had no limit parameter and no summary field, so reading one date downloaded every session
+// that client had ever logged. (That route is gone as of #147; this was its last caller.) That degrades with client *tenure* rather than roster size,
 // which is why it looked cheap at four clients and would not have stayed cheap.
 //
 // ClientResponse now carries `lastSessionOn`, computed server-side as the max of that client's
