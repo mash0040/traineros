@@ -2,7 +2,7 @@ export const SITE = {
   name: 'TrainerOS',
   title: 'TrainerOS | Workout Programming and Logging',
   description:
-    'Mobile workout programming, reminders, and set logging for a personal trainer and their clients.',
+    'TrainerOS helps a personal trainer program workouts, send reminders, and let clients log sets from a mobile-first workout workspace.',
   canonicalUrl: 'https://traineros.me/',
   themeColor: '#D07000',
   backgroundColor: '#FCFCFD',
