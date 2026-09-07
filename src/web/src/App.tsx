@@ -13,6 +13,7 @@ import { LogWorkoutScreen } from './screens/LogWorkoutScreen'
 import { NewProgramScreen } from './screens/NewProgramScreen'
 import { PauseScreen } from './screens/PauseScreen'
 import { ProgramBuilderScreen } from './screens/ProgramBuilderScreen'
+import { PageTitle } from './screens/PageTitle'
 import { TodayScreen } from './screens/TodayScreen'
 import { VerifyScreen } from './screens/VerifyScreen'
 
@@ -25,23 +26,23 @@ import { VerifyScreen } from './screens/VerifyScreen'
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginScreen />} />
-      <Route path="/verify" element={<VerifyScreen />} />
+      <Route path="/login" element={<Titled title="Log In"><LoginScreen /></Titled>} />
+      <Route path="/verify" element={<Titled title="Verify Sign In"><VerifyScreen /></Titled>} />
       {/* Outside the gate, deliberately (#49). The signed token is the whole authorization,
           and the client most likely to follow this link is one who has not opened the app in
           weeks — sending her to a login screen first is how a pause link stops working. */}
-      <Route path="/pause" element={<PauseScreen />} />
+      <Route path="/pause" element={<Titled title="Pause Reminders"><PauseScreen /></Titled>} />
 
       {/* Everything a signed-in client can reach sits under one gate, so the session is
           resolved once per navigation and every later screen (#44 onward) inherits it. */}
       <Route element={<RequireClientSession />}>
-        <Route path="/" element={<TodayRoute />} />
-        <Route path="/workout" element={<LogWorkoutRoute />} />
+        <Route path="/" element={<Titled title="Today"><TodayRoute /></Titled>} />
+        <Route path="/workout" element={<Titled title="Log Workout"><LogWorkoutRoute /></Titled>} />
         {/* History reads its content from GET /api/me/history, but the weights in it are
             stored in kilograms and have to be read in the client's own unit (#99), so it takes
             `me` through the same wrapper shape the other two use. It read nothing from the
             session before that. */}
-        <Route path="/history" element={<HistoryRoute />} />
+        <Route path="/history" element={<Titled title="History"><HistoryRoute /></Titled>} />
       </Route>
 
       {/* The trainer's screens, behind their own gate (#50). Deliberately not under a /trainer
@@ -49,26 +50,35 @@ export default function App() {
           paths cannot collide, and prefixing would put a segment in every trainer URL whose
           only job is to distinguish them from screens that account can never open. */}
       <Route element={<RequireTrainerSession />}>
-        <Route path="/clients" element={<ClientsScreen />} />
+        <Route path="/clients" element={<Titled title="Clients"><ClientsScreen /></Titled>} />
         {/* Nested under the roster path rather than a flat /client/:id, because that is what it
             is: one row of the list, opened. #52's builder hangs off a program the same way. */}
-        <Route path="/clients/:clientId" element={<ClientDetailScreen />} />
+        <Route path="/clients/:clientId" element={<Titled title="Client Detail"><ClientDetailScreen /></Titled>} />
 
         {/* The other top-level trainer destination (#55), and the reason the shell's nav bar
             renders at all from here on. */}
-        <Route path="/exercises" element={<ExercisesScreen />} />
+        <Route path="/exercises" element={<Titled title="Exercise Library"><ExercisesScreen /></Titled>} />
 
         {/* The two paths #51 already links to, now that #53 has something behind them. `new`
             is declared first for readability; React Router ranks static segments above dynamic
             ones regardless, so /programs/new can never be read as a program id. */}
-        <Route path="/programs/new" element={<NewProgramScreen />} />
-        <Route path="/programs/:programId" element={<ProgramBuilderScreen />} />
+        <Route path="/programs/new" element={<Titled title="New Program"><NewProgramScreen /></Titled>} />
+        <Route path="/programs/:programId" element={<Titled title="Program Builder"><ProgramBuilderScreen /></Titled>} />
       </Route>
 
       {/* Unknown paths go home, and home decides whether that means the app or the login
           screen. Keeps the "where do I send this person" logic in exactly one place. */}
       <Route path="*" element={<Navigate replace to="/" />} />
     </Routes>
+  )
+}
+
+function Titled({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <>
+      <PageTitle title={title} />
+      {children}
+    </>
   )
 }
 
