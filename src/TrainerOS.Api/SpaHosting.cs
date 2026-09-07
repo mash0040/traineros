@@ -18,19 +18,30 @@ public static class SpaHosting
         var staticFiles = new StaticFileOptions
         {
             OnPrepareResponse = context =>
-            {
                 context.Context.Response.Headers.CacheControl =
                     context.Context.Request.Path.StartsWithSegments("/assets")
                         ? "public, max-age=31536000, immutable"
-                        : "no-cache";
-
-                if (ShouldNoIndex(context.Context.Request.Path))
-                {
-                    context.Context.Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
-                }
-            },
+                        : "no-cache",
         };
 
+        app.Use(async (context, next) =>
+        {
+            var noIndex = ShouldNoIndex(context.Request.Path);
+            if (noIndex)
+            {
+                context.Response.OnStarting(() =>
+                {
+                    if (context.Response.StatusCode is >= 200 and < 400)
+                    {
+                        context.Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
+                    }
+
+                    return Task.CompletedTask;
+                });
+            }
+
+            await next();
+        });
         app.UseStaticFiles(staticFiles);
 
         // /verify?token= and /pause?token= are pasted into a browser's address bar from an
