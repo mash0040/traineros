@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -95,5 +95,19 @@ describe('App routing', () => {
     renderAt('/')
 
     expect(await screen.findByRole('heading', { name: 'Today', level: 1 })).toBeInTheDocument()
+  })
+
+  it('sets a specific title for an auth route', async () => {
+    renderAt('/login')
+
+    await waitFor(() => expect(document.title).toBe('Log In | TrainerOS'))
+  })
+
+  it('updates the title after a role redirect', async () => {
+    mockSession('anonymous')
+    renderAt('/clients')
+
+    expect(await screen.findByRole('heading', { name: 'Log in', level: 1 })).toBeInTheDocument()
+    await waitFor(() => expect(document.title).toBe('Log In | TrainerOS'))
   })
 })

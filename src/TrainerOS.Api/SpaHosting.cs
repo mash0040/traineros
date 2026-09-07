@@ -18,10 +18,17 @@ public static class SpaHosting
         var staticFiles = new StaticFileOptions
         {
             OnPrepareResponse = context =>
+            {
                 context.Context.Response.Headers.CacheControl =
                     context.Context.Request.Path.StartsWithSegments("/assets")
                         ? "public, max-age=31536000, immutable"
-                        : "no-cache",
+                        : "no-cache";
+
+                if (ShouldNoIndex(context.Context.Request.Path))
+                {
+                    context.Context.Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
+                }
+            },
         };
 
         app.UseStaticFiles(staticFiles);
@@ -40,4 +47,29 @@ public static class SpaHosting
 
         return app;
     }
+
+    private static bool ShouldNoIndex(PathString path)
+    {
+        foreach (var prefix in NoIndexAppPathPrefixes)
+        {
+            if (path.StartsWithSegments(prefix))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly PathString[] NoIndexAppPathPrefixes =
+    {
+        "/login",
+        "/verify",
+        "/pause",
+        "/workout",
+        "/history",
+        "/clients",
+        "/exercises",
+        "/programs",
+    };
 }

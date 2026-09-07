@@ -457,7 +457,7 @@ Called out so no future contributor mistakes an absence for an omission:
 - Dark mode (token override under the same semantic names — not a fork)
 - Motion vocabulary (transitions, animations, page transitions)
 - Custom typeface / web font
-- Logo, brand mark, favicon beyond the Vite default
+- Logo or fuller brand mark beyond the favicon/app-icon family
 - Full component library (button, input, card, modal, toast primitives) — v1 builds these ad-hoc under the tokens above
 - Progress-chart color scale (see PRODUCT.md non-goals — charts are v1.1)
 - Empty-state illustrations / marketing surfaces

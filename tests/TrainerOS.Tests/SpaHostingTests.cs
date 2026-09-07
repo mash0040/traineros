@@ -109,6 +109,35 @@ public class SpaHostingTests(SpaHostingTestApp app) : IClassFixture<SpaHostingTe
         Assert.Equal("no-cache", response.Headers.CacheControl?.ToString());
     }
 
+    [Theory]
+    [InlineData("/login")]
+    [InlineData("/verify?token=abc")]
+    [InlineData("/pause?token=abc")]
+    [InlineData("/workout?day=day-1")]
+    [InlineData("/history")]
+    [InlineData("/clients")]
+    [InlineData("/clients/8a1f0f6e-3f0e-4a1e-9e2b-6d1c9d4f7b21")]
+    [InlineData("/exercises")]
+    [InlineData("/programs/new")]
+    [InlineData("/programs/8a1f0f6e-3f0e-4a1e-9e2b-6d1c9d4f7b21")]
+    public async Task Private_and_auth_app_routes_are_noindexed(string path)
+    {
+        var response = await _client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("X-Robots-Tag", out var values));
+        Assert.Equal("noindex, nofollow", Assert.Single(values));
+    }
+
+    [Fact]
+    public async Task Public_root_shell_does_not_emit_noindex_header()
+    {
+        var response = await _client.GetAsync("/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("X-Robots-Tag"));
+    }
+
     [Fact]
     public async Task Missing_asset_is_a_404_rather_than_the_shell()
     {
