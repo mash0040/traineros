@@ -1,3 +1,19 @@
+## Users
+
+Two audiences with different needs and different devices.
+
+**Trainers** are independent personal trainers writing programs for clients they coach remotely or sell programs to. They currently work out of WhatsApp, Google Sheets, and a notes app. They use TrainerOS on a phone in a gym between sessions, not at a desk.
+
+**Clients** are people following a program their trainer wrote. They open the app mid-workout, one-handed, with elevated heart rate and about sixty seconds of attention. Most have never used a training app; the thing they're switching from is a paper notebook or nothing.
+
+## Product Purpose
+
+TrainerOS replaces the gap between a trainer sending a program and finding out whether anyone followed it. Trainers build per-client programs in real coaching language; clients log each set beside what they lifted at that position last session.
+
+Success is measured two ways: a client logs a workout in the app rather than in a notebook or not at all, and a trainer can see what a client actually lifted without asking them.
+
+The product competes with a paper notebook, not with other apps. The inline last-time number is the feature that wins that comparison: everything else is in service of it.
+
 # TrainerOS — PRODUCT.md
 
 Aggregated from docs/architecture.md, docs/database.md, docs/api.md, docs/notifications.md, docs/ui-ux.md. Those documents are the source of truth for design detail; this file is the scope boundary.
