@@ -49,8 +49,8 @@ Secrets: App Service/Functions configuration + managed identity where supported 
 
 ```
 traineros/
-├── .claude/                  # agents (schema-reviewer, security-reviewer), commands, rules, skills
-├── docs/                     # CONTEXT.md, architecture.md, database.md, api.md, notifications.md, ui-ux.md
+├── .claude/                  # rules, skills (agents/ and commands/ exist but are empty)
+├── docs/                     # CONTEXT.md, architecture.md, database.md, api.md, notifications.md, ui-ux.md, deploy-config.md
 ├── planning/                 # CONTEXT.md, backlog notes
 ├── src/
 │   ├── TrainerOS.Api/        # ASP.NET Core minimal API (+ serves SPA from wwwroot in prod)
@@ -62,6 +62,7 @@ traineros/
 ├── TrainerOS.sln
 ├── CLAUDE.md                 # agent entry point → points at docs/
 ├── PRODUCT.md                # scope, non-goals, DEFINITION OF SHIPPED (below)
+├── DESIGN.md                 # visual system for src/web (tokens, typography, layout)
 └── README.md
 ```
 
