@@ -228,11 +228,30 @@ app setting on both hosts.
 | Certificate | App Service **managed certificate** — free, auto-renewing, and enough for one apex host |
 | TLS binding | **SNI SSL** (not IP-based, which costs an IP and buys nothing here) |
 
+`www.traineros.me` is bound too, on the same inbound IP with its own managed certificate, and
+serves the identical site. That makes it a **second origin**, which is a problem rather than a
+convenience: the session cookie sets no `Domain` (it is deliberately host-only, api.md §Auth), so
+a sign-in at `www.` does not exist at the apex, and `App:BaseUrl` can only name one of the two.
+
+The apex is canonical. `UseCanonicalHost` (#158, first in the API's pipeline) is what enforces
+that: any request whose host begins with `www.` gets a **301** to the same path and query on the
+host with the prefix stripped, before the rate limiter or any session lookup. The rule is the
+prefix itself, not a list of known hosts — so `localhost` and `app-traineros.azurewebsites.net`
+are untouched by construction. **That second exemption is load-bearing:** the pipeline's smoke
+check requests `https://app-traineros.azurewebsites.net/` and asserts the SPA shell comes back as
+`text/html`. Redirect that host and every deploy fails. A test pins it.
+
+The redirect always targets `https://`, regardless of the inbound scheme. App Service terminates
+TLS at the front end and forwards to Kestrel over plain HTTP, and this app does not run
+`UseForwardedHeaders`, so `Request.Scheme` reads `http` in production — echoing it would bounce a
+visitor out of HTTPS on an HTTPS-only site.
+
 Root domains cannot be CNAMEs, so the binding pins a literal IP. That IP is stable for the life
 of the web app but is **not** guaranteed across a delete-and-recreate: if `app-traineros` is
 ever rebuilt, re-read the inbound IP and update the A record, or the domain resolves to a site
 that no longer exists. The `azurewebsites.net` hostname keeps working alongside it, which is why
-the pipeline's smoke check still targets it — one less thing depending on DNS.
+the pipeline's smoke check still targets it — one less thing depending on DNS, and a host the
+`www.` redirect above deliberately leaves alone.
 
 The managed certificate renews itself, so the dated risk here is the **domain registration**, not
 the cert: `traineros.me` renews 2027-08-05, and if it lapses every magic link and reminder email
