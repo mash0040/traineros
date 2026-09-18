@@ -171,7 +171,7 @@ resources: clickops, and the commands are a record of what was created.
 
 | | |
 |---|---|
-| Provisioned | **Yes.** Plan, web app, Neon project and Function App exist and have been deployed to manually (#57/#58). Date: `<fill in>`. |
+| Provisioned | **Yes.** Plan, web app, Neon project and Function App exist, first deployed 7 August 2026. Both pipelines now deploy automatically on push to `main`. |
 | Plan SKU | Started at **F1**, now **B1** — the free tier's daily CPU quota ran out during setup, before any real traffic. See §Known gotchas → Deploying. |
 | Custom domain | **Bound.** `traineros.me` at the root, A record → `52.237.22.139`, managed certificate, SNI SSL. `App:BaseUrl` is `https://traineros.me` on both hosts. |
 | Owner | The human. The `az` commands below are the record of what was created. |
