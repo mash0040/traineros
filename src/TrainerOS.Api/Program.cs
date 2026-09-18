@@ -57,6 +57,10 @@ if (!app.Environment.IsDevelopment() && app.Services.GetService<INotificationSen
 
 await TrainerSeeder.SeedAsync(app.Services, app.Configuration);
 
+// First in the pipeline (#158): a request bound for the apex is about to be discarded, so it
+// should not spend a rate-limit token, a static-file lookup, or a database session read on
+// the way out.
+app.UseCanonicalHost();
 app.UseApiErrorHandling();
 // Before the rate limiter and session auth: serving a hashed JS bundle should not cost a
 // token bucket or a database session lookup.
