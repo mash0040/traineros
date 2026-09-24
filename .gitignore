@@ -39,3 +39,6 @@ Thumbs.db
 publish-func/
 .claude/skills/impeccable/
 .claude/settings.local.json
+.impeccable/
+.playwright-mcp/
+impeccable-*.png
