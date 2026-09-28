@@ -639,6 +639,7 @@ export type GetApiMeLastData = {
     path?: never;
     query?: {
         exercise_id?: string;
+        exclude_session_id?: string;
     };
     url: '/api/me/last';
 };

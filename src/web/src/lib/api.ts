@@ -689,9 +689,20 @@ export function fetchHistory({ limit, before, exerciseId }: HistoryQuery): Promi
  *
  * Query params on this endpoint are snake_case; JSON bodies elsewhere are camelCase. That
  * split is api.md #33's, not a slip.
+ *
+ * `excludeSessionId` (#162) skips that session and answers with the one before it — the log
+ * screen passes the session it is resuming, which would otherwise come back as its own "last".
  */
-export function fetchLastForExercise(exerciseId: string): Promise<LastResponse> {
-  return request<LastResponse>(`/api/me/last?exercise_id=${encodeURIComponent(exerciseId)}`)
+export function fetchLastForExercise(
+  exerciseId: string,
+  excludeSessionId: string | null = null,
+): Promise<LastResponse> {
+  const params = new URLSearchParams({ exercise_id: exerciseId })
+  if (excludeSessionId !== null) {
+    params.set('exclude_session_id', excludeSessionId)
+  }
+
+  return request<LastResponse>(`/api/me/last?${params.toString()}`)
 }
 
 export async function loadSession(): Promise<Session> {

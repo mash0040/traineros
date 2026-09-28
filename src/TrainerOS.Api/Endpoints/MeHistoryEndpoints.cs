@@ -129,6 +129,7 @@ public static class MeHistoryEndpoints
 
     private static async Task<IResult> GetLast(
         [FromQuery(Name = "exercise_id")] Guid? exerciseId,
+        [FromQuery(Name = "exclude_session_id")] Guid? excludeSessionId,
         HttpContext http,
         TrainerOsDbContext db,
         CancellationToken cancellationToken)
@@ -140,14 +141,26 @@ public static class MeHistoryEndpoints
             return Results.BadRequest(ApiError.Create("bad_request", "exercise_id is required."));
         }
 
+        // #162: a resumed session is the most recent one for anything already logged in it, so
+        // without this the log screen got today's own sets back and had to discard them, leaving
+        // a dash where last week's numbers belong. The caller names its current session and gets
+        // the one before it. A session id rather than a date: Day A in the morning is a real
+        // "last time" for an exercise repeated in Day B that evening. Another client's session id
+        // excludes nothing, because the scoped query never contained it — the answer is the same
+        // as without the parameter, so it is not an existence oracle.
+        var candidates = db.LoggedSetsForClient(client.Id).Where(s => s.ExerciseId == exId);
+        if (excludeSessionId is { } excluded)
+        {
+            candidates = candidates.Where(s => s.SessionId != excluded);
+        }
+
         // Design decision: "most recent sets for an exercise" = the sets from the
         // single most-recent SESSION containing this exercise, not an arbitrary
         // N most-recent sets. Rationale: the gym-floor mental model is "last time
         // I benched" — a coherent session block, not a scatter of set rows across
         // sessions. This preserves session context (all top-set + backoffs stay
         // grouped) and keeps the exercise_id + logged_at index one lookup.
-        var mostRecentSetOfExercise = await db.LoggedSetsForClient(client.Id)
-            .Where(s => s.ExerciseId == exId)
+        var mostRecentSetOfExercise = await candidates
             .OrderByDescending(s => s.LoggedAt)
             .Select(s => new { s.SessionId, s.Session.PerformedOn })
             .AsNoTracking()

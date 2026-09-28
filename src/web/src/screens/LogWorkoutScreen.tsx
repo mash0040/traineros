@@ -288,23 +288,30 @@ export function LogWorkoutScreen({
       ),
     ]
 
+    // Today's own work is not "last time". Since #45 the row is created by the first logged set
+    // and #98 resumes it, so on a resumed session (or a reload mid-workout — the app cannot tell
+    // them apart) /api/me/last would answer with this very session for anything already logged
+    // today, and #102's restore already shows those sets in the rows above. #162: rather than
+    // discard that answer and leave a dash, ask for the session before it. Null on a first open
+    // of the day, where the session does not exist yet and the plain answer is already right.
+    const excludeSessionId = sessionIdRef.current
+
     let cancelled = false
     for (const exerciseId of exerciseIds) {
       // One silent retry, then the dash. A dropped read of decision support is not worth an
       // error message on a screen whose job is logging.
-      fetchLastForExercise(exerciseId)
-        .catch(() => fetchLastForExercise(exerciseId))
+      fetchLastForExercise(exerciseId, excludeSessionId)
+        .catch(() => fetchLastForExercise(exerciseId, excludeSessionId))
         .then((response) => {
           if (cancelled) {
             return
           }
 
           const recent = response.mostRecent
-          // Today's own work is not "last time". Since #45 the row is created by the first
-          // logged set and #98 resumes it, so on a resumed session /api/me/last answers with
-          // this very session for anything already logged today — and those sets are visible
-          // in the rows directly above. Showing them again under a `Last` label would be a
-          // second, wronger copy of what she is looking at.
+          // Still needed after #162, for the one case the exclusion cannot cover: on a first open
+          // the request goes out with no session to exclude, and if she logs a set before it is
+          // answered, the row that set created is what comes back. Compared against the session
+          // id as of the answer, not the request, for that reason.
           const isThisSession = recent?.sessionId !== undefined && recent.sessionId === sessionIdRef.current
           setLastTimes((previous) => ({
             ...previous,
