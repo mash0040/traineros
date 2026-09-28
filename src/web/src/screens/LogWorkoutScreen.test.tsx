@@ -90,6 +90,8 @@ describe('LogWorkoutScreen', () => {
       holdCreate?: Promise<void>
       holdLast?: Promise<void>
       last?: Record<string, LastResponse>
+      /** What the server answers once `last`'s session is excluded (#162). Defaults to none. */
+      lastBefore?: Record<string, LastResponse>
       onCreateSession?: (attempt: number) => Reply
       onDeleteSet?: (url: string) => Reply
       onLast?: (exerciseId: string) => Reply
@@ -125,14 +127,21 @@ describe('LogWorkoutScreen', () => {
       }
 
       if (url.startsWith('/api/me/last')) {
-        const exerciseId = new URL(url, 'http://test').searchParams.get('exercise_id') ?? ''
+        const query = new URL(url, 'http://test').searchParams
+        const exerciseId = query.get('exercise_id') ?? ''
         if (options.holdLast !== undefined) {
           await options.holdLast
         }
         if (options.onLast !== undefined) {
           return send(options.onLast(exerciseId))
         }
-        return send(ok(options.last?.[exerciseId] ?? { mostRecent: null }))
+        // Behaves like the endpoint: naming the most recent session skips to the one before it.
+        const latest = options.last?.[exerciseId] ?? { mostRecent: null }
+        const excluded = query.get('exclude_session_id')
+        if (excluded !== null && latest.mostRecent?.sessionId === excluded) {
+          return send(ok(options.lastBefore?.[exerciseId] ?? { mostRecent: null }))
+        }
+        return send(ok(latest))
       }
 
       if (url === '/api/me/sessions' && method === 'POST') {
@@ -399,37 +408,37 @@ describe('LogWorkoutScreen', () => {
     expect(lastRequests(fetchMock)[0]).toContain('exercise_id=ex-1')
   })
 
-  it('does not pass today’s own sets off as last time', async () => {
-    // Since #45 the row is created by the first logged set, and #98 resumes it rather than
-    // making a second — so on a resumed session /api/me/last answers with *this* session for
-    // anything already logged today. Those sets are already on screen in the rows above;
-    // repeating them under a `Last` label would be a second, wronger copy of what she is
-    // looking at.
-    localStorage.setItem(
-      DRAFT_KEY,
-      JSON.stringify({
-        performedOn: todayForClient(), programDayId: 'day-1', comment: '', sessionId: SESSION_ID,
-      }),
+  it('asks for plain last-time on a first open of the day', async () => {
+    // #162 left this case alone: there is no session yet, so nothing to exclude, and the most
+    // recent session is already the previous one.
+    const fetchMock = mockApi({ last: { 'ex-1': squatLast } })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*72\.5\s*×\s*8$/))
+    expect(lastRequests(fetchMock).find((url) => url.includes('exercise_id=ex-1'))).not.toContain(
+      'exclude_session_id',
     )
+  })
 
-    const history: HistoryResponse = {
-      items: [
-        {
-          id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:00:00Z',
-          session: { id: SESSION_ID, performedOn: '2026-07-26', comment: null },
-          exercise: { id: 'ex-1', name: 'Back Squat' },
-        },
-      ],
-      nextCursor: null,
-    }
+  it('does not pass a set logged while last-time was in flight off as last time', async () => {
+    // The race #162's exclusion cannot cover, and why the screen still checks the session id of
+    // what comes back. On a first open the request goes out before the row exists; if she logs
+    // a set before it is answered, the row that set created is the most recent one, and those
+    // sets are already on screen above. Repeating them under `Last` would be a second, wronger
+    // copy of what she is looking at.
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
 
-    mockApi({
-      history,
+    const fetchMock = mockApi({
+      holdLast: held,
       last: {
         'ex-1': {
           mostRecent: {
             sessionId: SESSION_ID,
-            performedOn: '2026-07-26',
+            performedOn: todayForClient(),
             exercise: { id: 'ex-1', name: 'Back Squat' },
             sets: [{ id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-26T12:00:00Z' }],
           },
@@ -438,12 +447,62 @@ describe('LogWorkoutScreen', () => {
     })
     renderScreen()
 
+    await logSet('Back Squat', '100', '8')
+    await waitFor(() => expect(setPosts(fetchMock)).toHaveLength(1))
+    release()
+
     const squat = await block('Back Squat')
     await waitFor(() => expect(squat.getByLabelText(/set 2 weight/)).toBeInTheDocument())
+    await waitFor(() => expect(lastRequests(fetchMock).length).toBeGreaterThan(0))
+    expect(lastRequests(fetchMock)[0]).not.toContain('exclude_session_id')
 
     // The saved row shows 100 once, in the weight column. The Last column stays on dashes.
-    expect(squat.getAllByText('–')).toHaveLength(2)
+    for (const cell of lastCells(squat)) {
+      expect(cell).toHaveTextContent(/^Last time\s*–$/)
+    }
     expect(squat.getAllByText('100')).toHaveLength(1)
+  })
+
+  it('shows the session before today on a resumed day, not a dash (#162)', async () => {
+    // Log, Finish, start the same day again. Today's session is the most recent one for squat,
+    // so /api/me/last would answer with her own sets — already on screen via #102's restore.
+    // The screen names that session and gets last week's instead.
+    const fetchMock = mockApi({
+      history: todaysSessionHistory(),
+      last: {
+        'ex-1': {
+          mostRecent: {
+            sessionId: SESSION_ID,
+            performedOn: todayForClient(),
+            exercise: { id: 'ex-1', name: 'Back Squat' },
+            sets: [
+              { id: 'set-1', setNumber: 1, weightKg: 100, reps: 8, loggedAt: '2026-07-28T12:00:00Z' },
+              { id: 'set-2', setNumber: 2, weightKg: 102.5, reps: 8, loggedAt: '2026-07-28T12:05:00Z' },
+            ],
+          },
+        },
+      },
+      lastBefore: { 'ex-1': squatLast },
+    })
+    renderScreen()
+
+    const squat = await block('Back Squat')
+    await waitFor(() => expect(squat.getByLabelText(/set 3 weight/)).toBeInTheDocument())
+
+    // Row N shows last week's set N; row 3 has none because last week stopped at two.
+    await waitFor(() => expect(lastCells(squat)[0]).toHaveTextContent(/^Last time\s*72\.5\s*×\s*8$/))
+    const cells = lastCells(squat)
+    expect(cells).toHaveLength(3)
+    expect(cells[1]).toHaveTextContent(/^Last time\s*75\s*×\s*6$/)
+    expect(cells[2]).toHaveTextContent(/^Last time\s*–$/)
+
+    // Today's own numbers appear once each, as saved rows, not again as history.
+    expect(squat.getAllByText('100')).toHaveLength(1)
+    expect(squat.getAllByText('102.5')).toHaveLength(1)
+
+    expect(lastRequests(fetchMock).find((url) => url.includes('exercise_id=ex-1'))).toContain(
+      `exclude_session_id=${SESSION_ID}`,
+    )
   })
 
   it('falls back to the dash when the last-time read fails', async () => {
@@ -900,10 +959,11 @@ describe('LogWorkoutScreen', () => {
   })
 
   it('does not show today’s own sets as last time before the first save', async () => {
-    // The seam #102 closes. #46 filters last-time results belonging to the current session, but
-    // that filter needs a session id — and until the mount-time restore the screen had none
-    // before the first save. So a client reopening mid-workout saw her own earlier sets from
-    // today sitting under the Last header.
+    // The seam #102 closes. Keeping today's sets out of last-time needs a session id — and until
+    // the mount-time restore the screen had none before the first save, so a client reopening
+    // mid-workout saw her own earlier sets from today sitting under the Last header. Since #162
+    // that id is sent as exclude_session_id; with no session before today there is nothing to
+    // fall back to, so the column stays on the empty-state dash.
     mockApi({
       history: todaysSessionHistory(),
       last: {

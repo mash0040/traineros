@@ -563,4 +563,68 @@ public class MeHistoryEndpointsTests : IClassFixture<MeHistoryEndpointsTestApp>
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    // -- /api/me/last?exclude_session_id= (#162) --
+
+    [Fact]
+    public async Task Last_excluding_the_newest_session_falls_back_to_the_one_before()
+    {
+        // The resumed-day case: the newer session is "today", and the log screen needs the
+        // squats from before it rather than its own sets handed back.
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/me/last?exercise_id={_app.SquatId}&exclude_session_id={_app.SessionA_NewerId}",
+            session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var mostRecent = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("mostRecent");
+
+        Assert.Equal(_app.SessionA_OlderId, mostRecent.GetProperty("sessionId").GetGuid());
+        Assert.Equal("2026-07-15", mostRecent.GetProperty("performedOn").GetString());
+
+        // Set-number order, so the log screen's row N still lines up with set N.
+        var sets = mostRecent.GetProperty("sets");
+        Assert.Equal(2, sets.GetArrayLength());
+        Assert.Equal(_app.SetA_Old_Squat1Id, sets[0].GetProperty("id").GetGuid());
+        Assert.Equal(1, sets[0].GetProperty("setNumber").GetInt32());
+        Assert.Equal(_app.SetA_Old_Squat2Id, sets[1].GetProperty("id").GetGuid());
+        Assert.Equal(2, sets[1].GetProperty("setNumber").GetInt32());
+    }
+
+    [Fact]
+    public async Task Last_excluding_the_only_session_for_the_exercise_is_null()
+    {
+        // First time ever doing bench, resumed: there is no "last time", and the answer says so
+        // in the same shape as never-logged.
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var response = await _app.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/me/last?exercise_id={_app.BenchId}&exclude_session_id={_app.SessionA_OlderId}",
+            session));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("mostRecent").ValueKind);
+    }
+
+    [Fact]
+    public async Task Last_excluding_another_clients_session_is_identical_to_not_excluding()
+    {
+        // Isolation (api.md rule 5, query-param form): B's session id is not in A's scoped query,
+        // so excluding it changes nothing. Any difference would be an existence oracle.
+        var session = await _app.SignInAsync(_app.ClientAId);
+        var baseline = await _app.Client.SendAsync(
+            Request(HttpMethod.Get, $"/api/me/last?exercise_id={_app.SquatId}", session));
+        var probed = await _app.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/me/last?exercise_id={_app.SquatId}&exclude_session_id={_app.SessionB_Id}",
+            session));
+
+        Assert.Equal(HttpStatusCode.OK, probed.StatusCode);
+        var raw = await probed.Content.ReadAsStringAsync();
+        Assert.Equal(await baseline.Content.ReadAsStringAsync(), raw);
+        Assert.DoesNotContain(_app.SetB_SecretId.ToString(), raw);
+        Assert.DoesNotContain("SECRET_B_EXERCISE", raw);
+    }
 }
