@@ -112,6 +112,7 @@ An exercise row on the client Log workout screen carries three numeric groups, r
 - Format `72.5 × 8`. The `×` renders in `--muted` at the same size so the numbers dominate the glyph.
 - Column header `Last` in `--text-xs` (12px), weight 400, `--muted`, once above the column — not repeated per row. A column needs naming once; four stacked labels is repetition, and it competes with the values it is supposed to introduce.
 - Position: own column, left of the inputs. Successive sets stack into a stable vertical strip of last-time values under the one header.
+- Width: at least `5rem`, growing to the longest value in that exercise block, and never wrapping. Same-unit values fit the floor; a cross-unit value (`225.97 × 10`) widens its own block's column rather than every block's, so the inputs give up width only where the value needs it.
 - Empty state (no prior data, or a set number the client didn't reach last time): a single `–` at `--muted` in the cell. Not "no data yet" copy. Dashes hold the row's place so the strip stays aligned to set number.
 - The visible header is decorative to assistive tech: each cell carries its own visually-hidden label, because a column header is not programmatically associated with the cells beneath it and a row-by-row reading would otherwise announce a bare number.
 

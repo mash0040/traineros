@@ -902,8 +902,18 @@ const HISTORY_PAGE = 100
 //     [set #]  [last-time]  [weight input]  [reps input]
 //
 // Unchanged from #47. #46 still owns the last-time column; the two input columns are #45's.
-// The first two columns are fixed and the inputs share the remainder, because the numbers on
-// the left are read and the controls on the right are tapped.
+// The inputs share the remainder, because the numbers on the left are read and the controls on
+// the right are tapped.
+//
+// ── Last is sized by its content, with a floor (#163) ──────────────────────────────────────
+// It was a fixed 5rem, laid out around same-unit values like `72.5 × 8`. Storage is canonical
+// kilograms and the display unit is the client's (#99), so a kg entry read in lbs comes back
+// with two decimals and a three-digit whole part: 102.5 kg is `225.97 × 10`, which does not fit
+// 5rem and wrapped at the space before the ×. A flat wider track would fix that by taking width
+// from the inputs in every block, including the same-unit majority that never needed it.
+// `minmax(5rem, max-content)` keeps those blocks exactly as they were and widens only the block
+// that holds a long value — and within that block every row takes the same track, so the strip
+// still reads as a column. The rounding stays as it is; #99 settled that.
 //
 // ── Declared once, distributed by subgrid (#138) ───────────────────────────────────────────
 // This template used to be applied as a class to three independent grid containers: the header
@@ -911,16 +921,21 @@ const HISTORY_PAGE = 100
 // the clients roster, where two containers holding one template string resolved it to two
 // different layouts.
 //
-// It was not misaligning anything here, and the reason is worth stating so nobody "restores"
-// it: every track is fixed or fr, and content-independent tracks resolve identically in any
-// container of equal width. The roster drifted because two of its tracks were `auto`.
+// It was not misaligning anything here at the time, because every track was fixed or fr, and
+// content-independent tracks resolve identically in any container of equal width. The roster
+// drifted because two of its tracks were `auto`.
 //
 // So this was a loaded gun rather than a wound, and it is pointed at the one screen this
-// document spends a whole section on. Adding a single `auto` track, or padding to any one of
-// the three rows, would have broken the column alignment that §Log row depends on — silently,
-// because nothing here would have looked wrong until a set was logged. One definition on the
-// block, subgrid on the rows, and the failure mode is gone rather than deferred.
-const LOG_BLOCK_GRID = 'grid grid-cols-[2rem_5rem_1fr_1fr] gap-x-3'
+// document spends a whole section on. Adding a single content-sized track, or padding to any
+// one of the three rows, would have broken the column alignment that §Log row depends on —
+// silently, because nothing here would have looked wrong until a set was logged. One definition
+// on the block, subgrid on the rows, and the failure mode is gone rather than deferred.
+//
+// That is what makes #163's content-sized Last track safe. Subgridded rows contribute their
+// cells to the block's one track and all read it back, so the track is resolved once per block,
+// not once per row. Do not take the template back down onto the rows: with max-content in it,
+// that is the roster defect exactly.
+const LOG_BLOCK_GRID = 'grid grid-cols-[2rem_minmax(5rem,max-content)_1fr_1fr] gap-x-3'
 
 // What each row wears instead of a copy of the template: span the four tracks, take their
 // sizes from the block. `items-end` stays per-row, because it is alignment within a row and
@@ -1546,7 +1561,9 @@ function LastCell({ set, unit }: { set: LastSet | undefined; unit: WeightUnit })
       // below, on the wrapper — the constant is the glyph only, never the label.
       <span className="text-base font-semibold text-muted tabular-nums">{NO_VALUE}</span>
     ) : (
-      <span className="text-base font-semibold text-ink tabular-nums">
+      // nowrap: one value, one line (#163). The track grows to fit it rather than letting the
+      // value break at the space before the ×, which splits the number from its reps.
+      <span className="whitespace-nowrap text-base font-semibold text-ink tabular-nums">
         {set.weightKg === null || set.weightKg === undefined ? (
           // Bodyweight (weight_kg NULL, database.md). Reps alone: "– × 8" would read as a
           // missing number rather than an absent one, and DESIGN.md gives no other glyph.
