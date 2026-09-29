@@ -83,7 +83,7 @@ The "desktop-first" half of that note is withdrawn by #135; the container is sti
 - **Long labels move to `aria-label`.** "Retire {name}" is right for a screen reader moving down a library of forty rows and wrong for a 390px card, so the row buttons read "Retire" and carry the naming form in `aria-label`. The accessible name is unchanged, which is why the tests that assert it did not.
 - **A table is a wide-case layout.** The roster is still a set of parallel facts compared down a column, and it still gets column alignment where there is room for one. It gets it from a grid that stacks below `sm:` rather than from `<table>`, which cannot reflow at any width.)
 
-(Also #114: trainer controls carry hover and cursor affordances via a shared vocabulary module; focus remains the app-wide :focus-visible outline. Tailwind v4's preflight dropped v3's button cursor: pointer, which was much of what made buttons read as non-interactive. No transitions — adding them is a DESIGN.md decision, not a component tweak.)
+(Also #114: trainer controls carry hover and cursor affordances via a shared vocabulary module; focus remains the app-wide :focus-visible outline. Tailwind v4's preflight dropped v3's button cursor: pointer, which was much of what made buttons read as non-interactive. No transitions on controls — DESIGN.md §Motion excludes hover and selected states by name.)
 
 Ten screens total (five client, five trainer). If an eleventh appears during build, it goes through PRODUCT.md scope review, not straight into the sprint.
 
@@ -94,7 +94,8 @@ Ten screens total (five client, five trainer). If an eleventh appears during bui
 - Tailwind CSS, no component library in v1. (Rejected: shadcn/MUI — 9 screens don't amortize a design system; adding one later is trivial, removing one isn't.)
 - Video links open YouTube in a new tab/native app. No embedded player (embed = layout shift + bundle weight for zero logging value).
 - Loading states: skeletons on Today/History; none elsewhere.
-- No dark mode, no animations, no branding pass in v1. A logo is not on the critical path to the Definition of Shipped.
+- No dark mode, no branding pass in v1. A logo is not on the critical path to the Definition of Shipped.
+- One motion: a disclosure's panel opening, at one duration and curve, removed under `prefers-reduced-motion` (#164; values and exclusions in DESIGN.md §Motion). Nothing else animates: no page transitions, no loading animation.
 
 ## Non-goals (v1)
 

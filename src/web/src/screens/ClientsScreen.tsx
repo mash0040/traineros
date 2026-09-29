@@ -660,7 +660,7 @@ function AddClient({ onAdded }: { onAdded: (client: ClientResponse) => void }) {
   return (
     <>
       {toggle}
-      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 sm:p-6">
+      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 motion-safe:animate-disclose sm:p-6">
         <h2 className="text-lg font-semibold text-ink-bold">Add a client</h2>
 
         {/* api.md is explicit that POST /api/clients sends nothing: "invite = trainer tells them

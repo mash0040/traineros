@@ -339,7 +339,7 @@ function SessionCard({
       </h2>
 
       {open && (
-        <div className="grid gap-6 border-t border-edge p-4">
+        <div className="grid gap-6 border-t border-edge p-4 motion-safe:animate-disclose">
           {/* Her note to the trainer (database.md: the v1 substitute for messaging). It reads
               in the detail rather than on the summary, so the collapsed list stays a column of
               dates and counts to scan rather than a wall of prose.

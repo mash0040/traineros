@@ -1427,7 +1427,7 @@ function SavedRow({
 
       {open && (
         // Full width under the row it belongs to, not part of the column layout.
-        <div className="col-span-4 grid gap-2">
+        <div className="col-span-4 grid gap-2 motion-safe:animate-disclose">
           {/* One slot for the row, shared by both actions (#141). Above the controls that write
               to it, per DESIGN.md §Messages. */}
           {actionFailure !== null && (
