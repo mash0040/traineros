@@ -46,6 +46,22 @@
   --text-xl--line-height: 32px;
   --text-2xl: 31px;
   --text-2xl--line-height: 40px;
+
+  /* DESIGN.md §Motion (#164). The app's one piece of motion: a disclosure's panel arriving.
+     One duration, one curve, declared once here and applied as `motion-safe:animate-disclose`,
+     so no screen chooses its own timing. Opacity and transform only — the panel occupies its
+     final box from the first frame, so nothing is laid out twice. `motion-safe:` is the
+     reduced-motion rule: under `reduce` the animation property is never set, so there is no
+     state to be stuck mid-way through. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --animate-disclose: disclose 180ms var(--ease-out-quart);
+
+  @keyframes disclose {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
 }
 
 :root {

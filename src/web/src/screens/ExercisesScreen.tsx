@@ -475,7 +475,11 @@ function EditExercise({
   }
 
   return (
-    <form className="mt-4 grid max-w-xl gap-4 border-t border-edge pt-4" noValidate onSubmit={onSubmit}>
+    <form
+      className="mt-4 grid max-w-xl gap-4 border-t border-edge pt-4 motion-safe:animate-disclose"
+      noValidate
+      onSubmit={onSubmit}
+    >
       <Fields
         cues={cues}
         idPrefix={`exercise-${exercise.id}`}
@@ -596,7 +600,7 @@ function AddExercise({ onAdded }: { onAdded: (exercise: ExerciseResponse) => voi
   return (
     <>
       {toggle}
-      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 sm:p-6">
+      <section className="mt-8 max-w-xl rounded-md border border-edge p-4 motion-safe:animate-disclose sm:p-6">
         <h2 className="text-lg font-semibold text-ink-bold">Add an exercise</h2>
 
         <form className="mt-6 grid gap-4" noValidate onSubmit={onSubmit}>

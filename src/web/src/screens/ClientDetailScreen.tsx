@@ -658,7 +658,7 @@ function ClientSession({
       )}
 
       {open && (
-        <div className="grid gap-6 border-t border-edge py-4">
+        <div className="grid gap-6 border-t border-edge py-4 motion-safe:animate-disclose">
           {session.exercises.map((exercise) => (
             <ExerciseSets
               exercise={exercise}

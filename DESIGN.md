@@ -189,7 +189,7 @@ That is #46's defect in new clothes. #46 fixed it on the log screen by deriving 
 
 **A failure does not expire either.** It is actionable: it names something to fix or retry, and a retry that has to be reconstructed from memory is worse than a panel that outstays its welcome.
 
-No fade, no motion: DESIGN.md scopes motion out of v1 and this is a state change, not a transition.
+No fade, no motion: this is a state change, not a disclosure, and §Motion gives motion to disclosures only.
 
 ### Every write says it worked
 
@@ -375,14 +375,28 @@ column label beside every value.
 
 ## Motion
 
-**Scoped absent in v1.** No transitions, no animations, no scroll effects (per ui-ux.md). This is a deliberate deferral, not an oversight — the design system reserves motion for v1.1+.
+**One motion, and it is a disclosure opening (#164).** v1 originally scoped motion out because it was not on the path to shipping. Panels that popped in as bare text changed that. The fix is a rule, not a per-screen tweak, because a second screen choosing its own timing is the inconsistency #138 spent a ticket removing.
 
-When motion is added post-v1:
+> When a disclosure opens, its panel fades in from `opacity: 0` and settles from 4px above its final position over **180ms**, eased **ease-out-quart** (`cubic-bezier(0.25, 1, 0.5, 1)`). Applied as `motion-safe:animate-disclose`, from the tokens in `src/web/src/index.css`. No screen declares its own duration or curve.
 
-- Ease-out only, exponential curves (ease-out-quart / quint / expo) per shared laws.
-- Never bounce, never elastic.
-- Never animate CSS layout properties.
-- Respect `prefers-reduced-motion` from day one.
+**Why these values.** 180ms is long enough to read as a panel opening rather than a flicker, and short enough that a client between sets never waits on it. Ease-out-quart puts most of the travel in the first third, so the panel is effectively present at once and the remainder is settling. The animation never blocks input: the controls inside are live from the first frame, so the 44px targets and the log screen's thumb reach are unaffected.
+
+**What it applies to.** Every disclosure: a toggle with `aria-expanded` that mounts a panel under it. In v1 that is six: the log row's Edit/Remove strip, the History card's detail, the client-detail session expansion, the exercise card's edit form, and the Add a client and Add an exercise forms. A new disclosure takes the same class; it does not get a variant.
+
+**What it deliberately excludes.**
+
+- **Closing.** A panel leaves instantly. An exit animation keeps an element mounted after the state says it is gone, which fights the focus hand-offs the log screen depends on, and a close has nothing to reveal.
+- **The log row's swap into edit fields.** That is a replacement under the client's finger, not a panel opening. It must land instantly.
+- **Messages** (§Messages): a state change in a slot, not a disclosure.
+- **Hover, focus, and selected states** on controls: instant swaps (see `trainerControls.ts`).
+- **The disclosure chevron.** `▾` swaps to `▴` with the state; rotating it would be a second motion competing with the panel.
+- Page transitions, loading animation, scroll effects, and anything in the reminder emails.
+
+**The laws any future motion inherits.**
+
+- Ease-out only, exponential curves (ease-out-quart / quint / expo). Never bounce, never elastic.
+- Never animate CSS layout properties. Opacity and transform only, so the element occupies its final box from the first frame and nothing around it is laid out twice. The content below an opening panel moves instantly, as it did before motion existed; animating height to smooth that would be animating layout.
+- **`prefers-reduced-motion: reduce` removes motion entirely.** The `motion-safe:` variant means the animation property is never set, not shortened, so there is no intermediate state to be left in.
 
 ## Accessibility
 
@@ -441,6 +455,17 @@ Tokens live in `src/web/src/index.css` under `@theme`, so they surface as utilit
   --radius-md: 6px;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* §Motion. Applied only as motion-safe:animate-disclose. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --animate-disclose: disclose 180ms var(--ease-out-quart);
+
+  @keyframes disclose {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
 }
 
 :root {
@@ -456,7 +481,7 @@ Utility usage: `bg-surface`, `text-ink`, `border-edge`, `bg-accent text-accent-i
 Called out so no future contributor mistakes an absence for an omission:
 
 - Dark mode (token override under the same semantic names — not a fork)
-- Motion vocabulary (transitions, animations, page transitions)
+- Motion beyond disclosures (page transitions, loading animation — see §Motion for what v1 has)
 - Custom typeface / web font
 - Logo or fuller brand mark beyond the favicon/app-icon family
 - Full component library (button, input, card, modal, toast primitives) — v1 builds these ad-hoc under the tokens above

@@ -29,10 +29,11 @@
 // trainerPrimary for what that buys and what it deliberately still excludes.
 //
 // ── What is deliberately absent ────────────────────────────────────────────────────────────
-// Transitions. DESIGN.md scopes motion out of v1 entirely, and #114 restates it: state
-// changes, not transitions. Hover here is an instant swap of border and background, not a
-// 150ms fade. If a future contributor adds `transition-colors` to these strings, that is a
-// design decision that belongs in DESIGN.md first.
+// Transitions. DESIGN.md §Motion gives motion to disclosures only (#164) and excludes control
+// states by name; #114 said the same first: state changes, not transitions. Hover here is an
+// instant swap of border and background, not a 150ms fade. If a future contributor adds
+// `transition-colors` to these strings, that is a design decision that belongs in DESIGN.md
+// first.
 //
 // Focus is also absent, and that is not an oversight: index.css already sets one
 // `:focus-visible` outline for the whole app, in --edge-strong, which is the role DESIGN.md
