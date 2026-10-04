@@ -40,8 +40,15 @@
  * Collapsing the two names here would have made "is this block armed" unanswerable from the
  * slot, which is the whole mechanism by which #141 stopped a prompt and a confirmation from
  * being on screen together.
+ *
+ * `note` is the third, and it is not an outcome at all (#169): it is an instruction addressed to
+ * the person, which the log screen's tap-to-edit hint is the one case of. It takes the panel
+ * because bare muted text among controls reads as leftover, which is the defect the panel
+ * exists for. It takes no colour, because DESIGN.md gives this system two semantic colours and
+ * no info-blue: neutral surface, neutral edge, and the glyph is what separates it from the other
+ * two once colour is gone.
  */
-type Tone = 'failure' | 'prompt' | 'confirmation'
+type Tone = 'failure' | 'prompt' | 'confirmation' | 'note'
 
 const PANEL = 'flex items-start gap-2 rounded-sm border px-3 py-2 text-sm'
 
@@ -62,6 +69,16 @@ const TONES: Record<Tone, { glyph: string; panel: string; text: string; glyphTon
     glyph: '✓',
     glyphTone: 'text-ink',
     panel: 'border-accent-edge bg-accent-surface',
+    text: 'text-ink',
+  },
+  // Weight 400, like the confirmation: it must be available without interrupting.
+  note: {
+    glyph: 'i',
+    glyphTone: 'text-muted',
+    // Not surface-sunk: that fill with an edge border is Save set's recipe, two rows below this on
+    // the log screen, and a note built from it read as a second, disabled button (#169). Outlined
+    // on the page's own surface instead, with the stronger edge so it still holds as a panel.
+    panel: 'border-edge-strong bg-surface',
     text: 'text-ink',
   },
 }
@@ -89,8 +106,8 @@ export function Message({
       id={id}
       // A failure or an unanswered question interrupts whatever a screen reader is saying; a
       // confirmation waits its turn. The same split the visual treatment makes, in the channel
-      // that cannot see it.
-      role={tone === 'confirmation' ? 'status' : 'alert'}
+      // that cannot see it. A note is never urgent, so it waits its turn too.
+      role={tone === 'confirmation' || tone === 'note' ? 'status' : 'alert'}
     >
       {/* aria-hidden because the role already announces what kind of message this is, and a
           screen reader reading "exclamation mark" before every error is noise. The glyph is

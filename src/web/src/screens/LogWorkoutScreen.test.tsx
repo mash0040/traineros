@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1815,11 +1815,11 @@ describe('LogWorkoutScreen', () => {
     expect(squat.queryByText(/Set 2 removed/)).not.toBeInTheDocument()
   })
 
-  // -- #107: the one-time hint --
+  // -- #107, #169: the tap-to-edit hint, once per workout --
 
-  const HINT = /Tap a set to change or remove it/
+  const HINT = /Tap a set above to edit or remove it/
 
-  it('teaches the tap gesture on the first saved set, not before', async () => {
+  it('teaches the tap gesture on the first saved set, not before, as a panel', async () => {
     mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
@@ -1827,61 +1827,115 @@ describe('LogWorkoutScreen', () => {
     // Nothing to point at yet: a hint under an empty list describes rows that are not there.
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
 
+    const squat = await logRun(1)
+
+    // A Message, not a line of muted text, and on the block the set was saved in.
+    expect(squat.getByRole('status')).toHaveTextContent(HINT)
+    // Nothing to tap: it goes on her next action (#169).
+    expect(screen.queryByRole('button', { name: 'Got it' })).not.toBeInTheDocument()
+  })
+
+  it('stays up through the rest between sets, since no clock moves the inputs', async () => {
+    // #169 first shipped a six-second expiry. Its exit shifted the pending row and Save while her
+    // thumb could be travelling to them, the one shift on the screen with no tap behind it.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
     await logRun(1)
 
+    act(() => vi.advanceTimersByTime(3 * 60_000))
     expect(screen.getByText(HINT)).toBeInTheDocument()
   })
 
-  it('shows the hint once for the screen rather than once per exercise', async () => {
+  it('goes on her next save', async () => {
     mockApi()
     renderScreen()
-    await screen.findByRole('heading', { name: 'Lower', level: 1 })
-    await logRun(1)
-    await logSet('Leg Curl', '40', '12')
-
-    await waitFor(() => expect(screen.getAllByText(HINT)).toHaveLength(1))
-    // On the block that has the first saved row, so it sits next to what it is about.
-    const squat = await block('Back Squat')
-    expect(squat.getByText(HINT)).toBeInTheDocument()
-  })
-
-  it('stops showing the hint for good once a row has been opened', async () => {
-    mockApi()
-    const { unmount } = renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
     const squat = await logRun(1)
 
-    // Opening a row is proof the lesson landed.
-    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    // Set 2 is pre-filled from set 1, so Save is the whole action, with no field touched.
+    await userEvent.click(squat.getByRole('button', { name: 'Save set' }))
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
 
-    // And it survives the tab being evicted between sets, which is the whole reason it is stored
-    // rather than held in React state.
-    unmount()
+  it('goes when she focuses a field, in any block', async () => {
     mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
     await logRun(1)
+    const curl = await block('Leg Curl')
 
+    await userEvent.click(curl.getByLabelText(/Leg Curl set 1 reps/))
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 
-  it('dismisses the hint permanently on Got it, without opening anything', async () => {
+  it('does not appear on a second exercise block in the same workout', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logRun(1)
+    const curl = await block('Leg Curl')
+
+    // Her first Leg Curl set is a next action, so it clears the hint, and the workout has had
+    // its one showing, so it does not bring the hint back on this block either.
+    await logSet('Leg Curl', '40', '12')
+    await waitFor(() => expect(curl.getByLabelText(/set 2 weight/)).toBeInTheDocument())
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
+
+  it('goes the moment a row is opened, since the lesson has landed', async () => {
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    await userEvent.click(squat.getByRole('button', { name: /^Set 1,/ }))
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
+
+  it('stays away after the phone locks mid-workout, and comes back for the next workout', async () => {
     mockApi()
     const { unmount } = renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
     await logRun(1)
+    expect(screen.getByText(HINT)).toBeInTheDocument()
+    await waitFor(() => expect(localStorage.getItem(DRAFT_KEY)).toContain('"hintShown":true'))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Got it' }))
+    // The tab is evicted between sets and the screen remounts onto the same workout's draft.
+    unmount()
+    mockApi()
+    const second = renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    await logSet('Leg Curl', '40', '12')
+    const curl = await block('Leg Curl')
+    await waitFor(() => expect(curl.getByLabelText(/set 2 weight/)).toBeInTheDocument())
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
 
-    unmount()
+    // Finish clears the draft, so the next workout is taught once more. No #107 gate survives it.
+    second.unmount()
+    localStorage.removeItem(DRAFT_KEY)
     mockApi()
     renderScreen()
     await screen.findByRole('heading', { name: 'Lower', level: 1 })
     await logRun(1)
+    expect(screen.getByText(HINT)).toBeInTheDocument()
+  })
 
-    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  it('reads a draft from before #169 as not yet shown, rather than discarding it', async () => {
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ performedOn: todayForClient(), programDayId: 'day-1', comment: 'Knee ok', sessionId: null }),
+    )
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+
+    // The draft survived the shape change.
+    expect(screen.getByDisplayValue('Knee ok')).toBeInTheDocument()
+
+    await logRun(1)
+    expect(screen.getByText(HINT)).toBeInTheDocument()
   })
 })
 
