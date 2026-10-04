@@ -21,7 +21,6 @@ import {
 } from '../lib/api'
 import { NO_VALUE } from '../lib/glyphs'
 import { targetLine } from '../lib/prescription'
-import { dismissRowHint, rowHintDismissed } from '../lib/rowHint'
 import {
   spokenUnit,
   toDisplay,
@@ -140,23 +139,48 @@ export function LogWorkoutScreen({
   const [lastTimes, setLastTimes] = useState<Record<string, LastSet[] | null>>({})
 
   /**
-   * The one-time "rows are tappable" hint (#107).
+   * The "rows are tappable" hint (#107), once per workout (#169).
    *
-   * Read once at mount rather than on every render: `localStorage` is synchronous and this sits
-   * in the render path of the screen DESIGN.md protects hardest. State, because dismissing has
-   * to re-render, and the storage write is the durable half rather than the live one.
+   * Two halves. `hintShown` is whether this workout has used its one showing, and is persisted in
+   * the draft so a locked phone does not earn a second one. `hintFor` is the block showing it
+   * right now, and is deliberately not persisted: it lasts until her next action, and a hint
+   * restored onto a fresh mount minutes later would be pointing at a save she no longer remembers.
+   *
+   * Her next action, not a clock. The hint sits in the grid above the pending row, so it moves the
+   * inputs and Save when it goes. Every other shift on this screen follows a tap; a timer would be
+   * the one that moves her targets while her thumb is travelling to them. So it goes on the next
+   * save (onSaveSet), the next row opened (ExerciseBlock's toggle), or the next field focused
+   * (`dismissHintOnInput`) — each a moment she has just acted, which is when a shift is expected.
+   * It also means the hint survives the rest between sets, the one time she reads the screen.
+   *
+   * #107 dismissed it permanently, per device, behind a "Got it" tap. #169 retired both: a tap
+   * mid-workout is a tap she should not have to spend, and once-ever meant a client who skimmed
+   * past it, or learned it on another phone, was never told again.
+   *
+   * The ref is the guard and the state is the render. Two exercises' saves landing in the same
+   * tick would both read `hintShown` as false from their closures and both claim the showing.
    */
-  const [hintSeen, setHintSeen] = useState(rowHintDismissed)
+  const [hintShown, setHintShown] = useState(false)
+  const hintShownRef = useRef(false)
+  const [hintFor, setHintFor] = useState<string | null>(null)
 
-  function dismissHint() {
-    // Guarded, because `toggle` calls this on every open and close of every row: without it a
-    // workout of twenty sets would write to localStorage on every tap to say the same thing.
-    if (hintSeen) {
+  function claimHint(prescriptionId: string) {
+    if (hintShownRef.current) {
       return
     }
 
-    dismissRowHint()
-    setHintSeen(true)
+    hintShownRef.current = true
+    setHintShown(true)
+    setHintFor(prescriptionId)
+  }
+
+  // Focus is caught once at the screen root rather than wired into every field, so a field added
+  // later is covered without anyone remembering to. Fields only: a focused button is either Save
+  // or a row, and those clear the hint through their own handlers.
+  function dismissHintOnInput(event: React.FocusEvent) {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      setHintFor(null)
+    }
   }
 
   const [finishing, setFinishing] = useState(false)
@@ -238,6 +262,8 @@ export function LogWorkoutScreen({
       setSessionId(resumedSession)
       sessionIdRef.current = resumedSession
       setComment(draft?.comment ?? storedComment)
+      hintShownRef.current = draft?.hintShown ?? false
+      setHintShown(hintShownRef.current)
       setBlocks(restored)
       setResumed(resumedSession !== null || (draft !== null && draft.comment !== ''))
       setHydrated(true)
@@ -343,8 +369,8 @@ export function LogWorkoutScreen({
       return
     }
 
-    writeDraft({ performedOn, programDayId: dayId, comment, sessionId })
-  }, [comment, sessionId, hydrated, performedOn, dayId])
+    writeDraft({ performedOn, programDayId: dayId, comment, sessionId, hintShown })
+  }, [comment, sessionId, hintShown, hydrated, performedOn, dayId])
 
   const ensureSession = useCallback(async (): Promise<EnsuredSession> => {
     if (sessionIdRef.current !== null) {
@@ -374,6 +400,7 @@ export function LogWorkoutScreen({
         programDayId: dayId,
         comment: existing?.comment ?? '',
         sessionId: session.id,
+        hintShown: existing?.hintShown ?? false,
       })
 
       sessionIdRef.current = session.id
@@ -433,25 +460,6 @@ export function LogWorkoutScreen({
     return blocks[prescriptionId] ?? { saved: [], pending: EMPTY_PENDING }
   }
 
-  /**
-   * Which block carries the hint: the first one that actually has a saved row (#107).
-   *
-   * "On a client's first saved set", read literally. Once, not once per exercise — the lesson is
-   * about rows in general, and a workout of six exercises would otherwise teach it six times.
-   * The first block *with a row in it* rather than simply the first block, because the hint has
-   * to point at something: on a screen where Bench is done and Squat is untouched, a line under
-   * Squat's empty list describes rows that are not there.
-   *
-   * Derived, not stored. A set removed back to none takes the hint with it, and the block that
-   * carries it moves with the rows rather than being remembered from whichever one was first.
-   * Restored sets count: reopening a session mid-workout is a client who has saved sets.
-   */
-  const hintFor = hintSeen
-    ? null
-    : (prescriptions.find(
-        (prescription) => blockFor(prescription.id ?? '').saved.length > 0,
-      )?.id ?? null)
-
   // Exercises with a set she typed and never saved — the one place a set could still vanish
   // silently at Finish.
   //
@@ -500,6 +508,10 @@ export function LogWorkoutScreen({
     if (block.pending.saving) {
       return
     }
+
+    // Tapping Save is her next action, so a hint from an earlier save goes now (#169), whether or
+    // not this one validates. The save that first claims it does so after this, on success.
+    setHintFor(null)
 
     // Validated here rather than at the server, so a missing rep count costs no round trip on
     // gym wifi. Both checks mirror the endpoint's own, and both surface as `rejected` because
@@ -556,6 +568,12 @@ export function LogWorkoutScreen({
           [key]: { saved: [...current.saved, row], pending: prefillFrom(row, unit) },
         }
       })
+
+      // On the block the set was just saved in, because that is where her eyes are and where the
+      // row it is about has just appeared. Claimed by the save landing, not derived from "the
+      // first block with rows": sets restored on resume are not something she just did, and a
+      // hint that appeared on mount would be teaching nobody anything.
+      claimHint(key)
     } catch (caught) {
       // The typed values stay exactly where they are. Losing them here is the failure mode that
       // matters: she believes it saved, it did not, and she finds out never.
@@ -763,7 +781,7 @@ export function LogWorkoutScreen({
   }
 
   return (
-    <Shell>
+    <Shell onFocusCapture={dismissHintOnInput}>
       <h1 className="mt-8 text-xl font-semibold text-ink-bold">{day.title}</h1>
       {program !== null && <p className="mt-1 text-sm text-muted">{program.title}</p>}
 
@@ -795,7 +813,7 @@ export function LogWorkoutScreen({
                 onEdit={(setId, weightKg, reps) =>
                   onEditSet(prescription.id ?? '', setId, weightKg, reps)
                 }
-                onHintSeen={dismissHint}
+                onHintSeen={() => setHintFor(null)}
                 onSave={() => void onSaveSet(prescription)}
                 prescription={prescription}
                 showHint={hintFor === prescription.id}
@@ -1120,9 +1138,8 @@ function ExerciseBlock({
     // which is the only value that is true of the set.
     setEdit(null)
     setOpenSetId((previous) => (previous === setId ? null : setId))
-    // Opening a row is proof the hint landed, so it stops being shown from here on — on this
-    // device, permanently. A client who has found the gesture does not need to be taught it, and
-    // a hint that outlives its lesson is decoration.
+    // Opening a row is one of the next actions that clear the hint (#169), and the one that also
+    // proves it landed. A hint that outlives its lesson is decoration.
     onHintSeen()
   }
 
@@ -1197,33 +1214,30 @@ function ExerciseBlock({
           />
         ))}
 
-        {/* The one-time hint (#107), directly under the rows it is about and above the row she
-            is typing into, so it reads as a note on what is above rather than a label for what
-            is below.
+        {/* The once-per-workout hint (#107, #169), directly under the rows it is about and above
+            the row she is typing into, so it reads as a note on what is above rather than a
+            label for what is below.
 
-            Muted body text, not a Message. Message.tsx draws the line and it is the right one:
-            a panel means something happened. Nothing happened here — this is an instruction, and
-            giving it a tinted panel with a glyph would put it in the same visual class as a set
-            that would not save.
+            A panel, in the `note` tone (DESIGN.md §Messages). It was muted body text, and among
+            the rows, the inputs and a full-width Save it read as leftover text rather than as
+            something addressed to her. Not `confirmation`: a ✓ says a write committed, and this
+            is an instruction.
+
+            It enters with the disclosure motion and is the one surface outside a disclosure that
+            does (DESIGN.md §Motion). It pushes the pending row down by its own height while it
+            is up, the same shift every message panel on this screen makes.
+
+            No dismiss control. It goes on her next action (see `hintFor`), so there is nothing
+            for a tap to do. That is also why it never shares the block with a message: every
+            path that writes one, a save or a row action, is a next action and has cleared it.
 
             col-span-4 for the reason everything else in this grid carries it: a plain child auto
             flows into track 1, which is the 2rem set-number column, and this sentence would wrap
             down a 32px gutter. */}
         {showHint && (
-          <p className="col-span-4 flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
-            Tap a set to change or remove it.
-            {/* An explicit dismissal as well as the automatic one in `toggle`, because a client
-                who is never going to edit a set would otherwise carry this line through every
-                workout until she happened to tap a row. Quiet: it is not an action on the
-                workout, and DESIGN.md's accent belongs to the thing to tap. */}
-            <button
-              className="min-h-[var(--tap-min)] rounded-sm px-2 font-semibold text-ink underline underline-offset-4"
-              onClick={onHintSeen}
-              type="button"
-            >
-              Got it
-            </button>
-          </p>
+          <Message className="col-span-4 motion-safe:animate-disclose" tone="note">
+            Tap a set above to edit or remove it.
+          </Message>
         )}
 
         <div className={LOG_ROW_GRID}>
@@ -1659,9 +1673,15 @@ function SessionComment({
   )
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  onFocusCapture,
+}: {
+  children: React.ReactNode
+  onFocusCapture?: (event: React.FocusEvent) => void
+}) {
   return (
-    <main className="flex min-h-dvh flex-col px-6 pt-10">
+    <main className="flex min-h-dvh flex-col px-6 pt-10" onFocusCapture={onFocusCapture}>
       <div className="mx-auto flex w-full max-w-lg flex-1 flex-col">{children}</div>
     </main>
   )

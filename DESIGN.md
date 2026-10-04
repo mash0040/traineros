@@ -241,7 +241,26 @@ Everything else confirms. "Nothing happened as far as I can tell" is the failure
 
 **Size stays at `--text-sm` for both.** The temptation is to enlarge failures. Rejected: these messages sit inside form clusters, and a message that changes size changes the height of the block it appears in, which moves the controls under it at the moment the trainer is reaching for them.
 
-**Loading and progress text is neither tone.** "Loading your clients" is not an outcome; it stays plain `--muted` body text with `role="status"` and gets no panel. Panels mean *something happened*.
+**Loading and progress text is neither tone.** "Loading your clients" is not an outcome; it stays plain `--muted` body text with `role="status"` and gets no panel. Panels mean *something happened*, or that the panel is addressed to the person (the note, below).
+
+### The note: an instruction, not an outcome (#169)
+
+The log screen's tap-to-edit hint rendered as muted body text, and among the rows, the inputs and a full-width Save it read as leftover text rather than something addressed to the client. That is this section's defect exactly, so it takes the panel. It takes neither tone: `failure` says the write did not complete, and a `✓` says it did, while the hint is an instruction that follows a write without reporting on it.
+
+| | Note — an instruction |
+|---|---|
+| Panel | `--surface` (no fill) |
+| Border | 1px `--edge-strong`, full |
+| Text | `--ink`, weight 400 |
+| Leading glyph | `i` in `--muted` |
+| ARIA role | `status` |
+| Size | `--text-sm` |
+
+**No colour, on purpose.** This system has two semantic colours and no info-blue, so the note is neutral and the glyph is what separates it from the other two.
+
+**Outlined, not filled.** `--surface-sunk` with a 1px `--edge` is the log screen's Save set button, two rows below the hint, and a note built from the same recipe read as a second, disabled button. The note sits on the page's own surface with the stronger edge instead, so it holds as a panel without borrowing a control's look.
+
+**It expires on her next action, never on a clock:** the next save, opening a row, or focusing a field. It sits in the flow and moves the controls below it when it goes. Every other shift on the log screen follows a tap, and a timed exit would be the one that moves her targets while her thumb is travelling to them. So it differs from a confirmation here, which expires on its six-second clock because the person is waiting on it. Nobody is waiting on an instruction. It carries no dismiss control. It never shares a block with a message, because every path that writes one, a save or a row action, is a next action and has already cleared it. The hint is currently the only note in the product; a second one is a scope question, not a free use of the tone.
 
 ### Does the single-accent rule need an explicit carve-out?
 
@@ -383,11 +402,13 @@ column label beside every value.
 
 **What it applies to.** Every disclosure: a toggle with `aria-expanded` that mounts a panel under it. In v1 that is six: the log row's Edit/Remove strip, the History card's detail, the client-detail session expansion, the exercise card's edit form, and the Add a client and Add an exercise forms. A new disclosure takes the same class; it does not get a variant.
 
+**One non-disclosure takes it: the log screen's tap-to-edit hint (#169).** It mounts a panel the client did not ask for, alongside the set she just saved, and popping in unannounced is what made the disclosures read as bare text before #164. Same class, same token, no variant. It leaves instantly on her next action, like any closing panel. The pending row below it moves instantly too, on both entry and exit, and both moments follow a tap: the same shift every message panel on this screen already makes. Animating it would be animating layout.
+
 **What it deliberately excludes.**
 
 - **Closing.** A panel leaves instantly. An exit animation keeps an element mounted after the state says it is gone, which fights the focus hand-offs the log screen depends on, and a close has nothing to reveal.
 - **The log row's swap into edit fields.** That is a replacement under the client's finger, not a panel opening. It must land instantly.
-- **Messages** (§Messages): a state change in a slot, not a disclosure.
+- **Messages** (§Messages): a state change in a slot, not a disclosure. The note is the one exception, above.
 - **Hover, focus, and selected states** on controls: instant swaps (see `trainerControls.ts`).
 - **The disclosure chevron.** `▾` swaps to `▴` with the state; rotating it would be a second motion competing with the panel.
 - Page transitions, loading animation, scroll effects, and anything in the reminder emails.

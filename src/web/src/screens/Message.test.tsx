@@ -32,6 +32,19 @@ describe('Message', () => {
     expect(glyphOf(failure)).not.toBe(glyphOf(confirmation))
   })
 
+  // #169. The note takes no colour at all, so the glyph is the whole of what separates it from
+  // the other two once a reader cannot see the tint.
+  it('gives a note its own glyph and announces it politely', () => {
+    const note = render(<Message tone="note">Tap a set above to edit or remove it.</Message>)
+    const glyph = note.container.querySelector('[aria-hidden="true"]')?.textContent
+
+    expect(glyph).toBe('i')
+    expect(['!', '✓']).not.toContain(glyph)
+    // An instruction is never urgent enough to interrupt what a screen reader is saying.
+    expect(screen.getByRole('status')).toHaveTextContent('Tap a set above to edit or remove it.')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('hides the glyph from screen readers, since the role already says which it is', () => {
     // Otherwise every error in the product is read out as "exclamation mark" first.
     render(<Message tone="failure">It broke.</Message>)

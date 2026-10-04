@@ -31,6 +31,16 @@ export type WorkoutDraft = {
    * result is one workout split across two rows and a /me/last that returns half of it.
    */
   sessionId: string | null
+  /**
+   * Whether this workout has already shown the "tap a set" hint (#169).
+   *
+   * Once per workout rather than once ever, which is why it lives here and not under a key of its
+   * own: the draft's lifetime *is* the workout, cleared at Finish, and that is exactly how long
+   * the hint should stay away. In the draft rather than React state because a phone locked
+   * between sets is the normal case, and a hint that came back on every unlock would be taught
+   * three times per workout.
+   */
+  hintShown: boolean
 }
 
 /**
@@ -114,7 +124,7 @@ function read(): WorkoutDraft | null {
       return null
     }
 
-    const { performedOn, programDayId, comment, sessionId } = parsed as Record<string, unknown>
+    const { performedOn, programDayId, comment, sessionId, hintShown } = parsed as Record<string, unknown>
     if (typeof performedOn !== 'string' || typeof comment !== 'string') {
       return null
     }
@@ -128,7 +138,13 @@ function read(): WorkoutDraft | null {
       return null
     }
 
-    return { performedOn, programDayId, comment, sessionId: sessionId ?? null }
+    // Absent in a record written before #169. Read as "not yet shown", which costs one more
+    // showing in a workout already under way and nothing else.
+    if (hintShown !== undefined && typeof hintShown !== 'boolean') {
+      return null
+    }
+
+    return { performedOn, programDayId, comment, sessionId: sessionId ?? null, hintShown: hintShown ?? false }
   } catch {
     return null
   }
