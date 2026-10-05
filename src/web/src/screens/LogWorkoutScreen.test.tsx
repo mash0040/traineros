@@ -783,6 +783,23 @@ describe('LogWorkoutScreen', () => {
     ).toBeInTheDocument()
   })
 
+  it('keeps the disclosure mark out of the row’s name, open or closed (#170)', async () => {
+    // The ▾/▴ is for sighted users; aria-expanded already says the same thing to a screen
+    // reader. Checked in both states because the glyph swaps, and the announcement test above
+    // only ever sees a closed row.
+    mockApi()
+    renderScreen()
+    await screen.findByRole('heading', { name: 'Lower', level: 1 })
+    const squat = await logRun(1)
+
+    const row = squat.getByRole('button', { name: /^Set 1,/ })
+    expect(row).toHaveAccessibleName('Set 1, 100 kilograms by 8 reps')
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(row).toHaveAccessibleName('Set 1, 100 kilograms by 8 reps')
+  })
+
   // -- Failure handling on a set write --
 
   it('keeps the typed set and offers a retry when the network drops', async () => {

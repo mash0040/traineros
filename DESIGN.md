@@ -128,6 +128,10 @@ An exercise row on the client Log workout screen carries three numeric groups, r
 
 Known tradeoff: only the last row holds inputs, so as sets are logged the inputs travel down the block away from their headers. At six sets they are roughly a screen-third apart. What holds the columns legible at that distance is the saved rows between them — same columns, same alignment, same `tabular-nums` — not the header. If that ever stops being true, the answer is a sticky header row inside the block, not labels back in every row.
 
+**Saved rows carry a disclosure mark (#170).** A saved row is one button that opens Edit and Remove beneath it, and it carries the disclosure chevron (`▾` closed, `▴` open, `--muted`, `aria-hidden`) at rest. It sits inside the set-number column, pinned to that column's right edge, so the marks stack at one x down the block while the numbers stay left-aligned. Not a fifth track: tracks 3 and 4 are the inputs' `1fr`, and a new track is paid for in input width. Not at the row's right edge: that is the reps value, and a mark beside it reads as a suffix on the number.
+
+This is not the per-row control the decoration rule bans. A delete glyph on every row (#105) is a target, it spends width, and it advertises a rare destructive action on every set. The chevron is none of those: it is not a target (the whole row is), it occupies whitespace the set-number column already had, and it says only that the row opens, not what is inside. Only rows that toggle carry it. The pending input row and a row being edited are not toggles, and a mark on them would promise a tap that does nothing.
+
 **Forbidden collapses:**
 
 - Prescribed target promoted next to each set row (Rank 3 → Rank 1 visually).
