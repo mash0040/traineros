@@ -32,6 +32,7 @@ import {
 } from '../lib/weight'
 import { clearDraft, readDraft, todayIn, writeDraft } from '../lib/workoutDraft'
 import { useBlockMessage } from './blockMessage'
+import { DisclosureChevron } from './DisclosureChevron'
 import { Message } from './Message'
 import { WeightUnitToggle } from './WeightUnitToggle'
 
@@ -1424,7 +1425,16 @@ function SavedRow({
           ref={rowRef}
           type="button"
         >
-          <span className="text-sm text-muted tabular-nums">{set.setNumber}</span>
+          {/* The at-rest sign that this row opens (#170), in the set-number column's spare
+              width rather than a track of its own: a fifth track would come out of the inputs'
+              1fr. Pinned to the column's right edge so the marks stack at one x down the block
+              instead of shifting between "9" and "10". Only here — the pending row and the edit
+              row are not toggles, and a mark on them would promise a tap that does nothing.
+              DESIGN.md §Log row. */}
+          <span className="flex items-baseline justify-between text-sm text-muted tabular-nums">
+            {set.setNumber}
+            <DisclosureChevron open={open} />
+          </span>
           <LastCell set={last} unit={unit} />
           {/* NO_VALUE, not a literal em dash. DESIGN.md §Absolute bans rules em dashes out of
               rendered strings, and this screen was rendering one for bodyweight while the roster
